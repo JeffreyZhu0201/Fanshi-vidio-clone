@@ -39,3 +39,19 @@ docs: add setup instructions for local mysql
 - 长耗时任务必须保留异步化空间。
 - 外部服务集成逻辑不得直接写入路由层。
 
+## 本地开发流程
+1. 切换到 `develop` 并同步最新代码。
+2. 从 `develop` 创建功能分支，例如 `feature/stage-2-database`。
+3. 安装依赖：
+```bash
+cd backend && npm install
+cd ../frontend && npm install
+```
+4. 复制环境变量模板：
+```bash
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
+```
+5. 启动开发环境并完成自测。
+6. 提交代码前记录已验证内容和未验证内容。
+7. 推送功能分支并发起 PR 合并到 `develop`。

@@ -9,6 +9,11 @@
 .DS_Store
 .idea/
 .vscode/
+certs/**/*.pem
+certs/**/*.crt
+certs/**/*.key
+certs/**/*.csr
+certs/**/*.srl
 
 backend/uploads/**
 !backend/uploads/
@@ -18,4 +23,6 @@ backend/uploads/**
 !backend/uploads/segments/.gitkeep
 !backend/uploads/outputs/
 !backend/uploads/outputs/.gitkeep
-
+!certs/
+!certs/dev/
+!certs/dev/.gitkeep

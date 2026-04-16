@@ -58,6 +58,70 @@ npm run dev
 
 后端默认地址：`http://localhost:5000`
 
+### 本地 HTTPS 访问
+项目现在已经支持前后端本地 HTTPS 开发。推荐按下面的顺序启用：
+
+1. 生成本地开发证书：
+```bash
+chmod +x scripts/generate-dev-ssl.sh
+./scripts/generate-dev-ssl.sh
+```
+
+2. 配置后端 `backend/.env`：
+```env
+APP_ORIGIN=https://localhost:5173
+HTTPS_ENABLED=true
+HTTPS_PORT=5443
+SSL_KEY_PATH=../certs/dev/localhost-key.pem
+SSL_CERT_PATH=../certs/dev/localhost.pem
+HTTP_REDIRECT_TO_HTTPS=false
+```
+
+3. 配置前端 `frontend/.env`：
+```env
+VITE_API_BASE_URL=https://localhost:5443/api
+VITE_DEV_HTTPS=true
+VITE_SSL_KEY_PATH=../certs/dev/localhost-key.pem
+VITE_SSL_CERT_PATH=../certs/dev/localhost.pem
+```
+
+4. 启动后访问：
+- 前端：`https://localhost:5173`
+- 后端：`https://localhost:5443`
+
+说明：
+- 这是本地自签名证书，浏览器第一次访问可能会提示风险，需要手动信任。
+- 如果只想让后端支持 HTTPS，可以只开启后端的 `HTTPS_ENABLED=true`。
+- 如果希望 `http://localhost:5000` 自动跳到 HTTPS，可以把 `HTTP_REDIRECT_TO_HTTPS=true`。
+
+### MySQL 连接配置
+后端使用 Sequelize 连接 MySQL，并支持在数据库服务可访问时自动创建 `DB_NAME` 指定的数据库。
+
+1. 复制环境变量模板：
+```bash
+cp backend/.env.example backend/.env
+```
+
+2. 按你的 MySQL 实例修改这些字段：
+```env
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=your_password
+DB_NAME=fanshi_video_db
+DB_AUTO_CREATE=true
+```
+
+3. 单独检查数据库连接：
+```bash
+cd backend
+npm run db:check
+```
+
+4. 健康检查接口：
+- `GET /api/health`：返回后端状态和数据库状态
+- `GET /api/health/database`：只检查数据库，可用于运维探活
+
 ### 4. 启动前端
 ```bash
 cd frontend
@@ -90,4 +154,3 @@ npm run dev
 - 阶段 4：前端工作台与交互
 - 阶段 5：测试、性能和安全
 - 阶段 6：部署、备份与运维
-
