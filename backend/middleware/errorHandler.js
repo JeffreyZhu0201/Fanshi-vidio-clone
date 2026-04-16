@@ -10,24 +10,45 @@ class AppError extends Error {
 }
 
 const errorHandler = (error, request, response, _next) => {
-  const statusCode = error.statusCode || 500;
+  const normalizedError = normalizeError(error);
+  const statusCode = normalizedError.statusCode || 500;
   const isServerError = statusCode >= 500;
 
   logger.error('Request failed', {
     method: request.method,
     path: request.originalUrl,
     statusCode,
-    message: error.message,
-    details: error.details,
-    stack: error.stack
+    message: normalizedError.message,
+    details: normalizedError.details,
+    stack: normalizedError.stack
   });
 
   response.status(statusCode).json({
     success: false,
-    message: isServerError ? 'Internal server error' : error.message,
-    details: error.details ?? null
+    message: isServerError ? 'Internal server error' : normalizedError.message,
+    details: normalizedError.details ?? null
   });
 };
 
-export { AppError, errorHandler };
+const normalizeError = (error) => {
+  if (error instanceof AppError) {
+    return error;
+  }
 
+  if (error.name === 'MulterError') {
+    return new AppError(error.message, 400, {
+      field: error.field,
+      code: error.code
+    });
+  }
+
+  if (error.name === 'SequelizeValidationError' || error.name === 'SequelizeUniqueConstraintError') {
+    return new AppError('Database validation failed', 400, {
+      errors: error.errors?.map((item) => item.message) ?? []
+    });
+  }
+
+  return error;
+};
+
+export { AppError, errorHandler };

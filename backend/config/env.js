@@ -25,7 +25,12 @@ const schema = Joi.object({
   DB_POOL_MIN: Joi.number().integer().min(0).default(0),
   DB_AUTO_CREATE: Joi.boolean().truthy('true').falsy('false').default(true),
   GEMINI_API_KEY: Joi.string().allow('').default(''),
+  GEMINI_API_BASE_URL: Joi.string().uri().allow('').default(''),
+  GEMINI_MODEL: Joi.string().default('gemini-1.5-flash'),
   SEED_DANCE_API_KEY: Joi.string().allow('').default(''),
+  SEED_DANCE_API_BASE_URL: Joi.string().uri().allow('').default(''),
+  SEED_DANCE_MODEL: Joi.string().default('seed-dance-v1'),
+  EXTERNAL_REQUEST_TIMEOUT: Joi.number().integer().positive().default(30000),
   JWT_SECRET: Joi.string().min(16).default('development-secret-change-me'),
   FILE_UPLOAD_LIMIT: Joi.number().integer().positive().default(524288000)
 }).unknown();

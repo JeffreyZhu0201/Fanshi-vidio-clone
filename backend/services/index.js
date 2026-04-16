@@ -1,21 +1,10 @@
-/**
- * 业务服务层导出
- *
- * 本目录存放所有业务逻辑服务，包括：
- * - 外部 API 集成 (Gemini, Seed Dance)
- * - 文件处理服务 (上传、存储)
- * - 视频处理服务 (FFmpeg 集成)
- * - 数据处理服务
- *
- * 服务列表 (待实现):
- * - geminiService.js - Gemini API 集成
- * - ffmpegService.js - FFmpeg 视频处理
- * - seedDanceService.js - Seed Dance API 集成
- * - videoService.js - 视频业务逻辑
- * - fileService.js - 文件处理
- *
- * 使用示例:
- * import { geminiService, ffmpegService } from './services/index.js';
- */
-
-export {};
+export * as analysisService from './analysisService.js';
+export * as ffmpegService from './ffmpegService.js';
+export * as fileService from './fileService.js';
+export * as geminiService from './geminiService.js';
+export * as generationService from './generationService.js';
+export * as mergeService from './mergeService.js';
+export * as seedDanceService from './seedDanceService.js';
+export * as segmentService from './segmentService.js';
+export * as taskService from './taskService.js';
+export * as videoService from './videoService.js';

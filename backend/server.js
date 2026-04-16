@@ -4,8 +4,10 @@ import https from 'node:https';
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
+import swaggerUi from 'swagger-ui-express';
 
 import env from './config/env.js';
+import swaggerSpec from './config/swagger.js';
 import { closeDatabaseConnection, connectDatabase } from './config/database.js';
 import { API_PREFIX, APP_NAME, UPLOAD_DIRECTORIES } from './config/constants.js';
 import apiRouter from './routes/index.js';
@@ -45,6 +47,10 @@ app.get('/', (_request, response) => {
   });
 });
 
+app.get('/api-docs.json', (_request, response) => {
+  response.status(200).json(swaggerSpec);
+});
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/uploads', express.static(UPLOAD_DIRECTORIES.root));
 app.use(API_PREFIX, apiRouter);
 app.use(notFoundHandler);

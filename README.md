@@ -1,12 +1,14 @@
 # Fanshi-vidio-clone
 
-一个基于 React、Node.js、MySQL、FFmpeg 和 AI 服务的视频复刻项目骨架。当前仓库已经完成阶段 0 和阶段 1 的基础搭建，后续将按阶段逐步实现视频解析、分段生成与拼接下载能力。
+一个基于 React、Node.js、MySQL、FFmpeg 和 AI 服务的视频复刻项目骨架。当前仓库已经完成阶段 0、阶段 1、阶段 2，并已落地阶段 3 的后端 API 主流程。
 
 ## 当前状态
 - 已完成项目初始化骨架
 - 已完成前后端目录拆分
 - 已完成环境变量模板、Git 工作流文档和基础 CI
 - 已完成 Express 与 Vite/Tailwind 的启动入口
+- 已完成 MySQL Schema、Sequelize 模型、迁移与种子数据
+- 已完成上传、整片分析、视频分割、片段生成、视频拼接 API
 
 ## 技术栈
 
@@ -129,6 +131,28 @@ npm run db:seed
 5. 健康检查接口：
 - `GET /api/health`：返回后端状态和数据库状态
 - `GET /api/health/database`：只检查数据库，可用于运维探活
+
+### 阶段 3 后端 API
+当前后端已经提供可联调的主流程接口：
+
+- `POST /api/videos/upload`：上传原视频
+- `GET /api/videos/:id`：查询视频详情
+- `DELETE /api/videos/:id`：删除视频及相关文件
+- `POST /api/analysis/analyze`：执行整片分析
+- `GET /api/analysis/:videoId`：查询整片分析结果
+- `POST /api/analysis/optimize-prompt`：优化片段提示词并高亮 `@角色`
+- `POST /api/segments/split`：按时间锚点发起分割任务
+- `GET /api/segments/:videoId`：查询片段列表和最近一次生成状态
+- `POST /api/generation/generate`：发起片段生成任务
+- `GET /api/generation/:taskId`：查询片段生成任务状态
+- `POST /api/merge/start`：发起拼接任务
+- `GET /api/merge/:taskId/progress`：查询拼接进度
+- `GET /api/merge/:taskId/download`：下载拼接结果
+- `GET /api/tasks/:taskId`：查询分割/拼接这类内存任务状态
+
+接口文档地址：
+- Swagger UI：`/api-docs`
+- OpenAPI JSON：`/api-docs.json`
 
 ### 4. 启动前端
 ```bash
