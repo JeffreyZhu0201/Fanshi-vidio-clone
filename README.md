@@ -118,7 +118,15 @@ cd backend
 npm run db:check
 ```
 
-4. 健康检查接口：
+4. 初始化或迁移数据库结构：
+```bash
+cd backend
+npm run db:init
+npm run db:migrate
+npm run db:seed
+```
+
+5. 健康检查接口：
 - `GET /api/health`：返回后端状态和数据库状态
 - `GET /api/health/database`：只检查数据库，可用于运维探活
 

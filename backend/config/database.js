@@ -113,6 +113,26 @@ const checkDatabaseHealth = async () => {
   return connectDatabase({ force: true });
 };
 
+const syncDatabaseSchema = async ({ force = false, alter = false } = {}) => {
+  const database = await connectDatabase();
+
+  if (!database.connected) {
+    throw new Error(database.errorMessage || 'Database connection is not available.');
+  }
+
+  const { initializeModels } = await import('../models/index.js');
+
+  initializeModels();
+  await sequelize.sync({ force, alter });
+
+  logger.info('Database schema synchronized successfully', {
+    force,
+    alter
+  });
+
+  return true;
+};
+
 const getDatabaseStatus = () => {
   return { ...databaseState };
 };
@@ -130,6 +150,7 @@ export {
   sequelize,
   connectDatabase,
   checkDatabaseHealth,
+  syncDatabaseSchema,
   getDatabaseStatus,
   closeDatabaseConnection
 };

@@ -9,7 +9,12 @@
     "dev": "nodemon server.js",
     "start": "node server.js",
     "check": "node --check server.js",
-    "db:check": "node scripts/db-check.js"
+    "db:check": "node scripts/db-check.js",
+    "db:init": "node utils/dbInit.js",
+    "db:sync": "node utils/dbInit.js --alter",
+    "db:migrate": "sequelize-cli db:migrate --config config/sequelize-cli.cjs --migrations-path migrations",
+    "db:migrate:undo": "sequelize-cli db:migrate:undo --config config/sequelize-cli.cjs --migrations-path migrations",
+    "db:seed": "sequelize-cli db:seed:all --config config/sequelize-cli.cjs --seeders-path seeders"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -22,7 +27,8 @@
     "winston": "^3.15.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.7"
+    "nodemon": "^3.1.7",
+    "sequelize-cli": "^6.6.5"
   },
   "engines": {
     "node": ">=22.0.0"

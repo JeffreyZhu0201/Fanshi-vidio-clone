@@ -8,6 +8,20 @@ const backendRoot = path.resolve(currentDirectory, '..');
 export const APP_NAME = 'Fanshi Video Clone';
 export const API_PREFIX = '/api';
 
+export const PROJECT_STATUS = Object.freeze({
+  draft: 'draft',
+  processing: 'processing',
+  completed: 'completed',
+  failed: 'failed'
+});
+
+export const VIDEO_STATUS = Object.freeze({
+  uploaded: 'uploaded',
+  analyzing: 'analyzing',
+  analyzed: 'analyzed',
+  failed: 'failed'
+});
+
 export const UPLOAD_DIRECTORIES = Object.freeze({
   root: path.join(backendRoot, 'uploads'),
   videos: path.join(backendRoot, 'uploads', 'videos'),
@@ -29,3 +43,6 @@ export const TASK_STATUS = Object.freeze({
   failed: 'failed'
 });
 
+export const PROJECT_STATUS_VALUES = Object.freeze(Object.values(PROJECT_STATUS));
+export const VIDEO_STATUS_VALUES = Object.freeze(Object.values(VIDEO_STATUS));
+export const TASK_STATUS_VALUES = Object.freeze(Object.values(TASK_STATUS));
