@@ -1,0 +1,22 @@
+:root {
+  --font-sans: Manrope, "Noto Sans SC", system-ui, sans-serif;
+  --color-ink-900: #10212b;
+  --color-ink-700: #3a4a55;
+  --color-ink-500: #64748b;
+  --color-brand-500: #16a16f;
+  --color-brand-700: #0f7a55;
+  --color-accent-500: #f59e0b;
+  --color-surface: #f5fbf8;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
