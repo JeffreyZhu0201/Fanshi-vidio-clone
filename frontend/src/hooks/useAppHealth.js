@@ -4,6 +4,27 @@ import { checkHealth } from '../services/api.js';
 import { useAppStore } from '../store/appStore.js';
 import { websocketService } from '../services/websocket.js';
 
+const resolveBackendHealthState = (payload = {}) => {
+  if (payload?.status === 'degraded' || payload?.database?.connected === false) {
+    return {
+      status: 'degraded',
+      message: payload?.database?.errorMessage || '数据库连接不可用，后端当前处于降级状态。'
+    };
+  }
+
+  if (payload?.status === 'ok' || payload?.success) {
+    return {
+      status: 'online',
+      message: ''
+    };
+  }
+
+  return {
+    status: 'checking',
+    message: ''
+  };
+};
+
 const useAppHealth = () => {
   const backendStatus = useAppStore((state) => state.backendStatus);
   const errorMessage = useAppStore((state) => state.errorMessage);
@@ -18,10 +39,11 @@ const useAppHealth = () => {
 
     const runHealthCheck = async () => {
       try {
-        await checkHealth();
+        const healthPayload = await checkHealth();
+        const nextHealthState = resolveBackendHealthState(healthPayload);
 
         if (active) {
-          setBackendStatus('online');
+          setBackendStatus(nextHealthState.status, nextHealthState.message);
         }
       } catch (error) {
         if (active) {

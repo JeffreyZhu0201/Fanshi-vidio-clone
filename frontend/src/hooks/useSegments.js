@@ -27,6 +27,14 @@ const getSplitErrorMessage = (error, phase = '视频分割') => {
   return error?.message || `${phase}失败，请稍后重试。`;
 };
 
+const getTaskErrorMessage = (taskPayload, fallback = '') => {
+  return (
+    taskPayload?.error_message ??
+    taskPayload?.errorMessage ??
+    (taskPayload?.status === 'failed' ? taskPayload?.message ?? fallback : fallback)
+  );
+};
+
 const normalizeSegment = (segment) => {
   const latestCompletedGenerationTask = segment.latest_generation_task
     ? {
@@ -217,10 +225,7 @@ const useSegments = () => {
         status: payload.status ?? 'processing',
         progress: payload.progress ?? 0,
         message: payload.message ?? '正在切分视频',
-        errorMessage:
-          payload.error_message ??
-          payload.errorMessage ??
-          (payload.status === 'failed' ? payload.message ?? '' : '')
+        errorMessage: getTaskErrorMessage(payload)
       });
     });
   }, [setSplitProgress]);
@@ -338,7 +343,7 @@ const useSegments = () => {
           status: progressPayload.status ?? 'processing',
           progress: progressPayload.progress ?? 0,
           message: progressPayload.message ?? '正在切分视频',
-          errorMessage: progressPayload.error_message ?? ''
+          errorMessage: getTaskErrorMessage(progressPayload)
         });
 
         if (progressPayload.status === 'completed') {
@@ -347,7 +352,7 @@ const useSegments = () => {
         }
 
         if (progressPayload.status === 'failed') {
-          setSegmentsError(progressPayload.message || '视频分割失败。');
+          setSegmentsError(getTaskErrorMessage(progressPayload, '视频分割失败。'));
         }
       } catch (error) {
         generationSessionStorage.clearSplitTaskId();
@@ -459,7 +464,7 @@ const useSegments = () => {
         }
 
         if (progressPayload.status === 'failed') {
-          setSegmentsError(progressPayload.message || '视频分割失败。');
+          setSegmentsError(getTaskErrorMessage(progressPayload, '视频分割失败。'));
           return progressPayload;
         }
 

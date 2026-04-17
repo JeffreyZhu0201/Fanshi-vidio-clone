@@ -32,6 +32,14 @@ const MainPage = () => {
   } = useGeneration();
 
   const generatedSegments = segments.filter((segment) => segment.generatedUrl).length;
+  const backendStatusLabel =
+    backendStatus === 'online'
+      ? '在线'
+      : backendStatus === 'degraded'
+        ? '降级'
+        : backendStatus === 'offline'
+          ? '离线'
+          : '检查中';
   const metricCards = [
     {
       label: '上传视频',
@@ -83,16 +91,7 @@ const MainPage = () => {
             </p>
 
             <div className="flex flex-wrap items-center gap-3">
-              <StatusBadge
-                status={backendStatus}
-                label={`后端 ${
-                  backendStatus === 'online'
-                    ? '在线'
-                    : backendStatus === 'offline'
-                      ? '离线'
-                      : '检查中'
-                }`}
-              />
+              <StatusBadge status={backendStatus} label={`后端 ${backendStatusLabel}`} />
               <StatusBadge status={realtimeStatus} />
               <span className="rounded-full bg-white/10 px-4 py-2 text-sm text-white/80">
                 {errorMessage || `最近健康检查：${lastCheckedAt || '等待首次检查'}`}
