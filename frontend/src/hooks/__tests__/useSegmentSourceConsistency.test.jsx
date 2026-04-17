@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 
 jest.mock('../../services/api.js', () => ({
+  analyzeSegment: jest.fn(),
   downloadVideo: jest.fn(),
   generateSegment: jest.fn(),
   getGenerationTask: jest.fn(),

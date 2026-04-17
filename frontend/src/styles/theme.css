@@ -1,12 +1,23 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700;800&display=swap');
+
 :root {
-  --font-sans: "Space Grotesk", "Noto Sans SC", "PingFang SC", sans-serif;
-  --color-ink-900: #1e293b;
-  --color-ink-700: #334155;
-  --color-ink-500: #64748b;
+  color-scheme: dark;
+  --font-sans: "Fira Sans", "Noto Sans SC", "PingFang SC", sans-serif;
+  --font-mono: "Fira Code", "JetBrains Mono", "SFMono-Regular", monospace;
+  --color-app-bg: #040508;
+  --color-app-bg-soft: #0b0d14;
+  --color-surface: rgba(13, 16, 26, 0.88);
+  --color-surface-strong: rgba(9, 12, 20, 0.96);
+  --color-surface-muted: rgba(255, 255, 255, 0.04);
+  --color-surface-border: rgba(255, 255, 255, 0.08);
+  --color-surface-border-strong: rgba(255, 255, 255, 0.14);
+  --color-text-primary: #f8fafc;
+  --color-text-secondary: rgba(226, 232, 240, 0.78);
+  --color-text-muted: rgba(148, 163, 184, 0.82);
   --color-brand-500: #6366f1;
   --color-brand-700: #4338ca;
-  --color-accent-500: #ec4899;
-  --color-surface: #f8fafc;
+  --color-accent-500: #e11d48;
+  --color-accent-700: #be123c;
 }
 
 a {
@@ -16,6 +27,7 @@ a {
 
 button,
 input,
-textarea {
+textarea,
+summary {
   font: inherit;
 }

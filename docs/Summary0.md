@@ -34,6 +34,8 @@
 - 本地文件存储
 - FFmpeg / ffprobe 接入
 - Gemini / Seed Dance 的远程调用接口与本地降级 mock
+- `yunwu.ai` Gemini `generateContent` 真实视频理解接入
+- 火山方舟 `contents/generations/tasks` 异步视频生成接入
 - 任务进度追踪
 - WebSocket 实时事件
 - 测试、性能、安全、监控基础能力
@@ -77,6 +79,7 @@
 - split 失败信息已经对齐 `error_message` 与 `message` 两种返回口径，实时事件和刷新恢复都会正确回填错误文案
 - 上传或切换到新视频时，会在 hydrate 新数据前先清空旧分析、旧片段、旧任务列表和旧分割/拼接进度，避免旧内容闪现
 - 上传阶段已经补齐视频时长上限和轻量重复文件校验，前端预检查、后端最终兜底
+- 后端已支持把 SeedDance 远程生成结果自动下载回本地 `uploads/outputs`，便于后续 merge 复用
 
 ### 3.2 后端已实现功能
 
@@ -365,12 +368,17 @@
 这里要特别说明，当前代码支持两种模式：
 
 1. 真实远程模式  
-   当配置了 `GEMINI_API_KEY` 和 `GEMINI_API_BASE_URL` 时，会真正请求远程 Gemini 服务。
+   当配置了 `GEMINI_API_KEY` 和 `GEMINI_API_BASE_URL` 时，会真正请求远程 Gemini 服务。当前实现优先兼容 `yunwu.ai` 的 Gemini `generateContent` 风格接口，并直接把本地视频以 `inline_data` 方式发送给模型。
 
 2. 本地 mock 模式  
    当没有配置远程 Gemini，或者远程请求失败时，会自动回退到 mock 分析逻辑。
 
 也就是说，当前仓库已经把“分析流程”打通了，但在未配置正式 AI 服务时，会用可联调的模拟结果保证流程可运行。
+
+截至 `2026-04-17` 的本机真实验证结果：
+
+- `analyzeVideo` 已经可以成功走通真实 `yunwu.ai`。
+- `optimizePrompt` 在切换到 `gemini-2.5-pro` 后已可返回真实结果；此前 `3.x/3.1` 配置曾出现过 `429`。
 
 同时，前端已经补上“分析请求超时但后端仍在继续执行”的恢复逻辑：
 
@@ -549,7 +557,7 @@
 当前同样支持两种模式：
 
 1. 真实远程模式  
-   配置 `SEED_DANCE_API_KEY` 和 `SEED_DANCE_API_BASE_URL` 时，调用远程生成服务
+   配置 `SEED_DANCE_API_KEY` 和 `SEED_DANCE_API_BASE_URL` 时，调用火山方舟 `POST /api/v3/contents/generations/tasks` 创建任务，再通过 `GET /api/v3/contents/generations/tasks/{id}` 轮询结果。任务成功后，后端会把远程 `video_url` 下载回本地 `uploads/outputs`，这样后续 merge 仍然使用本地文件链路。
 
 2. 本地 mock 模式  
    如果没有配置远程能力或远程失败，会把原片段复制到 `outputs/` 目录，作为开发联调用的生成结果
@@ -770,6 +778,8 @@
 ### 11.2 当前仍属于开发期/过渡期的部分
 
 - Gemini 和 Seed Dance 默认仍允许回退到 mock
+- Gemini 真实分析已经完成接入，当前默认模型已切换到可联通的 `gemini-2.5-pro / gemini-2.5-flash`
+- SeedDance 真实生成代码已经完成接入，但当前尚未提供可用的 `SEED_DANCE_API_KEY`
 - 分割与拼接任务当前仍使用内存任务管理，未引入 Redis/BullMQ
 - 认证授权体系尚未接入
 - 多用户与权限隔离尚未实现
@@ -798,7 +808,7 @@
 结合当前代码状态，建议下一步优先推进：
 
 - 完成阶段 6 的部署与运维文档落地
-- 为正式环境接入真实 Gemini 与 Seed Dance 配置
+- 补齐稳定可用的 `yunwu.ai` 配额与 `SEED_DANCE_API_KEY`，把当前已接好的真实模型彻底跑通
 - 将分割/拼接任务迁移到持久化队列
 - 接入对象存储替代本地磁盘
 - 补齐登录、权限、多项目隔离

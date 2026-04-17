@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 
 jest.mock('../../services/api.js', () => ({
+  analyzeSegment: jest.fn(),
   downloadVideo: jest.fn(),
   generateSegment: jest.fn(),
   getGenerationTask: jest.fn(),
@@ -61,6 +62,7 @@ jest.mock('../../utils/sleep.js', () => ({
 import { useGeneration } from '../useGeneration.js';
 import { useSegments } from '../useSegments.js';
 import {
+  analyzeSegment,
   generateSegment,
   getGenerationTask,
   getMergeProgress,
@@ -239,6 +241,114 @@ describe('async flow resilience', () => {
     expect(optimizeResult).toBeNull();
     expect(useGenerationStore.getState().segmentsError).toBe('提示词优化请求超时，请稍后重试。');
     expect(result.current.optimizingSegmentId).toBe(0);
+
+    unmount();
+  });
+
+  it('updates segment understanding when segment analysis succeeds', async () => {
+    useVideoStore.setState({
+      currentVideo: {
+        id: 904,
+        filename: 'segment-analysis.mp4',
+        status: 'analyzed'
+      }
+    });
+
+    useGenerationStore.setState({
+      segments: [
+        {
+          id: 303,
+          prompt: '@主角 继续推进剧情',
+          scene: '旧场景',
+          action: '旧动作',
+          generatedUrl: '',
+          characters: ['主角'],
+          highlightedPrompt: '',
+          latestGenerationTask: null,
+          latestCompletedGenerationTask: null
+        }
+      ]
+    });
+
+    analyzeSegment.mockResolvedValue({
+      id: 303,
+      analysis: {
+        scene: '新场景',
+        action: '新动作',
+        prompt: '@主角 在新场景中继续推进剧情',
+        characters: ['主角', '配角']
+      },
+      latest_generation_task: null,
+      latest_attempt_task: null
+    });
+
+    const { result, unmount } = renderHook(() => useGeneration());
+
+    let analysisResult;
+
+    await act(async () => {
+      analysisResult = await result.current.analyzeSegmentById(303);
+    });
+
+    expect(analysisResult).not.toBeNull();
+    expect(useGenerationStore.getState().segments[0]).toMatchObject({
+      scene: '新场景',
+      action: '新动作',
+      prompt: '@主角 在新场景中继续推进剧情',
+      characters: ['主角', '配角']
+    });
+    expect(result.current.analyzingSegmentId).toBe(0);
+
+    unmount();
+  });
+
+  it('uses the latest editor prompt when optimizing a segment prompt', async () => {
+    useVideoStore.setState({
+      currentVideo: {
+        id: 905,
+        filename: 'optimize-latest-draft.mp4',
+        status: 'analyzed'
+      }
+    });
+
+    useAnalysisStore.setState({
+      analysis: {
+        characters: [{ name: '主角', appearancePrompt: '稳定角色设定' }]
+      }
+    });
+
+    useGenerationStore.setState({
+      segments: [
+        {
+          id: 304,
+          prompt: '@主角 旧提示词',
+          generatedUrl: '',
+          characters: ['主角'],
+          highlightedPrompt: '',
+          latestGenerationTask: null,
+          latestCompletedGenerationTask: null
+        }
+      ]
+    });
+
+    optimizePrompt.mockResolvedValue({
+      optimized_prompt: '@主角 新提示词，镜头更明确',
+      highlighted_prompt: '<span class="mention text-blue-500">@主角</span> 新提示词，镜头更明确'
+    });
+
+    const { result, unmount } = renderHook(() => useGeneration());
+
+    await act(async () => {
+      await result.current.optimizeSegmentPrompt(304, '@主角 新提示词');
+    });
+
+    expect(optimizePrompt).toHaveBeenCalledWith('@主角 新提示词', [
+      {
+        name: '主角',
+        appearancePrompt: '稳定角色设定'
+      }
+    ]);
+    expect(useGenerationStore.getState().segments[0].prompt).toBe('@主角 新提示词，镜头更明确');
 
     unmount();
   });

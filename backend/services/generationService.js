@@ -2,7 +2,7 @@ import { Analysis, GenerationTask, Segment, Video } from '../models/index.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { TASK_STATUS } from '../config/constants.js';
 import { generateSegment as generateWithSeedDance } from './seedDanceService.js';
-import { resolveUploadPath } from './fileService.js';
+import { resolveUploadPath, toAbsolutePublicUploadUrl } from './fileService.js';
 import { broadcastRealtimeEvent } from './realtimeService.js';
 
 const serializeGenerationTask = (task) => ({
@@ -73,6 +73,7 @@ const processGenerationTask = async (taskId) => {
 
     const result = await generateWithSeedDance({
       sourceAbsolutePath: resolveUploadPath(task.segment.filePath),
+      sourcePublicUrl: toAbsolutePublicUploadUrl(task.segment.filePath),
       prompt: optimizedPrompt,
       basename: `segment-${task.segmentId}-task-${task.id}`
     });

@@ -41,6 +41,7 @@ await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
 }));
 
 await jest.unstable_mockModule('../services/fileService.js', () => ({
+  resolveUploadPath: jest.fn((assetPath) => `/tmp/${assetPath}`),
   toPublicUploadUrl: jest.fn((assetPath) => `/uploads/${assetPath}`)
 }));
 
@@ -75,6 +76,8 @@ describe('segmentService', () => {
         segmentId: 201,
         status: 'failed',
         progress: 100,
+        prompt: '@主角 第二次尝试',
+        optimizedPrompt: '展开后的第二次尝试',
         resultUrl: null,
         errorMessage: 'Latest generation failed',
         createdAt: '2026-04-17T02:00:00.000Z',
@@ -85,6 +88,8 @@ describe('segmentService', () => {
         segmentId: 201,
         status: 'completed',
         progress: 100,
+        prompt: '@主角 第一次尝试',
+        optimizedPrompt: '展开后的第一次尝试',
         resultUrl: '/uploads/outputs/demo-0-success.mp4',
         errorMessage: null,
         createdAt: '2026-04-17T01:00:00.000Z',
@@ -99,11 +104,14 @@ describe('segmentService', () => {
     expect(segments[0].latest_generation_task).toMatchObject({
       id: 301,
       status: 'completed',
+      prompt: '@主角 第一次尝试',
+      optimized_prompt: '展开后的第一次尝试',
       result_url: '/uploads/outputs/demo-0-success.mp4'
     });
     expect(segments[0].latest_attempt_task).toMatchObject({
       id: 302,
       status: 'failed',
+      prompt: '@主角 第二次尝试',
       error_message: 'Latest generation failed'
     });
   });

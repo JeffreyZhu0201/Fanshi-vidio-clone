@@ -1,24 +1,45 @@
 import PropTypes from 'prop-types';
 
 const statusClasses = {
-  idle: 'bg-slate-100 text-slate-600 ring-slate-200',
-  checking: 'bg-amber-100 text-amber-700 ring-amber-200',
-  online: 'bg-emerald-100 text-emerald-700 ring-emerald-200',
-  degraded: 'bg-amber-100 text-amber-700 ring-amber-200',
-  offline: 'bg-rose-100 text-rose-700 ring-rose-200',
-  realtime: 'bg-emerald-100 text-emerald-700 ring-emerald-200',
-  pending: 'bg-slate-100 text-slate-700 ring-slate-200',
-  uploaded: 'bg-brand-100 text-brand-700 ring-brand-200',
-  uploading: 'bg-brand-100 text-brand-700 ring-brand-200',
-  analyzing: 'bg-brand-100 text-brand-700 ring-brand-200',
-  analyzed: 'bg-emerald-100 text-emerald-700 ring-emerald-200',
-  processing: 'bg-brand-100 text-brand-700 ring-brand-200',
-  completed: 'bg-emerald-100 text-emerald-700 ring-emerald-200',
-  success: 'bg-emerald-100 text-emerald-700 ring-emerald-200',
-  failed: 'bg-accent-100 text-accent-700 ring-accent-200',
-  error: 'bg-accent-100 text-accent-700 ring-accent-200',
-  polling: 'bg-brand-100 text-brand-700 ring-brand-200',
-  fallback: 'bg-amber-100 text-amber-700 ring-amber-200'
+  idle: 'border-white/[0.12] bg-white/[0.04] text-white/70',
+  checking: 'border-amber-500/20 bg-amber-500/10 text-amber-200',
+  online: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200',
+  degraded: 'border-amber-500/20 bg-amber-500/10 text-amber-200',
+  offline: 'border-rose-500/20 bg-rose-500/10 text-rose-200',
+  realtime: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200',
+  pending: 'border-white/[0.12] bg-white/[0.04] text-white/70',
+  uploaded: 'border-brand-500/20 bg-brand-500/10 text-brand-100',
+  uploading: 'border-brand-500/20 bg-brand-500/10 text-brand-100',
+  analyzing: 'border-brand-500/20 bg-brand-500/10 text-brand-100',
+  analyzed: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200',
+  processing: 'border-brand-500/20 bg-brand-500/10 text-brand-100',
+  completed: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200',
+  success: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200',
+  failed: 'border-accent-500/20 bg-accent-500/10 text-rose-200',
+  error: 'border-accent-500/20 bg-accent-500/10 text-rose-200',
+  polling: 'border-brand-500/20 bg-brand-500/10 text-brand-100',
+  fallback: 'border-amber-500/20 bg-amber-500/10 text-amber-200'
+};
+
+const statusDotClasses = {
+  idle: 'bg-white/50',
+  checking: 'bg-amber-300',
+  online: 'bg-emerald-300',
+  degraded: 'bg-amber-300',
+  offline: 'bg-rose-300',
+  realtime: 'bg-emerald-300',
+  pending: 'bg-white/50',
+  uploaded: 'bg-brand-200',
+  uploading: 'bg-brand-200',
+  analyzing: 'bg-brand-200',
+  analyzed: 'bg-emerald-300',
+  processing: 'bg-brand-200',
+  completed: 'bg-emerald-300',
+  success: 'bg-emerald-300',
+  failed: 'bg-rose-300',
+  error: 'bg-rose-300',
+  polling: 'bg-brand-200',
+  fallback: 'bg-amber-300'
 };
 
 const statusLabels = {
@@ -47,8 +68,12 @@ const StatusBadge = ({ status, label = '' }) => {
 
   return (
     <span
-      className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ring-1 ${statusClasses[resolvedStatus]}`}
+      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${statusClasses[resolvedStatus]}`}
     >
+      <span
+        aria-hidden="true"
+        className={`h-2 w-2 rounded-full ${statusDotClasses[resolvedStatus]}`}
+      />
       {label || statusLabels[resolvedStatus]}
     </span>
   );

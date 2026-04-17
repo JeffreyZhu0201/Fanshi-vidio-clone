@@ -5,6 +5,7 @@ import PromptEditor from '../PromptEditor.jsx';
 
 describe('PromptEditor', () => {
   it('updates text and supports undo/redo', () => {
+    const onAnalyze = jest.fn();
     const onOptimize = jest.fn();
     const observedChanges = [];
 
@@ -18,7 +19,9 @@ describe('PromptEditor', () => {
             observedChanges.push(nextValue);
             setValue(nextValue);
           }}
+          onAnalyze={onAnalyze}
           onOptimize={onOptimize}
+          isAnalyzing={false}
           isOptimizing={false}
           disabled={false}
           highlightedPrompt=""
@@ -47,7 +50,9 @@ describe('PromptEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: '重做' }));
     expect(observedChanges.at(-1)).toBe('@主角 走进室内并坐下');
 
+    fireEvent.click(screen.getByRole('button', { name: '片段分析' }));
     fireEvent.click(screen.getByRole('button', { name: '优化提示词' }));
-    expect(onOptimize).toHaveBeenCalled();
+    expect(onAnalyze).toHaveBeenCalledWith('@主角 走进室内并坐下');
+    expect(onOptimize).toHaveBeenCalledWith('@主角 走进室内并坐下');
   });
 });

@@ -5,15 +5,55 @@ import { analyzeSegment, analyzeVideo as analyzeVideoWithGemini, optimizePrompt 
 import { broadcastRealtimeEvent } from './realtimeService.js';
 import { getVideoRecordById, resolveVideoAbsolutePath } from './videoService.js';
 
-const serializeAnalysis = (analysis, status = 'completed') => ({
-  id: analysis.id,
-  video_id: analysis.videoId,
-  status,
-  plot: analysis.plot,
-  characters: analysis.characters ?? [],
-  backgrounds: analysis.backgrounds ?? [],
-  time_anchors: analysis.timeAnchors ?? []
-});
+const parseGeminiMeta = (geminiResponse) => {
+  try {
+    const parsed = JSON.parse(geminiResponse || '{}');
+    const provider = parsed.provider || 'unknown';
+    const inferredIsMock =
+      typeof parsed.isMock === 'boolean' ? parsed.isMock : String(provider).toLowerCase().includes('mock');
+
+    return {
+      provider,
+      model: parsed.model || '',
+      mode: parsed.mode || '',
+      authVariant: parsed.authVariant || '',
+      isMock: inferredIsMock,
+      fallbackReason: parsed.fallbackReason || '',
+      remoteError: parsed.remoteError || ''
+    };
+  } catch (error) {
+    return {
+      provider: 'unknown',
+      model: '',
+      mode: '',
+      authVariant: '',
+      isMock: false,
+      fallbackReason: '',
+      remoteError: ''
+    };
+  }
+};
+
+const serializeAnalysis = (analysis, status = 'completed') => {
+  const geminiMeta = parseGeminiMeta(analysis.geminiResponse);
+
+  return {
+    id: analysis.id,
+    video_id: analysis.videoId,
+    status,
+    plot: analysis.plot,
+    characters: analysis.characters ?? [],
+    backgrounds: analysis.backgrounds ?? [],
+    time_anchors: analysis.timeAnchors ?? [],
+    provider: geminiMeta.provider,
+    model: geminiMeta.model,
+    mode: geminiMeta.mode,
+    auth_variant: geminiMeta.authVariant,
+    is_mock: geminiMeta.isMock,
+    fallback_reason: geminiMeta.fallbackReason,
+    remote_error: geminiMeta.remoteError
+  };
+};
 
 const analyzeVideoById = async (videoId) => {
   const video = await getVideoRecordById(videoId, {
@@ -116,10 +156,11 @@ const optimizePrompt = async ({ prompt, characters }) => {
   };
 };
 
-const analyzeSegmentContent = async ({ segment, overallAnalysis }) => {
+const analyzeSegmentContent = async ({ segment, overallAnalysis, segmentAbsolutePath = '' }) => {
   return analyzeSegment({
     segment,
-    overallAnalysis
+    overallAnalysis,
+    segmentAbsolutePath
   });
 };
 

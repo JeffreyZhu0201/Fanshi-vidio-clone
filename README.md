@@ -19,6 +19,8 @@
 - 已补齐上传阶段的时长上限与重复上传检查，前端会预检查，后端会基于元数据做最终校验
 - 已对齐健康检查状态映射，当前前端可以区分后端在线、数据库降级和服务离线三种状态
 - 已对齐 split 错误字段消费，分割失败时会同时兼容实时事件的 `error_message` 和任务查询返回的 `message`
+- 已接入 `yunwu.ai` 的 Gemini 真实调用链，支持通过 `generateContent` 对整片视频和片段视频做真实分析
+- 已接入火山方舟 SeedDance 异步任务接口，支持创建任务、轮询结果并把远程生成视频落回本地 `uploads/outputs`
 
 ## 技术栈
 
@@ -91,7 +93,9 @@ HTTP_REDIRECT_TO_HTTPS=false
 
 3. 配置前端 `frontend/.env`：
 ```env
-VITE_API_BASE_URL=https://localhost:5443/api
+VITE_API_BASE_URL=/api
+VITE_API_PROXY_TARGET=https://localhost:5443
+VITE_DEV_HOST=localhost
 VITE_DEV_HTTPS=true
 VITE_SSL_KEY_PATH=../certs/dev/localhost-key.pem
 VITE_SSL_CERT_PATH=../certs/dev/localhost.pem
@@ -102,7 +106,8 @@ VITE_SSL_CERT_PATH=../certs/dev/localhost.pem
 - 后端：`https://localhost:5443`
 
 说明：
-- 这是本地自签名证书，浏览器第一次访问可能会提示风险，需要手动信任。
+- 开发环境推荐始终通过 `https://localhost:5173` 访问前端，前端会把 `/api`、`/uploads`、`/ws` 同源代理到后端，避免浏览器直接校验后端自签名证书导致健康检查和上传失败。
+- 这是本地自签名证书，浏览器第一次访问前端 `https://localhost:5173` 可能会提示风险，需要手动信任。
 - 如果只想让后端支持 HTTPS，可以只开启后端的 `HTTPS_ENABLED=true`。
 - 如果希望 `http://localhost:5000` 自动跳到 HTTPS，可以把 `HTTP_REDIRECT_TO_HTTPS=true`。
 
@@ -147,6 +152,40 @@ npm run db:seed
 - `degraded`：后端在线，但数据库检查失败
 - `offline`：健康检查请求失败，前端无法连到后端
 
+### 真实 AI 配置
+当前后端支持两套真实 AI 配置：
+
+- Gemini 视频理解：`yunwu.ai` 的 `gemini-2.5-pro`
+- 视频生成：火山方舟 `doubao-seedance-*`
+
+建议在 `backend/.env` 中补齐这些字段：
+
+```env
+PUBLIC_ASSET_BASE_URL=
+GEMINI_API_KEY=
+GEMINI_API_BASE_URL=https://yunwu.ai
+GEMINI_MODEL=gemini-2.5-pro
+GEMINI_SEGMENT_MODEL=gemini-2.5-flash
+GEMINI_API_COMPAT_MODE=google
+GEMINI_STRICT_REMOTE=false
+SEED_DANCE_API_KEY=
+SEED_DANCE_API_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+SEED_DANCE_MODEL=doubao-seedance-2-0-260128
+SEED_DANCE_STRICT_REMOTE=false
+SEED_DANCE_POLL_INTERVAL_MS=10000
+SEED_DANCE_MAX_WAIT_MS=900000
+SEED_DANCE_RATIO=16:9
+SEED_DANCE_DURATION_SECONDS=5
+SEED_DANCE_RESOLUTION=720p
+SEED_DANCE_GENERATE_AUDIO=false
+SEED_DANCE_WATERMARK=false
+```
+
+补充说明：
+- `PUBLIC_ASSET_BASE_URL`：部署后如果有公网可访问的静态资源域名，可以配置这个值，让 SeedDance 额外携带 `reference_video`。
+- `GEMINI_STRICT_REMOTE=true`：开启后，如果真实 Gemini 调用失败，将不再自动回退 mock，适合联调和验收。
+- `SEED_DANCE_STRICT_REMOTE=true`：开启后，如果真实 SeedDance 调用失败，将不再自动回退本地复制生成。
+
 ### 上传校验补充
 当前上传链路已经具备以下校验：
 
@@ -185,7 +224,7 @@ cd frontend
 npm run dev
 ```
 
-前端默认地址：`http://localhost:5173`
+前端默认地址：`http://localhost:5173`，若 `VITE_DEV_HTTPS=true` 则使用 `https://localhost:5173`
 
 ## 阶段 5 验证
 
@@ -196,6 +235,22 @@ cd ../frontend && npm test
 cd ../frontend && npm run test:coverage
 cd ../frontend && npm run build
 ```
+
+### 真实 AI 联调命令
+```bash
+cd backend
+npm run ai:smoke
+npm run pipeline:smoke
+```
+
+- `ai:smoke`：验证 Gemini / SeedDance 服务本身是否可连通。
+- `pipeline:smoke`：验证上传、分析、分割、优化、生成、拼接、下载的主链路。
+
+截至 `2026-04-17` 的一次本机验证结果：
+- `Gemini analyzeVideo` 已成功走通真实 `yunwu.ai`。
+- `Gemini optimizePrompt` 已使用 `gemini-2.5-pro` 成功返回真实优化结果。
+- `GEMINI_SEGMENT_MODEL=gemini-2.5-flash` 的最小联通验证已返回 `200`。
+- `SeedDance` 真实视频生成代码已接入，但由于尚未配置 `SEED_DANCE_API_KEY`，当前完整链路中的“生成片段”仍会走本地 `mock-copy`。
 
 ### 性能基准
 先启动后端，再执行：

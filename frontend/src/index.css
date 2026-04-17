@@ -9,68 +9,164 @@
 
   html {
     font-family: var(--font-sans);
-    color: var(--color-ink-900);
+    color: var(--color-text-primary);
+    background: var(--color-app-bg);
+    scroll-behavior: smooth;
   }
 
   body {
     margin: 0;
     min-height: 100vh;
     background:
-      radial-gradient(circle at 8% 12%, rgba(99, 102, 241, 0.2), transparent 32%),
-      radial-gradient(circle at 92% 8%, rgba(236, 72, 153, 0.18), transparent 28%),
-      linear-gradient(180deg, #f8fafc 0%, #eef2ff 48%, #f8fafc 100%);
+      radial-gradient(circle at 12% 10%, rgba(99, 102, 241, 0.22), transparent 28%),
+      radial-gradient(circle at 88% 8%, rgba(225, 29, 72, 0.18), transparent 26%),
+      radial-gradient(circle at 52% 52%, rgba(255, 255, 255, 0.04), transparent 34%),
+      linear-gradient(180deg, #040508 0%, #070913 42%, #090d18 100%);
+    color: var(--color-text-primary);
   }
 
   #root {
     min-height: 100vh;
   }
+
+  ::selection {
+    background: rgba(225, 29, 72, 0.28);
+    color: var(--color-text-primary);
+  }
+
+  :focus-visible {
+    outline: 2px solid rgba(225, 29, 72, 0.9);
+    outline-offset: 3px;
+  }
+
+  video {
+    display: block;
+  }
+
+  summary::-webkit-details-marker {
+    display: none;
+  }
 }
 
 @layer components {
+  .studio-skip-link {
+    @apply absolute left-4 top-4 z-50 rounded-full border border-white/15 bg-slate-950/95 px-4 py-2 text-sm font-semibold text-white opacity-0 transition focus:opacity-100;
+  }
+
   .dashboard-shell {
-    @apply relative min-h-screen overflow-hidden px-4 py-5 md:px-6 lg:px-8;
+    @apply relative min-h-screen overflow-hidden px-4 pb-10 pt-5 md:px-6 lg:px-8;
   }
 
   .workspace-grid {
-    @apply mx-auto grid max-w-[1800px] gap-6 xl:grid-cols-[minmax(280px,320px)_minmax(0,1fr)_minmax(360px,430px)];
+    @apply mx-auto grid max-w-[1860px] gap-6 2xl:grid-cols-[minmax(300px,340px)_minmax(0,1fr)_minmax(320px,380px)];
   }
 
   .panel-shell {
-    @apply rounded-[32px] border border-white/70 bg-white/80 shadow-glow backdrop-blur-xl;
+    @apply rounded-[30px] border border-white/10 bg-slate-950/70 shadow-[0_20px_70px_rgba(2,6,23,0.45)] backdrop-blur-2xl;
+  }
+
+  .panel-shell-strong {
+    background:
+      linear-gradient(180deg, rgba(17, 24, 39, 0.96), rgba(3, 7, 18, 0.94)),
+      radial-gradient(circle at top right, rgba(99, 102, 241, 0.12), transparent 32%);
+    border-color: rgba(255, 255, 255, 0.12);
   }
 
   .hero-shell {
-    @apply relative mx-auto mb-6 max-w-[1800px] overflow-hidden rounded-[36px] border border-white/10 bg-slate-950 px-5 py-5 shadow-[0_28px_80px_rgba(15,23,42,0.28)] md:px-7 md:py-7;
+    @apply relative mx-auto mb-6 max-w-[1860px] overflow-hidden rounded-[36px] border border-white/10 px-5 py-5 shadow-[0_35px_120px_rgba(2,6,23,0.42)] md:px-7 md:py-7;
+    background:
+      linear-gradient(135deg, rgba(8, 11, 18, 0.98), rgba(10, 14, 24, 0.94) 48%, rgba(17, 24, 39, 0.92)),
+      radial-gradient(circle at 82% 18%, rgba(225, 29, 72, 0.18), transparent 24%),
+      radial-gradient(circle at 18% 0%, rgba(99, 102, 241, 0.18), transparent 26%);
   }
 
   .hero-grid {
-    @apply relative grid gap-5;
+    @apply relative grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,420px)];
   }
 
   .hero-metric {
-    @apply rounded-[28px] border border-white/10 px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)];
+    @apply rounded-[24px] border border-white/10 bg-white/5 px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)];
+  }
+
+  .workflow-shell {
+    @apply relative mx-auto mb-6 max-w-[1860px] rounded-[32px] border border-white/10 bg-slate-950/70 px-5 py-5 shadow-[0_22px_80px_rgba(2,6,23,0.35)] backdrop-blur-2xl md:px-6;
+  }
+
+  .workflow-track {
+    @apply mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-6;
+  }
+
+  .workflow-step {
+    @apply relative overflow-hidden rounded-[24px] border px-4 py-4 transition duration-200;
+  }
+
+  .workflow-step::after {
+    @apply pointer-events-none absolute inset-x-0 top-0 h-px bg-white/10 content-[''];
+  }
+
+  .rail-sticky {
+    @apply grid gap-6 self-start 2xl:sticky 2xl:top-6;
+  }
+
+  .console-card {
+    @apply rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-4;
+  }
+
+  .console-kpi {
+    @apply rounded-[20px] border border-white/10 bg-black/20 px-4 py-4;
+  }
+
+  .console-chip {
+    @apply inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/75;
+  }
+
+  .console-divider {
+    @apply my-5 border-t border-white/10;
+  }
+
+  .stage-toolbar {
+    @apply flex flex-wrap items-center gap-2 rounded-[22px] border border-white/10 bg-white/[0.04] px-4 py-3;
+  }
+
+  .toolbar-pill {
+    @apply inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-xs font-semibold text-white/70;
   }
 
   .timeline-item {
-    @apply relative rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4;
+    @apply relative rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-4;
   }
 
   .timeline-item::before {
-    @apply absolute left-[-13px] top-6 h-3 w-3 rounded-full bg-brand-500 content-[''];
+    @apply absolute left-[-13px] top-6 h-3 w-3 rounded-full bg-accent-500 content-[''];
   }
 
   .segment-scroll {
-    max-height: calc(100vh - 260px);
-    overflow-y: auto;
-    padding-right: 0.25rem;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .segment-grid {
+    @apply grid gap-5;
   }
 
   .preview-placeholder {
-    @apply relative flex min-h-[220px] flex-col items-center justify-center overflow-hidden bg-slate-50 px-6 py-8;
+    @apply relative flex min-h-[220px] flex-col items-center justify-center overflow-hidden rounded-[24px] border border-dashed border-white/10 bg-black/20 px-6 py-8;
   }
 
   .preview-orb {
-    @apply absolute h-40 w-40 rounded-full bg-gradient-to-br from-brand-200/60 to-accent-200/50 blur-3xl;
+    @apply absolute h-40 w-40 rounded-full bg-gradient-to-br from-brand-500/20 to-accent-500/25 blur-3xl;
+  }
+
+  .glass-label {
+    @apply text-[11px] font-semibold uppercase tracking-[0.3em] text-white/40;
+  }
+
+  .surface-muted {
+    @apply rounded-[24px] border border-white/10 bg-white/[0.04];
+  }
+
+  .surface-elevated {
+    @apply rounded-[24px] border border-white/10 bg-black/20;
   }
 }
 
@@ -80,10 +176,10 @@
   }
 
   .dashboard-orb-left {
-    @apply left-[-120px] top-[-40px] h-[280px] w-[280px] bg-brand-200/55;
+    @apply left-[-140px] top-[-40px] h-[320px] w-[320px] bg-brand-500/25;
   }
 
   .dashboard-orb-right {
-    @apply right-[-120px] top-[120px] h-[340px] w-[340px] bg-accent-200/45;
+    @apply right-[-120px] top-[120px] h-[360px] w-[360px] bg-accent-500/20;
   }
 }

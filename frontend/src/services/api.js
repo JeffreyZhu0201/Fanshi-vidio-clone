@@ -4,6 +4,7 @@ import { getEnv } from '../utils/env.js';
 
 const API_BASE_URL = getEnv('VITE_API_BASE_URL', 'http://localhost:5000/api');
 const API_TIMEOUT = Number(getEnv('VITE_API_TIMEOUT', '30000'));
+const ANALYSIS_TIMEOUT = Number(getEnv('VITE_ANALYSIS_TIMEOUT', '600000'));
 const MAX_RETRIES = 3;
 const RETRYABLE_METHODS = new Set(['get', 'head', 'options']);
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
@@ -140,7 +141,13 @@ const uploadVideo = async (file, options = {}) => {
 };
 
 const analyzeVideo = async (videoId) => {
-  const response = await api.post('/analysis/analyze', { video_id: videoId });
+  const response = await api.post(
+    '/analysis/analyze',
+    { video_id: videoId },
+    {
+      timeout: Math.max(API_TIMEOUT, ANALYSIS_TIMEOUT)
+    }
+  );
   return response.data;
 };
 
@@ -174,6 +181,11 @@ const splitVideo = async (videoId, timeAnchors) => {
 
 const getSegments = async (videoId) => {
   const response = await api.get(`/segments/${videoId}`);
+  return response.data;
+};
+
+const analyzeSegment = async (segmentId) => {
+  const response = await api.post(`/segments/${segmentId}/analyze`);
   return response.data;
 };
 
@@ -220,6 +232,7 @@ const downloadVideo = async (taskId) => {
 export {
   API_BASE_URL,
   API_ORIGIN,
+  analyzeSegment,
   analyzeVideo,
   checkHealth,
   downloadVideo,

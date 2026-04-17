@@ -3,6 +3,7 @@ import { copyFile, mkdir, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
 import { UPLOAD_DIRECTORIES } from '../config/constants.js';
+import env from '../config/env.js';
 
 const normalizeRelativePath = (relativePath) => {
   return relativePath.split(path.sep).join('/').replace(/^\/+/, '').replace(/^uploads\//, '');
@@ -26,6 +27,17 @@ const toRelativeUploadPath = (absoluteOrRelativePath) => {
 
 const toPublicUploadUrl = (relativePath) => {
   return `/uploads/${toRelativeUploadPath(relativePath)}`;
+};
+
+const toAbsolutePublicUploadUrl = (relativePath) => {
+  const publicUrl = toPublicUploadUrl(relativePath);
+  const publicBaseUrl = env.PUBLIC_ASSET_BASE_URL || '';
+
+  if (!publicBaseUrl) {
+    return '';
+  }
+
+  return new URL(publicUrl, publicBaseUrl.endsWith('/') ? publicBaseUrl : `${publicBaseUrl}/`).toString();
 };
 
 const publicUrlToRelativePath = (publicUrl) => {
@@ -69,6 +81,7 @@ export {
   resolveUploadPath,
   toRelativeUploadPath,
   toPublicUploadUrl,
+  toAbsolutePublicUploadUrl,
   publicUrlToRelativePath,
   ensureParentDirectory,
   removeFileIfExists,

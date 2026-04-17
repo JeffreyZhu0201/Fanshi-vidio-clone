@@ -39,8 +39,8 @@ const UploadArea = ({
       <div
         className={`relative rounded-[28px] border-2 border-dashed px-5 py-6 transition ${
           isDragActive
-            ? 'border-brand-500 bg-brand-50/90 shadow-[0_20px_50px_rgba(99,102,241,0.12)]'
-            : 'border-slate-200 bg-slate-50/80'
+            ? 'border-brand-500/70 bg-brand-500/10 shadow-[0_20px_50px_rgba(99,102,241,0.16)]'
+            : 'border-white/[0.12] bg-white/[0.04]'
         }`}
         onDragEnter={(event) => {
           event.preventDefault();
@@ -75,14 +75,14 @@ const UploadArea = ({
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <p className="text-sm font-semibold text-ink-900">拖拽文件到这里，或点击按钮选择视频</p>
-              <p className="mt-1 text-xs leading-5 text-ink-500">
+              <p className="text-sm font-semibold text-white">拖拽文件到这里，或点击按钮选择视频</p>
+              <p className="mt-1 text-xs leading-5 text-white/60">
                 支持 MP4 / MOV / AVI，单文件大小不超过 {formatBytes(uploadLimit)}
               </p>
             </div>
             <button
               type="button"
-              className="inline-flex items-center justify-center rounded-full bg-ink-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-ink-700"
+              className="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-brand-500 to-accent-500 px-5 py-3 text-sm font-semibold text-white transition hover:scale-[1.01]"
               onClick={() => inputRef.current?.click()}
             >
               选择视频
@@ -99,13 +99,16 @@ const UploadArea = ({
           )}
 
           {validationMessage ? (
-            <div className="rounded-2xl border border-brand-100 bg-brand-50/80 px-4 py-3 text-sm text-brand-800">
+            <div className="rounded-2xl border border-brand-500/20 bg-brand-500/10 px-4 py-3 text-sm text-brand-100">
               {validationMessage}
             </div>
           ) : null}
 
           {uploadError ? (
-            <div className="rounded-2xl border border-accent-100 bg-accent-50/80 px-4 py-3 text-sm text-accent-700">
+            <div
+              role="alert"
+              className="rounded-2xl border border-accent-500/20 bg-accent-500/10 px-4 py-3 text-sm text-rose-200"
+            >
               {uploadError}
             </div>
           ) : null}
@@ -113,10 +116,10 @@ const UploadArea = ({
       </div>
 
       <div className="mt-5 space-y-4">
-        <div className="rounded-[26px] bg-slate-950 px-5 py-5 text-white">
+        <div className="rounded-[26px] border border-white/10 bg-black/25 px-5 py-5 text-white">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-white/45">Current Video</p>
+              <p className="text-xs uppercase tracking-[0.3em] text-white/40">Current Video</p>
               <h3 className="mt-2 text-lg font-semibold">
                 {currentVideo?.filename || '还没有上传视频'}
               </h3>
@@ -124,34 +127,34 @@ const UploadArea = ({
             {currentVideo ? <StatusBadge status={currentVideo.status || 'completed'} /> : null}
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl bg-white/10 px-4 py-3">
-              <p className="text-xs text-white/55">视频时长</p>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
+              <p className="text-xs text-white/60">视频时长</p>
               <p className="mt-1 text-sm font-medium">
                 {currentVideo?.duration ? formatDuration(currentVideo.duration) : '待探测'}
               </p>
             </div>
-            <div className="rounded-2xl bg-white/10 px-4 py-3">
-              <p className="text-xs text-white/55">最近上传数</p>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3">
+              <p className="text-xs text-white/60">最近上传数</p>
               <p className="mt-1 text-sm font-medium">{videos.length}</p>
             </div>
           </div>
         </div>
 
         {videos.length ? (
-          <div className="rounded-[26px] border border-slate-200 bg-white/75 px-4 py-4">
+          <div className="rounded-[26px] border border-white/10 bg-white/[0.04] px-4 py-4">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold text-ink-900">最近上传</h3>
-              <span className="text-xs text-ink-500">{videos.length} 个视频</span>
+              <h3 className="text-sm font-semibold text-white">最近上传</h3>
+              <span className="text-xs text-white/50">{videos.length} 个视频</span>
             </div>
             <div className="space-y-2">
               {videos.slice(0, 3).map((video) => (
                 <div
                   key={video.id}
-                  className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3"
+                  className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3"
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-ink-900">{video.filename}</p>
-                    <p className="text-xs text-ink-500">视频 ID: {video.id}</p>
+                    <p className="truncate text-sm font-medium text-white">{video.filename}</p>
+                    <p className="text-xs text-white/50">视频 ID: {video.id}</p>
                   </div>
                   <StatusBadge status={video.id === currentVideo?.id ? 'processing' : 'completed'} />
                 </div>
