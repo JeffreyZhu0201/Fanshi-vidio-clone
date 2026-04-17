@@ -6,13 +6,85 @@ import { useAnalysisStore } from '../store/analysisStore.js';
 import { useGenerationStore } from '../store/generationStore.js';
 import { useVideoStore } from '../store/videoStore.js';
 import { formatBytes } from '../utils/formatBytes.js';
+import { formatDuration } from '../utils/formatDuration.js';
 import { getEnv } from '../utils/env.js';
 
 const uploadLimit = Number(getEnv('VITE_UPLOAD_LIMIT', '524288000'));
+const uploadDurationLimitSeconds = 600;
 const allowedMimeTypes = new Set(['video/mp4', 'video/quicktime', 'video/x-msvideo']);
 const allowedExtensions = ['.mp4', '.mov', '.avi'];
 
-const validateVideoFile = (file) => {
+const collectKnownVideos = ({ currentVideo, videos }) => {
+  const currentVideoEntry = currentVideo ? [currentVideo] : [];
+  const knownVideos = [...currentVideoEntry, ...(videos ?? [])];
+  const uniqueVideoMap = new Map();
+
+  knownVideos.forEach((video) => {
+    if (video?.id) {
+      uniqueVideoMap.set(video.id, video);
+      return;
+    }
+
+    uniqueVideoMap.set(`${video?.filename ?? 'unknown'}-${video?.file_size ?? video?.fileSize ?? 0}`, video);
+  });
+
+  return [...uniqueVideoMap.values()];
+};
+
+const getKnownVideoFileSize = (video) => {
+  const comparableFileSize = Number(video?.file_size ?? video?.fileSize ?? 0);
+  return Number.isFinite(comparableFileSize) && comparableFileSize > 0 ? comparableFileSize : 0;
+};
+
+const probeVideoDurationSeconds = async (file) => {
+  if (
+    typeof document === 'undefined' ||
+    typeof window === 'undefined' ||
+    typeof URL === 'undefined' ||
+    typeof URL.createObjectURL !== 'function'
+  ) {
+    return null;
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    const durationSeconds = await new Promise((resolve) => {
+      const videoElement = document.createElement('video');
+      let settled = false;
+
+      const finish = (duration) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        window.clearTimeout(timeoutId);
+        resolve(duration);
+      };
+
+      const timeoutId = window.setTimeout(() => {
+        finish(null);
+      }, 3000);
+
+      videoElement.preload = 'metadata';
+      videoElement.onloadedmetadata = () => {
+        const nextDuration = Number(videoElement.duration);
+        finish(Number.isFinite(nextDuration) && nextDuration > 0 ? nextDuration : null);
+      };
+      videoElement.onerror = () => {
+        finish(null);
+      };
+      videoElement.src = objectUrl;
+    });
+
+    return durationSeconds;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+};
+
+const validateVideoFile = async (file, { currentVideo, videos } = {}) => {
   if (!file) {
     return '请先选择一个视频文件。';
   }
@@ -28,6 +100,24 @@ const validateVideoFile = (file) => {
 
   if (file.size > uploadLimit) {
     return `文件大小不能超过 ${formatBytes(uploadLimit)}。`;
+  }
+
+  const knownVideos = collectKnownVideos({
+    currentVideo,
+    videos
+  });
+  const duplicateVideo = knownVideos.find((video) => {
+    return video?.filename === file.name && getKnownVideoFileSize(video) === file.size;
+  });
+
+  if (duplicateVideo) {
+    return '当前项目中已存在同名且大小一致的视频，请勿重复上传。';
+  }
+
+  const durationSeconds = await probeVideoDurationSeconds(file);
+
+  if (durationSeconds && durationSeconds > uploadDurationLimitSeconds) {
+    return `视频时长不能超过 ${formatDuration(uploadDurationLimitSeconds)}。`;
   }
 
   return '';
@@ -67,7 +157,10 @@ const useVideoUpload = () => {
   }, [setUploadState, updateProgress]);
 
   const uploadSelectedFile = async (file) => {
-    const validationError = validateVideoFile(file);
+    const validationError = await validateVideoFile(file, {
+      currentVideo,
+      videos
+    });
 
     if (validationError) {
       setUploadState({

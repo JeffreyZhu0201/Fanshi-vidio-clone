@@ -1,6 +1,6 @@
 import { Project, Segment, Video, GenerationTask } from '../models/index.js';
 import { AppError } from '../middleware/errorHandler.js';
-import { VIDEO_STATUS } from '../config/constants.js';
+import { VIDEO_DURATION_LIMIT_SECONDS, VIDEO_STATUS } from '../config/constants.js';
 import { getVideoMetadata } from './ffmpegService.js';
 import {
   removeFileIfExists,
@@ -14,6 +14,11 @@ const buildDefaultProjectName = (filename) => {
   return `Imported Project - ${baseName}`;
 };
 
+const createDurationLimitErrorMessage = () => {
+  const durationMinutes = Math.floor(VIDEO_DURATION_LIMIT_SECONDS / 60);
+  return `视频时长不能超过 ${durationMinutes} 分钟。`;
+};
+
 const serializeVideo = (video, { metadata = null } = {}) => ({
   id: video.id,
   filename: video.filename,
@@ -25,6 +30,46 @@ const serializeVideo = (video, { metadata = null } = {}) => ({
   file_size: video.fileSize,
   metadata
 });
+
+const getComparableDurationSeconds = (metadata = {}) => {
+  const exactDurationSeconds = Number(metadata.durationSecondsExact);
+
+  if (Number.isFinite(exactDurationSeconds) && exactDurationSeconds > 0) {
+    return exactDurationSeconds;
+  }
+
+  const roundedDurationSeconds = Number(metadata.duration);
+  return Number.isFinite(roundedDurationSeconds) && roundedDurationSeconds > 0 ? roundedDurationSeconds : null;
+};
+
+const ensureUploadDurationWithinLimit = (metadata = {}) => {
+  const comparableDurationSeconds = getComparableDurationSeconds(metadata);
+
+  if (comparableDurationSeconds && comparableDurationSeconds > VIDEO_DURATION_LIMIT_SECONDS) {
+    throw new AppError(createDurationLimitErrorMessage(), 400, {
+      duration_seconds: comparableDurationSeconds,
+      limit_seconds: VIDEO_DURATION_LIMIT_SECONDS
+    });
+  }
+};
+
+const ensureUploadIsNotDuplicate = async ({ filename, fileSize }) => {
+  const duplicateVideo = await Video.findOne({
+    where: {
+      filename,
+      fileSize
+    },
+    order: [['createdAt', 'DESC']]
+  });
+
+  if (duplicateVideo) {
+    throw new AppError('已存在同名且大小一致的视频，请勿重复上传。', 409, {
+      existing_video_id: duplicateVideo.id,
+      filename,
+      file_size: fileSize
+    });
+  }
+};
 
 const ensureProject = async ({ projectId, projectName, filename }) => {
   if (projectId) {
@@ -51,23 +96,40 @@ const createVideoFromUpload = async ({ file, projectId, projectName }) => {
     throw new AppError('Video file is required.', 400);
   }
 
-  const project = await ensureProject({
-    projectId,
-    projectName,
-    filename: file.originalname
-  });
-  const metadata = await getVideoMetadata(file.path);
+  let shouldCleanupUploadedFile = true;
 
-  const video = await Video.create({
-    projectId: project.id,
-    filename: file.originalname,
-    filePath: toRelativeUploadPath(file.path),
-    duration: metadata.duration,
-    fileSize: file.size,
-    status: VIDEO_STATUS.uploaded
-  });
+  try {
+    const metadata = await getVideoMetadata(file.path);
+    ensureUploadDurationWithinLimit(metadata);
+    await ensureUploadIsNotDuplicate({
+      filename: file.originalname,
+      fileSize: file.size
+    });
 
-  return serializeVideo(video, { metadata });
+    const project = await ensureProject({
+      projectId,
+      projectName,
+      filename: file.originalname
+    });
+
+    const video = await Video.create({
+      projectId: project.id,
+      filename: file.originalname,
+      filePath: toRelativeUploadPath(file.path),
+      duration: metadata.duration,
+      fileSize: file.size,
+      status: VIDEO_STATUS.uploaded
+    });
+
+    shouldCleanupUploadedFile = false;
+    return serializeVideo(video, { metadata });
+  } catch (error) {
+    if (shouldCleanupUploadedFile) {
+      await removeFileIfExists(file.path);
+    }
+
+    throw error;
+  }
 };
 
 const getVideoById = async (videoId) => {

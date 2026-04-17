@@ -35,6 +35,7 @@ const getVideoMetadata = async (absolutePath) => {
   if (!ffprobeAvailable) {
     return {
       duration: null,
+      durationSecondsExact: null,
       width: null,
       height: null,
       codec: null,
@@ -55,9 +56,11 @@ const getVideoMetadata = async (absolutePath) => {
 
     const parsed = JSON.parse(stdout);
     const videoStream = parsed.streams?.find((item) => item.width || item.height) ?? {};
+    const rawDurationSeconds = parsed.format?.duration ? Number(parsed.format.duration) : null;
 
     return {
-      duration: parsed.format?.duration ? Math.round(Number(parsed.format.duration)) : null,
+      duration: Number.isFinite(rawDurationSeconds) ? Math.round(rawDurationSeconds) : null,
+      durationSecondsExact: Number.isFinite(rawDurationSeconds) ? rawDurationSeconds : null,
       width: videoStream.width ?? null,
       height: videoStream.height ?? null,
       codec: videoStream.codec_name ?? null,
@@ -71,6 +74,7 @@ const getVideoMetadata = async (absolutePath) => {
 
     return {
       duration: null,
+      durationSecondsExact: null,
       width: null,
       height: null,
       codec: null,

@@ -40,6 +40,7 @@ export const ALLOWED_VIDEO_MIME_TYPES = Object.freeze([
   'video/quicktime',
   'video/x-msvideo'
 ]);
+export const VIDEO_DURATION_LIMIT_SECONDS = 600;
 
 export const TASK_STATUS = Object.freeze({
   pending: 'pending',
