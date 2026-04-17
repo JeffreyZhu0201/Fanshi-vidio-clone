@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { analyzeVideo, getAnalysis, isTransientApiError } from '../services/api.js';
 import { websocketService } from '../services/websocket.js';
@@ -11,6 +11,26 @@ const ANALYSIS_RESULT_CONFIRM_INTERVAL_MS = 3000;
 
 const createAnalysisRecoveryError = () => {
   return '分析请求超时，且在确认窗口内未获取到结果，请稍后重试。';
+};
+
+const getAnalysisErrorMessage = (error) => {
+  if (error?.statusCode === 404) {
+    return '当前视频分析结果不存在或已失效，请刷新后重试。';
+  }
+
+  if (error?.isTimeout || error?.code === 'ECONNABORTED') {
+    return '整片分析请求超时，请稍后重试。';
+  }
+
+  if (error?.isNetworkError || error?.statusCode === 0) {
+    return '当前无法连接分析服务，请检查网络或后端服务状态。';
+  }
+
+  if (error?.statusCode >= 500) {
+    return '服务端处理整片分析时出错，请稍后重试。';
+  }
+
+  return error?.message || '整片分析失败，请稍后重试。';
 };
 
 const useAnalysis = () => {
@@ -26,8 +46,49 @@ const useAnalysis = () => {
   const setError = useAnalysisStore((state) => state.setError);
   const setProgressState = useAnalysisStore((state) => state.setProgressState);
   const clearAnalysis = useAnalysisStore((state) => state.clearAnalysis);
+  const mountedRef = useRef(false);
+  const activeVideoIdRef = useRef(currentVideo?.id ?? null);
+  const analysisRequestTokenRef = useRef(0);
 
-  const confirmAnalysisResult = async (videoId) => {
+  const cancelAnalysisRequest = () => {
+    analysisRequestTokenRef.current += 1;
+  };
+
+  const beginAnalysisRequest = () => {
+    const nextToken = analysisRequestTokenRef.current + 1;
+    analysisRequestTokenRef.current = nextToken;
+    return nextToken;
+  };
+
+  const isAnalysisRequestCancelled = (requestToken, videoId) => {
+    const latestVideoId = useVideoStore.getState().currentVideo?.id ?? activeVideoIdRef.current ?? 0;
+
+    return (
+      !mountedRef.current ||
+      Number(latestVideoId) !== Number(videoId ?? 0) ||
+      analysisRequestTokenRef.current !== requestToken
+    );
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+      cancelAnalysisRequest();
+    };
+  }, []);
+
+  useEffect(() => {
+    activeVideoIdRef.current = currentVideo?.id ?? null;
+    cancelAnalysisRequest();
+  }, [currentVideo?.id]);
+
+  const confirmAnalysisResult = async (videoId, requestToken) => {
+    if (isAnalysisRequestCancelled(requestToken, videoId)) {
+      return null;
+    }
+
     setProgressState({
       progress: 92,
       status: 'processing',
@@ -35,7 +96,7 @@ const useAnalysis = () => {
     });
 
     for (let attempt = 0; attempt < ANALYSIS_RESULT_CONFIRM_MAX_RETRIES; attempt += 1) {
-      if (Number(useVideoStore.getState().currentVideo?.id) !== Number(videoId)) {
+      if (isAnalysisRequestCancelled(requestToken, videoId)) {
         return null;
       }
 
@@ -48,7 +109,7 @@ const useAnalysis = () => {
       try {
         const analysisPayload = await getAnalysis(videoId);
 
-        if (Number(useVideoStore.getState().currentVideo?.id) !== Number(videoId)) {
+        if (isAnalysisRequestCancelled(requestToken, videoId)) {
           return null;
         }
 
@@ -63,12 +124,16 @@ const useAnalysis = () => {
         const canRetry = errorInstance.statusCode === 404 || isTransientApiError(errorInstance);
 
         if (!canRetry) {
-          setError(errorInstance.message);
+          if (!isAnalysisRequestCancelled(requestToken, videoId)) {
+            setError(getAnalysisErrorMessage(errorInstance));
+          }
           return null;
         }
 
         if (isLastAttempt) {
-          setError(createAnalysisRecoveryError());
+          if (!isAnalysisRequestCancelled(requestToken, videoId)) {
+            setError(createAnalysisRecoveryError());
+          }
           return null;
         }
 
@@ -76,7 +141,10 @@ const useAnalysis = () => {
       }
     }
 
-    setError(createAnalysisRecoveryError());
+    if (!isAnalysisRequestCancelled(requestToken, videoId)) {
+      setError(createAnalysisRecoveryError());
+    }
+
     return null;
   };
 
@@ -145,6 +213,7 @@ const useAnalysis = () => {
     }
 
     const currentVideoId = currentVideo.id;
+    const requestToken = beginAnalysisRequest();
     updateCurrentVideo({
       status: 'analyzing'
     });
@@ -158,6 +227,10 @@ const useAnalysis = () => {
 
     try {
       const analysisPayload = await analyzeVideo(currentVideo.id);
+
+      if (isAnalysisRequestCancelled(requestToken, currentVideoId)) {
+        return null;
+      }
 
       setAnalysis(analysisPayload);
       updateCurrentVideo({
@@ -173,16 +246,24 @@ const useAnalysis = () => {
 
       return analysisPayload;
     } catch (errorInstance) {
-      if (isTransientApiError(errorInstance)) {
-        return confirmAnalysisResult(currentVideoId);
+      if (isAnalysisRequestCancelled(requestToken, currentVideoId)) {
+        return null;
       }
+
+      if (isTransientApiError(errorInstance)) {
+        return confirmAnalysisResult(currentVideoId, requestToken);
+      }
+
+      const errorMessage = getAnalysisErrorMessage(errorInstance);
 
       websocketService.emitLocal('analysis:progress', {
         video_id: currentVideoId,
         progress: 100,
         status: 'failed',
-        message: errorInstance.message
+        message: errorMessage
       });
+
+      setError(errorMessage);
 
       return null;
     }

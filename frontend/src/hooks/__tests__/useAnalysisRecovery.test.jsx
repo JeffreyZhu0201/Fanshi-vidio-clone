@@ -63,6 +63,19 @@ const createTimeoutError = () =>
     isNetworkError: true
   });
 
+const createDeferred = () => {
+  let resolve;
+
+  const promise = new Promise((nextResolve) => {
+    resolve = nextResolve;
+  });
+
+  return {
+    promise,
+    resolve
+  };
+};
+
 const resetStores = () => {
   useVideoStore.setState({
     currentVideo: null,
@@ -167,5 +180,55 @@ describe('useAnalysis recovery flow', () => {
     expect(useAnalysisStore.getState().error).toBe('分析请求超时，且在确认窗口内未获取到结果，请稍后重试。');
 
     unmount();
+  });
+
+  it('cancels timeout recovery polling when the hook unmounts', async () => {
+    const deferredAnalysis = createDeferred();
+    const analysisPayload = {
+      id: 9003,
+      video_id: 503,
+      plot: '这条结果不应该在卸载后写回。',
+      characters: [],
+      backgrounds: [],
+      time_anchors: []
+    };
+
+    getAnalysis.mockRejectedValueOnce(createNotFoundError()).mockImplementationOnce(() => deferredAnalysis.promise);
+    analyzeVideo.mockRejectedValue(createTimeoutError());
+
+    useVideoStore.setState({
+      currentVideo: {
+        id: 503,
+        filename: 'analysis-unmount-cancel.mp4',
+        status: 'uploaded'
+      }
+    });
+
+    const { result, unmount } = renderHook(() => useAnalysis());
+
+    await waitFor(() => {
+      expect(getAnalysis).toHaveBeenCalledWith(503);
+    });
+
+    let runResultPromise;
+
+    await act(async () => {
+      runResultPromise = result.current.runAnalysis();
+      await Promise.resolve();
+    });
+
+    unmount();
+
+    deferredAnalysis.resolve(analysisPayload);
+
+    let runResult;
+
+    await act(async () => {
+      runResult = await runResultPromise;
+    });
+
+    expect(runResult).toBeNull();
+    expect(useAnalysisStore.getState().analysis).toBeNull();
+    expect(useAnalysisStore.getState().error).toBe('');
   });
 });

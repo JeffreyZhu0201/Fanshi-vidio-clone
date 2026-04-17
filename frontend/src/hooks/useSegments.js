@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { getSegments, getTaskStatus, getVideo, splitVideo, toAbsoluteAssetUrl } from '../services/api.js';
 import { websocketService } from '../services/websocket.js';
@@ -6,6 +6,26 @@ import { useAnalysisStore } from '../store/analysisStore.js';
 import { generationSessionStorage, useGenerationStore } from '../store/generationStore.js';
 import { useVideoStore, videoSessionStorage } from '../store/videoStore.js';
 import { sleep } from '../utils/sleep.js';
+
+const getSplitErrorMessage = (error, phase = '视频分割') => {
+  if (error?.statusCode === 404) {
+    return `${phase}任务不存在或已失效，请刷新后重试。`;
+  }
+
+  if (error?.isTimeout || error?.code === 'ECONNABORTED') {
+    return `${phase}请求超时，请稍后重试。`;
+  }
+
+  if (error?.isNetworkError || error?.statusCode === 0) {
+    return `${phase}暂时无法连接服务端，请检查网络或后端状态。`;
+  }
+
+  if (error?.statusCode >= 500) {
+    return `服务端处理${phase}时出错，请稍后重试。`;
+  }
+
+  return error?.message || `${phase}失败，请稍后重试。`;
+};
 
 const normalizeSegment = (segment) => {
   const latestCompletedGenerationTask = segment.latest_generation_task
@@ -63,6 +83,80 @@ const useSegments = () => {
   const setSplitProgress = useGenerationStore((state) => state.setSplitProgress);
   const setSegmentsLoading = useGenerationStore((state) => state.setSegmentsLoading);
   const setSegmentsError = useGenerationStore((state) => state.setSegmentsError);
+  const mountedRef = useRef(false);
+  const activeVideoIdRef = useRef(currentVideo?.id ?? null);
+  const previousVideoIdRef = useRef(currentVideo?.id ?? null);
+  const splitPollingTokenRef = useRef(0);
+
+  const cancelSplitPolling = () => {
+    splitPollingTokenRef.current += 1;
+  };
+
+  const beginSplitPolling = () => {
+    const nextToken = splitPollingTokenRef.current + 1;
+    splitPollingTokenRef.current = nextToken;
+    return nextToken;
+  };
+
+  const isSplitPollingCancelled = (pollToken, videoId) => {
+    const latestVideoId = useVideoStore.getState().currentVideo?.id ?? activeVideoIdRef.current ?? 0;
+
+    return (
+      !mountedRef.current ||
+      Number(latestVideoId) !== Number(videoId ?? 0) ||
+      splitPollingTokenRef.current !== pollToken
+    );
+  };
+
+  const markSplitFailure = ({ taskId = '', progress = 0, message, title }) => {
+    if (taskId) {
+      setSplitProgress({
+        taskId,
+        status: 'failed',
+        progress,
+        message: title,
+        errorMessage: message
+      });
+
+      return;
+    }
+
+    resetSplitProgress();
+    setSplitProgress({
+      status: 'failed',
+      progress,
+      message: title,
+      errorMessage: message
+    });
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+      cancelSplitPolling();
+    };
+  }, []);
+
+  useEffect(() => {
+    const previousVideoId = previousVideoIdRef.current;
+    activeVideoIdRef.current = currentVideo?.id ?? null;
+    cancelSplitPolling();
+
+    if (
+      mountedRef.current &&
+      previousVideoId &&
+      currentVideo?.id &&
+      Number(previousVideoId) !== Number(currentVideo.id) &&
+      useGenerationStore.getState().splitProgress.taskId
+    ) {
+      generationSessionStorage.clearSplitTaskId();
+      resetSplitProgress();
+    }
+
+    previousVideoIdRef.current = currentVideo?.id ?? null;
+  }, [currentVideo?.id, resetSplitProgress]);
 
   const refreshSegmentsByVideoId = async (videoId) => {
     if (!videoId) {
@@ -73,11 +167,25 @@ const useSegments = () => {
 
     try {
       const segmentPayload = await getSegments(videoId);
+
+      if (
+        !mountedRef.current ||
+        Number(useVideoStore.getState().currentVideo?.id ?? activeVideoIdRef.current ?? 0) !== Number(videoId ?? 0)
+      ) {
+        return [];
+      }
+
       const normalizedSegments = segmentPayload.map(normalizeSegment);
       setSegments(normalizedSegments);
       return normalizedSegments;
     } catch (error) {
-      setSegmentsError(error.message);
+      if (
+        mountedRef.current &&
+        Number(useVideoStore.getState().currentVideo?.id ?? activeVideoIdRef.current ?? 0) === Number(videoId ?? 0)
+      ) {
+        setSegmentsError(getSplitErrorMessage(error, '片段列表加载'));
+      }
+
       return [];
     }
   };
@@ -97,7 +205,10 @@ const useSegments = () => {
         status: payload.status ?? 'processing',
         progress: payload.progress ?? 0,
         message: payload.message ?? '正在切分视频',
-        errorMessage: payload.error_message ?? payload.errorMessage ?? ''
+        errorMessage:
+          payload.error_message ??
+          payload.errorMessage ??
+          (payload.status === 'failed' ? payload.message ?? '' : '')
       });
     });
   }, [setSplitProgress]);
@@ -272,37 +383,95 @@ const useSegments = () => {
     }
 
     setSegmentsError('');
+    const currentVideoId = Number(currentVideo.id);
+    const pollToken = beginSplitPolling();
+    let activeTaskId = '';
 
-    const splitTask = await splitVideo(currentVideo.id, analysis.time_anchors);
-    beginSplitProgress({
-      taskId: splitTask.task_id,
-      status: splitTask.status,
-      progress: splitTask.progress ?? 0,
-      message: '分割任务已提交'
-    });
-    websocketService.emitLocal('split:progress', {
-      task_id: splitTask.task_id,
-      status: splitTask.status,
-      progress: splitTask.progress ?? 0,
-      message: '分割任务已提交'
-    });
+    try {
+      const splitTask = await splitVideo(currentVideoId, analysis.time_anchors);
+      activeTaskId = splitTask.task_id ?? '';
 
-    while (true) {
-      const progressPayload = await getTaskStatus(splitTask.task_id);
-
-      websocketService.emitLocal('split:progress', progressPayload);
-
-      if (progressPayload.status === 'completed') {
-        await refreshSegments();
-        return progressPayload;
+      if (isSplitPollingCancelled(pollToken, currentVideoId)) {
+        return null;
       }
 
-      if (progressPayload.status === 'failed') {
-        setSegmentsError(progressPayload.message || '视频分割失败。');
-        return progressPayload;
+      beginSplitProgress({
+        taskId: splitTask.task_id,
+        status: splitTask.status,
+        progress: splitTask.progress ?? 0,
+        message: '分割任务已提交'
+      });
+      websocketService.emitLocal('split:progress', {
+        task_id: splitTask.task_id,
+        status: splitTask.status,
+        progress: splitTask.progress ?? 0,
+        message: '分割任务已提交'
+      });
+
+      while (!isSplitPollingCancelled(pollToken, currentVideoId)) {
+        let progressPayload;
+
+        try {
+          progressPayload = await getTaskStatus(splitTask.task_id);
+        } catch (error) {
+          if (isSplitPollingCancelled(pollToken, currentVideoId)) {
+            return null;
+          }
+
+          const errorMessage = getSplitErrorMessage(error, '视频分割轮询');
+          const currentProgress = useGenerationStore.getState().splitProgress.progress ?? 0;
+
+          setSegmentsError(errorMessage);
+          markSplitFailure({
+            taskId: splitTask.task_id,
+            progress: currentProgress,
+            message: errorMessage,
+            title: '分割任务查询失败'
+          });
+
+          return null;
+        }
+
+        if (isSplitPollingCancelled(pollToken, currentVideoId)) {
+          return null;
+        }
+
+        websocketService.emitLocal('split:progress', {
+          task_id: splitTask.task_id,
+          ...progressPayload
+        });
+
+        if (progressPayload.status === 'completed') {
+          await refreshSegmentsByVideoId(currentVideoId);
+          return progressPayload;
+        }
+
+        if (progressPayload.status === 'failed') {
+          setSegmentsError(progressPayload.message || '视频分割失败。');
+          return progressPayload;
+        }
+
+        await sleep(1200);
       }
 
-      await sleep(1200);
+      return null;
+    } catch (error) {
+      if (isSplitPollingCancelled(pollToken, currentVideoId)) {
+        return null;
+      }
+
+      const errorMessage = getSplitErrorMessage(error, activeTaskId ? '视频分割' : '分割任务启动');
+      const currentProgress = useGenerationStore.getState().splitProgress.progress ?? 0;
+
+      setSegmentsError(errorMessage);
+      markSplitFailure({
+        taskId: activeTaskId,
+        progress: activeTaskId ? currentProgress : 0,
+        message: errorMessage,
+        title: activeTaskId ? '分割任务失败' : '分割任务启动失败'
+      });
+
+      return null;
     }
   };
 

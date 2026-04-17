@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   downloadVideo,
@@ -16,6 +16,26 @@ import { useVideoStore } from '../store/videoStore.js';
 import { downloadBlobInBrowser } from '../utils/browserDownload.js';
 import { sleep } from '../utils/sleep.js';
 
+const getGenerationErrorMessage = (error, phase = '片段生成') => {
+  if (error?.statusCode === 404) {
+    return `${phase}任务不存在或已失效，请刷新后重试。`;
+  }
+
+  if (error?.isTimeout || error?.code === 'ECONNABORTED') {
+    return `${phase}请求超时，请稍后重试。`;
+  }
+
+  if (error?.isNetworkError || error?.statusCode === 0) {
+    return `${phase}暂时无法连接服务端，请检查网络或后端状态。`;
+  }
+
+  if (error?.statusCode >= 500) {
+    return `服务端处理${phase}时出错，请稍后重试。`;
+  }
+
+  return error?.message || `${phase}失败，请稍后重试。`;
+};
+
 const useGeneration = () => {
   const currentVideo = useVideoStore((state) => state.currentVideo);
   const analysis = useAnalysisStore((state) => state.analysis);
@@ -28,9 +48,156 @@ const useGeneration = () => {
   const resetMergeProgress = useGenerationStore((state) => state.resetMergeProgress);
   const updateTask = useGenerationStore((state) => state.updateTask);
   const setMergeProgress = useGenerationStore((state) => state.setMergeProgress);
+  const setSegmentsError = useGenerationStore((state) => state.setSegmentsError);
   const [optimizingSegmentId, setOptimizingSegmentId] = useState(0);
   const [generatingSegmentIds, setGeneratingSegmentIds] = useState([]);
   const characters = analysis?.characters ?? [];
+  const mountedRef = useRef(false);
+  const activeVideoIdRef = useRef(currentVideo?.id ?? null);
+  const previousVideoIdRef = useRef(currentVideo?.id ?? null);
+  const optimizeRequestTokenRef = useRef(0);
+  const generationPollingTokenRef = useRef(new Map());
+  const mergePollingTokenRef = useRef(0);
+
+  const isVideoScopedRequestCancelled = (requestToken, videoId, tokenRef) => {
+    const latestVideoId = useVideoStore.getState().currentVideo?.id ?? activeVideoIdRef.current ?? 0;
+
+    return (
+      !mountedRef.current ||
+      Number(latestVideoId) !== Number(videoId ?? 0) ||
+      tokenRef.current !== requestToken
+    );
+  };
+
+  const beginOptimizeRequest = () => {
+    const nextToken = optimizeRequestTokenRef.current + 1;
+    optimizeRequestTokenRef.current = nextToken;
+    return nextToken;
+  };
+
+  const beginGenerationPolling = (segmentId) => {
+    const currentToken = generationPollingTokenRef.current.get(segmentId) ?? 0;
+    const nextToken = currentToken + 1;
+    generationPollingTokenRef.current.set(segmentId, nextToken);
+    return nextToken;
+  };
+
+  const isGenerationPollingCancelled = (segmentId, requestToken, videoId) => {
+    const latestVideoId = useVideoStore.getState().currentVideo?.id ?? activeVideoIdRef.current ?? 0;
+
+    return (
+      !mountedRef.current ||
+      Number(latestVideoId) !== Number(videoId ?? 0) ||
+      generationPollingTokenRef.current.get(segmentId) !== requestToken
+    );
+  };
+
+  const beginMergePolling = () => {
+    const nextToken = mergePollingTokenRef.current + 1;
+    mergePollingTokenRef.current = nextToken;
+    return nextToken;
+  };
+
+  const markSegmentGenerating = (segmentId, isGenerating) => {
+    if (!mountedRef.current) {
+      return;
+    }
+
+    setGeneratingSegmentIds((state) =>
+      isGenerating ? [...new Set([...state, segmentId])] : state.filter((item) => item !== segmentId)
+    );
+  };
+
+  const markSegmentGenerationFailure = (segmentId, message, taskId = '') => {
+    const state = useGenerationStore.getState();
+    const currentSegment = state.segments.find((segment) => segment.id === segmentId);
+
+    if (!currentSegment) {
+      return;
+    }
+
+    const failedTask = {
+      task_id: taskId || currentSegment.latestGenerationTask?.task_id || '',
+      status: 'failed',
+      progress: currentSegment.latestGenerationTask?.progress ?? 0,
+      result_url: currentSegment.latestGenerationTask?.result_url ?? '',
+      error_message: message,
+      created_at: currentSegment.latestGenerationTask?.created_at,
+      updated_at: new Date().toISOString()
+    };
+
+    updateSegment(segmentId, {
+      latestGenerationTask: failedTask,
+      latestCompletedGenerationTask: currentSegment.latestCompletedGenerationTask ?? null,
+      generatedUrl: currentSegment.generatedUrl ?? ''
+    });
+
+    if (failedTask.task_id) {
+      updateTask(failedTask.task_id, {
+        ...failedTask,
+        segment_id: segmentId
+      });
+    }
+  };
+
+  const markMergeFailure = ({ taskId = '', progress = 0, message, title }) => {
+    if (taskId) {
+      setMergeProgress({
+        taskId,
+        status: 'failed',
+        progress,
+        message: title,
+        errorMessage: message
+      });
+
+      return;
+    }
+
+    resetMergeProgress();
+    setMergeProgress({
+      status: 'failed',
+      progress,
+      message: title,
+      errorMessage: message
+    });
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+      optimizeRequestTokenRef.current += 1;
+      generationPollingTokenRef.current = new Map();
+      mergePollingTokenRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    const previousVideoId = previousVideoIdRef.current;
+    activeVideoIdRef.current = currentVideo?.id ?? null;
+    optimizeRequestTokenRef.current += 1;
+    generationPollingTokenRef.current = new Map();
+    mergePollingTokenRef.current += 1;
+
+    if (
+      mountedRef.current &&
+      previousVideoId &&
+      currentVideo?.id &&
+      Number(previousVideoId) !== Number(currentVideo.id) &&
+      useGenerationStore.getState().mergeProgress.taskId
+    ) {
+      generationSessionStorage.clearMergeTaskId();
+      resetMergeProgress();
+    }
+
+    if (mountedRef.current) {
+      setOptimizingSegmentId(0);
+      setGeneratingSegmentIds([]);
+    }
+
+    previousVideoIdRef.current = currentVideo?.id ?? null;
+  }, [currentVideo?.id, resetMergeProgress]);
 
   useEffect(() => {
     return websocketService.subscribe('generation:progress', (payload) => {
@@ -57,7 +224,7 @@ const useGeneration = () => {
         status: payload.status,
         progress: payload.progress,
         result_url: toAbsoluteAssetUrl(payload.result_url),
-        error_message: payload.error_message ?? '',
+        error_message: payload.error_message ?? payload.message ?? '',
         created_at: payload.created_at,
         updated_at: payload.updated_at
       };
@@ -91,7 +258,9 @@ const useGeneration = () => {
         status: payload.status ?? 'processing',
         progress: payload.progress ?? 0,
         message: payload.message ?? '正在拼接视频',
-        errorMessage: payload.error_message ?? ''
+        errorMessage:
+          payload.error_message ??
+          (payload.status === 'failed' ? payload.message ?? '' : '')
       });
     });
   }, [setMergeProgress]);
@@ -164,10 +333,18 @@ const useGeneration = () => {
       return null;
     }
 
+    const requestVideoId = Number(currentVideo?.id ?? 0);
+    const requestToken = beginOptimizeRequest();
+
+    setSegmentsError('');
     setOptimizingSegmentId(segmentId);
 
     try {
       const optimizedPayload = await optimizePrompt(segment.prompt, characters);
+
+      if (isVideoScopedRequestCancelled(requestToken, requestVideoId, optimizeRequestTokenRef)) {
+        return null;
+      }
 
       updateSegment(segmentId, {
         prompt: optimizedPayload.optimized_prompt || segment.prompt,
@@ -175,8 +352,17 @@ const useGeneration = () => {
       });
 
       return optimizedPayload;
+    } catch (error) {
+      if (isVideoScopedRequestCancelled(requestToken, requestVideoId, optimizeRequestTokenRef)) {
+        return null;
+      }
+
+      setSegmentsError(getGenerationErrorMessage(error, '提示词优化'));
+      return null;
     } finally {
-      setOptimizingSegmentId(0);
+      if (!isVideoScopedRequestCancelled(requestToken, requestVideoId, optimizeRequestTokenRef)) {
+        setOptimizingSegmentId(0);
+      }
     }
   };
 
@@ -187,10 +373,25 @@ const useGeneration = () => {
       return null;
     }
 
-    setGeneratingSegmentIds((state) => [...state, segmentId]);
+    if (!currentVideo?.id) {
+      setSegmentsError('请先上传并选择视频，再生成片段。');
+      return null;
+    }
+
+    const requestVideoId = Number(currentVideo.id);
+    const requestToken = beginGenerationPolling(segmentId);
+    let activeTaskId = '';
+
+    setSegmentsError('');
+    markSegmentGenerating(segmentId, true);
 
     try {
       const startPayload = await generateSegment(segmentId, segment.prompt);
+      activeTaskId = startPayload.task_id ?? '';
+
+      if (isGenerationPollingCancelled(segmentId, requestToken, requestVideoId)) {
+        return null;
+      }
 
       addTask({
         ...startPayload,
@@ -201,8 +402,27 @@ const useGeneration = () => {
         segment_id: segmentId
       });
 
-      while (true) {
-        const taskPayload = await getGenerationTask(startPayload.task_id);
+      while (!isGenerationPollingCancelled(segmentId, requestToken, requestVideoId)) {
+        let taskPayload;
+
+        try {
+          taskPayload = await getGenerationTask(startPayload.task_id);
+        } catch (error) {
+          if (isGenerationPollingCancelled(segmentId, requestToken, requestVideoId)) {
+            return null;
+          }
+
+          const errorMessage = getGenerationErrorMessage(error, '片段生成轮询');
+
+          setSegmentsError(errorMessage);
+          markSegmentGenerationFailure(segmentId, errorMessage, startPayload.task_id);
+          return null;
+        }
+
+        if (isGenerationPollingCancelled(segmentId, requestToken, requestVideoId)) {
+          return null;
+        }
+
         websocketService.emitLocal('generation:progress', taskPayload);
 
         if (taskPayload.status === 'completed' || taskPayload.status === 'failed') {
@@ -211,8 +431,22 @@ const useGeneration = () => {
 
         await sleep(1200);
       }
+
+      return null;
+    } catch (error) {
+      if (isGenerationPollingCancelled(segmentId, requestToken, requestVideoId)) {
+        return null;
+      }
+
+      const errorMessage = getGenerationErrorMessage(error, activeTaskId ? '片段生成' : '片段生成启动');
+
+      setSegmentsError(errorMessage);
+      markSegmentGenerationFailure(segmentId, errorMessage, activeTaskId);
+      return null;
     } finally {
-      setGeneratingSegmentIds((state) => state.filter((item) => item !== segmentId));
+      if (!isGenerationPollingCancelled(segmentId, requestToken, requestVideoId)) {
+        markSegmentGenerating(segmentId, false);
+      }
     }
   };
 
@@ -224,37 +458,97 @@ const useGeneration = () => {
         progress: 0,
         message: '请先上传并处理视频，再执行拼接。'
       });
+      setMergeProgress({
+        status: 'failed',
+        progress: 0,
+        message: '请先上传并处理视频，再执行拼接。',
+        errorMessage: '请先上传并处理视频，再执行拼接。'
+      });
       return null;
     }
 
-    const mergeTask = await mergeVideos(currentVideo.id);
-    beginMergeProgress({
-      taskId: mergeTask.task_id,
-      status: mergeTask.status,
-      progress: 0,
-      message: '拼接任务已提交'
-    });
+    const requestVideoId = Number(currentVideo.id);
+    const requestToken = beginMergePolling();
+    let activeTaskId = '';
 
-    websocketService.emitLocal('merge:progress', {
-      task_id: mergeTask.task_id,
-      status: mergeTask.status,
-      progress: 0,
-      message: '拼接任务已提交'
-    });
+    try {
+      const mergeTask = await mergeVideos(currentVideo.id);
+      activeTaskId = mergeTask.task_id ?? '';
 
-    while (true) {
-      const mergeTaskProgress = await getMergeProgress(mergeTask.task_id);
+      if (isVideoScopedRequestCancelled(requestToken, requestVideoId, mergePollingTokenRef)) {
+        return null;
+      }
+
+      beginMergeProgress({
+        taskId: mergeTask.task_id,
+        status: mergeTask.status,
+        progress: 0,
+        message: '拼接任务已提交'
+      });
 
       websocketService.emitLocal('merge:progress', {
         task_id: mergeTask.task_id,
-        ...mergeTaskProgress
+        status: mergeTask.status,
+        progress: 0,
+        message: '拼接任务已提交'
       });
 
-      if (mergeTaskProgress.status === 'completed' || mergeTaskProgress.status === 'failed') {
-        return mergeTaskProgress;
+      while (!isVideoScopedRequestCancelled(requestToken, requestVideoId, mergePollingTokenRef)) {
+        let mergeTaskProgress;
+
+        try {
+          mergeTaskProgress = await getMergeProgress(mergeTask.task_id);
+        } catch (error) {
+          if (isVideoScopedRequestCancelled(requestToken, requestVideoId, mergePollingTokenRef)) {
+            return null;
+          }
+
+          const errorMessage = getGenerationErrorMessage(error, '视频拼接轮询');
+          const currentProgress = useGenerationStore.getState().mergeProgress.progress ?? 0;
+
+          markMergeFailure({
+            taskId: mergeTask.task_id,
+            progress: currentProgress,
+            message: errorMessage,
+            title: '拼接任务查询失败'
+          });
+
+          return null;
+        }
+
+        if (isVideoScopedRequestCancelled(requestToken, requestVideoId, mergePollingTokenRef)) {
+          return null;
+        }
+
+        websocketService.emitLocal('merge:progress', {
+          task_id: mergeTask.task_id,
+          ...mergeTaskProgress
+        });
+
+        if (mergeTaskProgress.status === 'completed' || mergeTaskProgress.status === 'failed') {
+          return mergeTaskProgress;
+        }
+
+        await sleep(1200);
       }
 
-      await sleep(1200);
+      return null;
+    } catch (error) {
+      if (isVideoScopedRequestCancelled(requestToken, requestVideoId, mergePollingTokenRef)) {
+        return null;
+      }
+
+      const errorMessage = getGenerationErrorMessage(error, activeTaskId ? '视频拼接' : '拼接任务启动');
+      const currentProgress = useGenerationStore.getState().mergeProgress.progress ?? 0;
+
+      markMergeFailure({
+        taskId: activeTaskId,
+        progress: activeTaskId ? currentProgress : 0,
+        message: errorMessage,
+        title: activeTaskId ? '拼接任务失败' : '拼接任务启动失败'
+      });
+
+      return null;
     }
   };
 
