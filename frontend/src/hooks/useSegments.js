@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 
 import { getSegments, getTaskStatus, getVideo, splitVideo, toAbsoluteAssetUrl } from '../services/api.js';
 import { websocketService } from '../services/websocket.js';
@@ -80,6 +80,7 @@ const useSegments = () => {
   const setSegments = useGenerationStore((state) => state.setSegments);
   const beginSplitProgress = useGenerationStore((state) => state.beginSplitProgress);
   const resetSplitProgress = useGenerationStore((state) => state.resetSplitProgress);
+  const resetGenerationContext = useGenerationStore((state) => state.resetGenerationContext);
   const setSplitProgress = useGenerationStore((state) => state.setSplitProgress);
   const setSegmentsLoading = useGenerationStore((state) => state.setSegmentsLoading);
   const setSegmentsError = useGenerationStore((state) => state.setSegmentsError);
@@ -157,6 +158,17 @@ const useSegments = () => {
 
     previousVideoIdRef.current = currentVideo?.id ?? null;
   }, [currentVideo?.id, resetSplitProgress]);
+
+  useLayoutEffect(() => {
+    const previousVideoId = previousVideoIdRef.current ?? null;
+    const nextVideoId = currentVideo?.id ?? null;
+
+    if (previousVideoId && Number(previousVideoId) !== Number(nextVideoId ?? 0)) {
+      resetGenerationContext();
+    }
+
+    previousVideoIdRef.current = nextVideoId;
+  }, [currentVideo?.id, resetGenerationContext]);
 
   const refreshSegmentsByVideoId = async (videoId) => {
     if (!videoId) {

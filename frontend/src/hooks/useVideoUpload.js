@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 
 import { uploadVideo } from '../services/api.js';
 import { websocketService } from '../services/websocket.js';
+import { useAnalysisStore } from '../store/analysisStore.js';
+import { useGenerationStore } from '../store/generationStore.js';
 import { useVideoStore } from '../store/videoStore.js';
 import { formatBytes } from '../utils/formatBytes.js';
 import { getEnv } from '../utils/env.js';
@@ -44,6 +46,8 @@ const useVideoUpload = () => {
   const updateProgress = useVideoStore((state) => state.updateProgress);
   const setValidationMessage = useVideoStore((state) => state.setValidationMessage);
   const setUploadState = useVideoStore((state) => state.setUploadState);
+  const resetAnalysisState = useAnalysisStore((state) => state.resetAnalysisState);
+  const resetGenerationContext = useGenerationStore((state) => state.resetGenerationContext);
 
   useEffect(() => {
     return websocketService.subscribe('upload:progress', (payload) => {
@@ -99,6 +103,13 @@ const useVideoUpload = () => {
           });
         }
       });
+
+      const activeCurrentVideo = useVideoStore.getState().currentVideo;
+
+      if (!activeCurrentVideo || Number(activeCurrentVideo.id) !== Number(video.id)) {
+        resetAnalysisState();
+        resetGenerationContext();
+      }
 
       addVideo(video);
       websocketService.emitLocal('upload:progress', {

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 
 import { analyzeVideo, getAnalysis, isTransientApiError } from '../services/api.js';
 import { websocketService } from '../services/websocket.js';
@@ -46,8 +46,10 @@ const useAnalysis = () => {
   const setError = useAnalysisStore((state) => state.setError);
   const setProgressState = useAnalysisStore((state) => state.setProgressState);
   const clearAnalysis = useAnalysisStore((state) => state.clearAnalysis);
+  const resetAnalysisState = useAnalysisStore((state) => state.resetAnalysisState);
   const mountedRef = useRef(false);
   const activeVideoIdRef = useRef(currentVideo?.id ?? null);
+  const previousVideoIdRef = useRef(currentVideo?.id ?? null);
   const analysisRequestTokenRef = useRef(0);
 
   const cancelAnalysisRequest = () => {
@@ -83,6 +85,17 @@ const useAnalysis = () => {
     activeVideoIdRef.current = currentVideo?.id ?? null;
     cancelAnalysisRequest();
   }, [currentVideo?.id]);
+
+  useLayoutEffect(() => {
+    const previousVideoId = previousVideoIdRef.current ?? null;
+    const nextVideoId = currentVideo?.id ?? null;
+
+    if (previousVideoId && Number(previousVideoId) !== Number(nextVideoId ?? 0)) {
+      resetAnalysisState();
+    }
+
+    previousVideoIdRef.current = nextVideoId;
+  }, [currentVideo?.id, resetAnalysisState]);
 
   const confirmAnalysisResult = async (videoId, requestToken) => {
     if (isAnalysisRequestCancelled(requestToken, videoId)) {

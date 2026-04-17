@@ -91,6 +91,23 @@ const syncMergeTaskStorage = (progressState) => {
   generationSessionStorage.clearMergeTaskId();
 };
 
+const buildResetGenerationState = () => {
+  const nextMergeProgress = createInitialProgressState('等待拼接');
+  const nextSplitProgress = createInitialProgressState('等待分割');
+
+  syncMergeTaskStorage(nextMergeProgress);
+  syncSplitTaskStorage(nextSplitProgress);
+
+  return {
+    segments: [],
+    tasks: [],
+    mergeProgress: nextMergeProgress,
+    splitProgress: nextSplitProgress,
+    segmentsLoading: false,
+    segmentsError: ''
+  };
+};
+
 const useGenerationStore = create((set) => ({
   segments: [],
   tasks: [],
@@ -237,22 +254,13 @@ const useGenerationStore = create((set) => ({
       segmentsError,
       segmentsLoading: false
     }),
+  resetGenerationContext: () =>
+    set(() => {
+      return buildResetGenerationState();
+    }),
   clearGenerationState: () =>
     set(() => {
-      const nextMergeProgress = createInitialProgressState('等待拼接');
-      const nextSplitProgress = createInitialProgressState('等待分割');
-
-      syncMergeTaskStorage(nextMergeProgress);
-      syncSplitTaskStorage(nextSplitProgress);
-
-      return {
-        segments: [],
-        tasks: [],
-        mergeProgress: nextMergeProgress,
-        splitProgress: nextSplitProgress,
-        segmentsLoading: false,
-        segmentsError: ''
-      };
+      return buildResetGenerationState();
     })
 }));
 

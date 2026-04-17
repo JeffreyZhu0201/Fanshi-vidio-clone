@@ -10,6 +10,10 @@ const createInitialAnalysisState = () => ({
   lastUpdatedAt: null
 });
 
+const buildResetAnalysisState = () => ({
+  ...createInitialAnalysisState()
+});
+
 const useAnalysisStore = create((set) => ({
   ...createInitialAnalysisState(),
   setAnalysis: (analysis) =>
@@ -45,9 +49,13 @@ const useAnalysisStore = create((set) => ({
       error: payload.status && payload.status !== 'failed' ? '' : state.error,
       lastUpdatedAt: new Date().toISOString()
     })),
+  resetAnalysisState: () =>
+    set({
+      ...buildResetAnalysisState()
+    }),
   clearAnalysis: () =>
     set({
-      ...createInitialAnalysisState()
+      ...buildResetAnalysisState()
     })
 }));
 
