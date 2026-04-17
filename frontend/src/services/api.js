@@ -27,11 +27,18 @@ const createApiError = (error) => {
       : '当前无法连接到服务端，请检查网络或后端服务状态。');
 
   const normalizedError = new Error(message);
+  normalizedError.code = error.code ?? '';
   normalizedError.statusCode = error.response?.status ?? 0;
   normalizedError.details = error.response?.data?.details ?? null;
+  normalizedError.isTimeout = error.code === 'ECONNABORTED';
+  normalizedError.isNetworkError = !error.response;
   normalizedError.originalError = error;
 
   return normalizedError;
+};
+
+const isTransientApiError = (error) => {
+  return Boolean(error?.isTimeout || error?.isNetworkError || error?.statusCode === 0);
 };
 
 const shouldRetry = (error) => {
@@ -217,6 +224,7 @@ export {
   getMergeProgress,
   getSegments,
   getTaskStatus,
+  isTransientApiError,
   mergeVideos,
   optimizePrompt,
   splitVideo,

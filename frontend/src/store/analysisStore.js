@@ -42,6 +42,7 @@ const useAnalysisStore = create((set) => ({
       status: payload.status ?? state.status,
       statusMessage: payload.message ?? state.statusMessage,
       loading: payload.status ? !['completed', 'failed'].includes(payload.status) : state.loading,
+      error: payload.status && payload.status !== 'failed' ? '' : state.error,
       lastUpdatedAt: new Date().toISOString()
     })),
   clearAnalysis: () =>

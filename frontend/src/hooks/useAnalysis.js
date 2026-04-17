@@ -1,9 +1,17 @@
 import { useEffect } from 'react';
 
-import { analyzeVideo, getAnalysis } from '../services/api.js';
+import { analyzeVideo, getAnalysis, isTransientApiError } from '../services/api.js';
 import { websocketService } from '../services/websocket.js';
 import { useAnalysisStore } from '../store/analysisStore.js';
 import { useVideoStore } from '../store/videoStore.js';
+import { sleep } from '../utils/sleep.js';
+
+const ANALYSIS_RESULT_CONFIRM_MAX_RETRIES = 8;
+const ANALYSIS_RESULT_CONFIRM_INTERVAL_MS = 3000;
+
+const createAnalysisRecoveryError = () => {
+  return '分析请求超时，且在确认窗口内未获取到结果，请稍后重试。';
+};
 
 const useAnalysis = () => {
   const currentVideo = useVideoStore((state) => state.currentVideo);
@@ -18,6 +26,59 @@ const useAnalysis = () => {
   const setError = useAnalysisStore((state) => state.setError);
   const setProgressState = useAnalysisStore((state) => state.setProgressState);
   const clearAnalysis = useAnalysisStore((state) => state.clearAnalysis);
+
+  const confirmAnalysisResult = async (videoId) => {
+    setProgressState({
+      progress: 92,
+      status: 'processing',
+      message: '分析请求超时，正在确认结果'
+    });
+
+    for (let attempt = 0; attempt < ANALYSIS_RESULT_CONFIRM_MAX_RETRIES; attempt += 1) {
+      if (Number(useVideoStore.getState().currentVideo?.id) !== Number(videoId)) {
+        return null;
+      }
+
+      const analysisState = useAnalysisStore.getState();
+
+      if (analysisState.status === 'failed' && analysisState.error) {
+        return null;
+      }
+
+      try {
+        const analysisPayload = await getAnalysis(videoId);
+
+        if (Number(useVideoStore.getState().currentVideo?.id) !== Number(videoId)) {
+          return null;
+        }
+
+        setAnalysis(analysisPayload);
+        updateCurrentVideo({
+          status: 'analyzed'
+        });
+
+        return analysisPayload;
+      } catch (errorInstance) {
+        const isLastAttempt = attempt === ANALYSIS_RESULT_CONFIRM_MAX_RETRIES - 1;
+        const canRetry = errorInstance.statusCode === 404 || isTransientApiError(errorInstance);
+
+        if (!canRetry) {
+          setError(errorInstance.message);
+          return null;
+        }
+
+        if (isLastAttempt) {
+          setError(createAnalysisRecoveryError());
+          return null;
+        }
+
+        await sleep(ANALYSIS_RESULT_CONFIRM_INTERVAL_MS);
+      }
+    }
+
+    setError(createAnalysisRecoveryError());
+    return null;
+  };
 
   useEffect(() => {
     return websocketService.subscribe('analysis:progress', (payload) => {
@@ -84,6 +145,9 @@ const useAnalysis = () => {
     }
 
     const currentVideoId = currentVideo.id;
+    updateCurrentVideo({
+      status: 'analyzing'
+    });
 
     websocketService.emitLocal('analysis:progress', {
       video_id: currentVideoId,
@@ -109,6 +173,10 @@ const useAnalysis = () => {
 
       return analysisPayload;
     } catch (errorInstance) {
+      if (isTransientApiError(errorInstance)) {
+        return confirmAnalysisResult(currentVideoId);
+      }
+
       websocketService.emitLocal('analysis:progress', {
         video_id: currentVideoId,
         progress: 100,
