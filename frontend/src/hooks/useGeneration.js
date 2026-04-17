@@ -11,7 +11,7 @@ import {
 } from '../services/api.js';
 import { websocketService } from '../services/websocket.js';
 import { useAnalysisStore } from '../store/analysisStore.js';
-import { useGenerationStore } from '../store/generationStore.js';
+import { generationSessionStorage, useGenerationStore } from '../store/generationStore.js';
 import { useVideoStore } from '../store/videoStore.js';
 import { downloadBlobInBrowser } from '../utils/browserDownload.js';
 import { sleep } from '../utils/sleep.js';
@@ -25,6 +25,7 @@ const useGeneration = () => {
   const updateSegment = useGenerationStore((state) => state.updateSegment);
   const addTask = useGenerationStore((state) => state.addTask);
   const beginMergeProgress = useGenerationStore((state) => state.beginMergeProgress);
+  const resetMergeProgress = useGenerationStore((state) => state.resetMergeProgress);
   const updateTask = useGenerationStore((state) => state.updateTask);
   const setMergeProgress = useGenerationStore((state) => state.setMergeProgress);
   const [optimizingSegmentId, setOptimizingSegmentId] = useState(0);
@@ -81,6 +82,61 @@ const useGeneration = () => {
       });
     });
   }, [setMergeProgress]);
+
+  useEffect(() => {
+    if (!currentVideo?.id) {
+      return undefined;
+    }
+
+    const persistedMergeTaskId = generationSessionStorage.getMergeTaskId();
+
+    if (!persistedMergeTaskId) {
+      return undefined;
+    }
+
+    let active = true;
+
+    const restoreMergeProgress = async () => {
+      try {
+        const mergeTaskPayload = await getMergeProgress(persistedMergeTaskId);
+
+        if (!active) {
+          return;
+        }
+
+        beginMergeProgress({
+          taskId: persistedMergeTaskId,
+          status: mergeTaskPayload.status ?? 'processing',
+          progress: mergeTaskPayload.progress ?? 0,
+          message: mergeTaskPayload.message ?? '正在拼接视频'
+        });
+
+        setMergeProgress({
+          taskId: persistedMergeTaskId,
+          status: mergeTaskPayload.status ?? 'processing',
+          progress: mergeTaskPayload.progress ?? 0,
+          message: mergeTaskPayload.message ?? '正在拼接视频',
+          errorMessage:
+            mergeTaskPayload.error_message ??
+            (mergeTaskPayload.status === 'failed' ? mergeTaskPayload.message ?? '' : '')
+        });
+      } catch (error) {
+        generationSessionStorage.clearMergeTaskId();
+
+        if (!active) {
+          return;
+        }
+
+        resetMergeProgress();
+      }
+    };
+
+    void restoreMergeProgress();
+
+    return () => {
+      active = false;
+    };
+  }, [beginMergeProgress, currentVideo?.id, resetMergeProgress, setMergeProgress]);
 
   const setSegmentPrompt = (segmentId, prompt) => {
     updateSegment(segmentId, {

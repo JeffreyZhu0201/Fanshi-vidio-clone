@@ -1,10 +1,10 @@
 import { useEffect } from 'react';
 
-import { getSegments, getTaskStatus, splitVideo, toAbsoluteAssetUrl } from '../services/api.js';
+import { getSegments, getTaskStatus, getVideo, splitVideo, toAbsoluteAssetUrl } from '../services/api.js';
 import { websocketService } from '../services/websocket.js';
 import { useAnalysisStore } from '../store/analysisStore.js';
-import { useGenerationStore } from '../store/generationStore.js';
-import { useVideoStore } from '../store/videoStore.js';
+import { generationSessionStorage, useGenerationStore } from '../store/generationStore.js';
+import { useVideoStore, videoSessionStorage } from '../store/videoStore.js';
 import { sleep } from '../utils/sleep.js';
 
 const normalizeSegment = (segment) => ({
@@ -32,6 +32,7 @@ const normalizeSegment = (segment) => ({
 
 const useSegments = () => {
   const currentVideo = useVideoStore((state) => state.currentVideo);
+  const setCurrentVideo = useVideoStore((state) => state.setCurrentVideo);
   const analysis = useAnalysisStore((state) => state.analysis);
   const segments = useGenerationStore((state) => state.segments);
   const splitProgress = useGenerationStore((state) => state.splitProgress);
@@ -39,9 +40,28 @@ const useSegments = () => {
   const segmentsError = useGenerationStore((state) => state.segmentsError);
   const setSegments = useGenerationStore((state) => state.setSegments);
   const beginSplitProgress = useGenerationStore((state) => state.beginSplitProgress);
+  const resetSplitProgress = useGenerationStore((state) => state.resetSplitProgress);
   const setSplitProgress = useGenerationStore((state) => state.setSplitProgress);
   const setSegmentsLoading = useGenerationStore((state) => state.setSegmentsLoading);
   const setSegmentsError = useGenerationStore((state) => state.setSegmentsError);
+
+  const refreshSegmentsByVideoId = async (videoId) => {
+    if (!videoId) {
+      return [];
+    }
+
+    setSegmentsLoading(true);
+
+    try {
+      const segmentPayload = await getSegments(videoId);
+      const normalizedSegments = segmentPayload.map(normalizeSegment);
+      setSegments(normalizedSegments);
+      return normalizedSegments;
+    } catch (error) {
+      setSegmentsError(error.message);
+      return [];
+    }
+  };
 
   useEffect(() => {
     return websocketService.subscribe('split:progress', (payload) => {
@@ -62,6 +82,50 @@ const useSegments = () => {
       });
     });
   }, [setSplitProgress]);
+
+  useEffect(() => {
+    if (currentVideo?.id) {
+      return undefined;
+    }
+
+    const persistedVideoId = videoSessionStorage.getCurrentVideoId();
+
+    if (!persistedVideoId) {
+      return undefined;
+    }
+
+    let active = true;
+
+    const restoreCurrentVideo = async () => {
+      try {
+        const videoPayload = await getVideo(persistedVideoId);
+
+        if (active) {
+          setCurrentVideo(videoPayload);
+        }
+      } catch (error) {
+        videoSessionStorage.clearCurrentVideoId();
+        generationSessionStorage.clearSplitTaskId();
+        generationSessionStorage.clearMergeTaskId();
+
+        if (!active) {
+          return;
+        }
+
+        resetSplitProgress();
+
+        if (error.statusCode !== 404) {
+          setSegmentsError(error.message);
+        }
+      }
+    };
+
+    void restoreCurrentVideo();
+
+    return () => {
+      active = false;
+    };
+  }, [currentVideo?.id, resetSplitProgress, setCurrentVideo, setSegmentsError]);
 
   useEffect(() => {
     if (!currentVideo?.id) {
@@ -93,22 +157,88 @@ const useSegments = () => {
     };
   }, [currentVideo?.id, setSegments, setSegmentsError, setSegmentsLoading]);
 
-  const refreshSegments = async () => {
+  useEffect(() => {
     if (!currentVideo?.id) {
-      return [];
+      return undefined;
     }
 
-    setSegmentsLoading(true);
+    const persistedSplitTaskId = generationSessionStorage.getSplitTaskId();
 
-    try {
-      const segmentPayload = await getSegments(currentVideo.id);
-      const normalizedSegments = segmentPayload.map(normalizeSegment);
-      setSegments(normalizedSegments);
-      return normalizedSegments;
-    } catch (error) {
-      setSegmentsError(error.message);
-      return [];
+    if (!persistedSplitTaskId) {
+      return undefined;
     }
+
+    let active = true;
+
+    const restoreSplitProgress = async () => {
+      try {
+        const progressPayload = await getTaskStatus(persistedSplitTaskId);
+
+        if (!active) {
+          return;
+        }
+
+        if (progressPayload.type && progressPayload.type !== 'split') {
+          generationSessionStorage.clearSplitTaskId();
+          resetSplitProgress();
+          return;
+        }
+
+        beginSplitProgress({
+          taskId: persistedSplitTaskId,
+          status: progressPayload.status ?? 'processing',
+          progress: progressPayload.progress ?? 0,
+          message: progressPayload.message ?? '正在切分视频',
+        });
+
+        setSplitProgress({
+          taskId: persistedSplitTaskId,
+          status: progressPayload.status ?? 'processing',
+          progress: progressPayload.progress ?? 0,
+          message: progressPayload.message ?? '正在切分视频',
+          errorMessage: progressPayload.error_message ?? ''
+        });
+
+        if (progressPayload.status === 'completed') {
+          await refreshSegmentsByVideoId(currentVideo.id);
+          return;
+        }
+
+        if (progressPayload.status === 'failed') {
+          setSegmentsError(progressPayload.message || '视频分割失败。');
+        }
+      } catch (error) {
+        generationSessionStorage.clearSplitTaskId();
+
+        if (!active) {
+          return;
+        }
+
+        resetSplitProgress();
+
+        if (error.statusCode !== 404) {
+          setSegmentsError(error.message);
+        }
+      }
+    };
+
+    void restoreSplitProgress();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    beginSplitProgress,
+    currentVideo?.id,
+    resetSplitProgress,
+    setSegmentsError,
+    setSplitProgress,
+    setSegmentsLoading,
+    setSegments
+  ]);
+
+  const refreshSegments = async () => {
+    return refreshSegmentsByVideoId(currentVideo?.id);
   };
 
   const splitFromAnalysis = async () => {

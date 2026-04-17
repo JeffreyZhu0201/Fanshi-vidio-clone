@@ -149,6 +149,11 @@ const getAnalysis = async (videoId) => {
   return response.data;
 };
 
+const getVideo = async (videoId) => {
+  const response = await api.get(`/videos/${videoId}`);
+  return response.data;
+};
+
 const optimizePrompt = async (prompt, characters = []) => {
   const response = await api.post('/analysis/optimize-prompt', {
     prompt,
@@ -224,6 +229,7 @@ export {
   getMergeProgress,
   getSegments,
   getTaskStatus,
+  getVideo,
   isTransientApiError,
   mergeVideos,
   optimizePrompt,

@@ -70,6 +70,7 @@
 - WebSocket / 轮询状态展示
 - 实时事件按当前视频、当前分割任务、当前拼接任务和当前片段上下文过滤，避免串线更新
 - 整片分析在请求超时或瞬时网络异常时会进入结果确认轮询，自动恢复后端已落库的分析结果
+- 页面刷新后可恢复当前视频上下文，并继续展示分割任务与拼接任务进度
 
 ### 3.2 后端已实现功能
 
@@ -377,6 +378,15 @@
 - [AnalysisDisplay.jsx](/home/zhuzy2024/workspace/Fanshi_vidio_clone/frontend/src/components/AnalysisDisplay.jsx)
 
 这部分已经支持“重新分析”和“生成片段”两个动作。
+
+同时，当前工作台已经补齐页面刷新恢复能力：
+
+- 当前选中的 `videoId` 会写入 `sessionStorage`
+- 当前激活的 `splitTaskId` 和 `mergeTaskId` 也会最小持久化
+- 刷新后前端会先调用 `GET /api/videos/:id` 恢复当前视频
+- 然后继续使用现有 `GET /api/analysis/:videoId`、`GET /api/segments/:videoId` 恢复分析与片段
+- 如果分割或拼接任务仍在处理中，会继续调用已有进度接口恢复当前进度
+- 如果持久化内容失效，前端会自动清理无效状态，避免页面陷入脏上下文
 
 ### 第 5 步：用户基于时间锚点生成片段
 
