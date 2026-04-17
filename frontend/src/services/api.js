@@ -1,58 +1,148 @@
 import axios from 'axios';
 
+import { getEnv } from '../utils/env.js';
+
+const API_BASE_URL = getEnv('VITE_API_BASE_URL', 'http://localhost:5000/api');
+const API_TIMEOUT = Number(getEnv('VITE_API_TIMEOUT', '30000'));
+const MAX_RETRIES = 3;
+const RETRYABLE_METHODS = new Set(['get', 'head', 'options']);
+const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
+
+const resolveRuntimeOrigin = () => {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+
+  return 'http://localhost:5173';
+};
+
+const API_ORIGIN = new URL(API_BASE_URL, resolveRuntimeOrigin()).origin;
+
+const createApiError = (error) => {
+  const message =
+    error.response?.data?.message ||
+    error.response?.data?.error ||
+    (error.code === 'ECONNABORTED'
+      ? '请求超时，请稍后重试。'
+      : '当前无法连接到服务端，请检查网络或后端服务状态。');
+
+  const normalizedError = new Error(message);
+  normalizedError.statusCode = error.response?.status ?? 0;
+  normalizedError.details = error.response?.data?.details ?? null;
+  normalizedError.originalError = error;
+
+  return normalizedError;
+};
+
+const shouldRetry = (error) => {
+  const method = error.config?.method?.toLowerCase?.() ?? 'get';
+  const retryCount = error.config?.__retryCount ?? 0;
+
+  if (retryCount >= MAX_RETRIES) {
+    return false;
+  }
+
+  if (!RETRYABLE_METHODS.has(method)) {
+    return false;
+  }
+
+  if (!error.response) {
+    return true;
+  }
+
+  return RETRYABLE_STATUS_CODES.has(error.response.status);
+};
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL,
-  timeout: 30000
+  baseURL: API_BASE_URL,
+  timeout: API_TIMEOUT
 });
 
 api.interceptors.request.use(
   (config) => {
-    return config;
+    const nextConfig = {
+      ...config,
+      headers: {
+        Accept: 'application/json',
+        ...config.headers
+      }
+    };
+
+    return nextConfig;
   },
-  (error) => Promise.reject(error)
+  (error) => Promise.reject(createApiError(error))
 );
 
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    const message =
-      error.response?.data?.message ||
-      error.message ||
-      'Unexpected error occurred while communicating with the API.';
+  async (error) => {
+    if (shouldRetry(error)) {
+      const nextRetryCount = (error.config.__retryCount ?? 0) + 1;
 
-    return Promise.reject(new Error(message));
+      error.config.__retryCount = nextRetryCount;
+
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, nextRetryCount * 350);
+      });
+
+      return api(error.config);
+    }
+
+    return Promise.reject(createApiError(error));
   }
 );
 
-export const checkHealth = async () => {
+const parseDownloadFilename = (contentDisposition = '') => {
+  const matchedFilename = contentDisposition.match(/filename="?([^"]+)"?/i);
+  return matchedFilename?.[1] ?? 'fanshi-output.mp4';
+};
+
+const toAbsoluteAssetUrl = (assetPath) => {
+  if (!assetPath) {
+    return '';
+  }
+
+  if (/^(blob:|data:|https?:\/\/)/i.test(assetPath)) {
+    return assetPath;
+  }
+
+  return new URL(assetPath.startsWith('/') ? assetPath : `/${assetPath}`, API_ORIGIN).toString();
+};
+
+const checkHealth = async () => {
   const response = await api.get('/health');
   return response.data;
 };
 
-export const uploadVideo = async (file) => {
+const uploadVideo = async (file, options = {}) => {
   const formData = new FormData();
   formData.append('video', file);
+
+  if (options.projectName) {
+    formData.append('project_name', options.projectName);
+  }
 
   const response = await api.post('/videos/upload', formData, {
     headers: {
       'Content-Type': 'multipart/form-data'
-    }
+    },
+    onUploadProgress: options.onUploadProgress
   });
 
   return response.data;
 };
 
-export const analyzeVideo = async (videoId) => {
+const analyzeVideo = async (videoId) => {
   const response = await api.post('/analysis/analyze', { video_id: videoId });
   return response.data;
 };
 
-export const getAnalysis = async (videoId) => {
+const getAnalysis = async (videoId) => {
   const response = await api.get(`/analysis/${videoId}`);
   return response.data;
 };
 
-export const optimizePrompt = async (prompt, characters) => {
+const optimizePrompt = async (prompt, characters = []) => {
   const response = await api.post('/analysis/optimize-prompt', {
     prompt,
     characters
@@ -61,7 +151,7 @@ export const optimizePrompt = async (prompt, characters) => {
   return response.data;
 };
 
-export const splitVideo = async (videoId, timeAnchors) => {
+const splitVideo = async (videoId, timeAnchors) => {
   const response = await api.post('/segments/split', {
     video_id: videoId,
     time_anchors: timeAnchors
@@ -70,12 +160,17 @@ export const splitVideo = async (videoId, timeAnchors) => {
   return response.data;
 };
 
-export const getSegments = async (videoId) => {
+const getSegments = async (videoId) => {
   const response = await api.get(`/segments/${videoId}`);
   return response.data;
 };
 
-export const generateSegment = async (segmentId, prompt) => {
+const getTaskStatus = async (taskId) => {
+  const response = await api.get(`/tasks/${taskId}`);
+  return response.data;
+};
+
+const generateSegment = async (segmentId, prompt) => {
   const response = await api.post('/generation/generate', {
     segment_id: segmentId,
     prompt
@@ -84,23 +179,49 @@ export const generateSegment = async (segmentId, prompt) => {
   return response.data;
 };
 
-export const mergeVideos = async (videoId) => {
+const getGenerationTask = async (taskId) => {
+  const response = await api.get(`/generation/${taskId}`);
+  return response.data;
+};
+
+const mergeVideos = async (videoId) => {
   const response = await api.post('/merge/start', { video_id: videoId });
   return response.data;
 };
 
-export const getMergeProgress = async (taskId) => {
+const getMergeProgress = async (taskId) => {
   const response = await api.get(`/merge/${taskId}/progress`);
   return response.data;
 };
 
-export const downloadVideo = async (taskId) => {
+const downloadVideo = async (taskId) => {
   const response = await api.get(`/merge/${taskId}/download`, {
     responseType: 'blob'
   });
 
-  return response.data;
+  return {
+    blob: response.data,
+    filename: parseDownloadFilename(response.headers['content-disposition'])
+  };
+};
+
+export {
+  API_BASE_URL,
+  API_ORIGIN,
+  analyzeVideo,
+  checkHealth,
+  downloadVideo,
+  generateSegment,
+  getAnalysis,
+  getGenerationTask,
+  getMergeProgress,
+  getSegments,
+  getTaskStatus,
+  mergeVideos,
+  optimizePrompt,
+  splitVideo,
+  toAbsoluteAssetUrl,
+  uploadVideo
 };
 
 export default api;
-

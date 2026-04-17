@@ -1,0 +1,71 @@
+groups:
+  - name: fanshi-backend-alerts
+    rules:
+      - alert: FanshiBackendErrorRateHigh
+        expr: |
+          (
+            sum(rate(fanshi_backend_http_requests_total{status_code=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(fanshi_backend_http_requests_total[5m])), 0.001)
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          service: fanshi-backend
+        annotations:
+          summary: Fanshi backend 5xx error rate is above 1%
+          description: Backend 5xx responses exceeded 1% over the last 5 minutes.
+
+      - alert: FanshiBackendLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(fanshi_backend_http_request_duration_ms_bucket[5m]))
+          ) > 1000
+        for: 10m
+        labels:
+          severity: warning
+          service: fanshi-backend
+        annotations:
+          summary: Fanshi backend p95 latency is above 1 second
+          description: Backend p95 latency exceeded 1000ms over the last 10 minutes.
+
+      - alert: FanshiDiskSpaceLow
+        expr: |
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+            /
+            node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}
+          ) < 0.10
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Disk space is below 10%
+          description: Less than 10% disk space remains on one or more filesystems.
+
+      - alert: FanshiMemoryUsageHigh
+        expr: |
+          (
+            1 - (
+              node_memory_MemAvailable_bytes
+              /
+              node_memory_MemTotal_bytes
+            )
+          ) > 0.80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Memory usage is above 80%
+          description: The host is using more than 80% of available memory.
+
+      - alert: FanshiMySQLDown
+        expr: mysql_up != 1
+        for: 2m
+        labels:
+          severity: critical
+          service: mysql
+        annotations:
+          summary: MySQL exporter reports database unavailable
+          description: Check MySQL service availability, credentials and network connectivity.

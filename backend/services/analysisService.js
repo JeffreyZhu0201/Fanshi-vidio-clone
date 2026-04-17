@@ -2,6 +2,7 @@ import { Analysis } from '../models/index.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { VIDEO_STATUS } from '../config/constants.js';
 import { analyzeSegment, analyzeVideo as analyzeVideoWithGemini, optimizePrompt as optimizePromptWithGemini } from './geminiService.js';
+import { broadcastRealtimeEvent } from './realtimeService.js';
 import { getVideoRecordById, resolveVideoAbsolutePath } from './videoService.js';
 
 const serializeAnalysis = (analysis, status = 'completed') => ({
@@ -27,6 +28,12 @@ const analyzeVideoById = async (videoId) => {
   await video.update({
     status: VIDEO_STATUS.analyzing
   });
+  broadcastRealtimeEvent('analysis:progress', {
+    video_id: videoId,
+    status: 'processing',
+    progress: 15,
+    message: '正在执行整片分析'
+  });
 
   try {
     const analysisPayload = await analyzeVideoWithGemini({
@@ -51,11 +58,23 @@ const analyzeVideoById = async (videoId) => {
     await video.update({
       status: VIDEO_STATUS.analyzed
     });
+    broadcastRealtimeEvent('analysis:progress', {
+      video_id: videoId,
+      status: 'completed',
+      progress: 100,
+      message: '整片分析完成'
+    });
 
     return serializeAnalysis(analysisRecord);
   } catch (error) {
     await video.update({
       status: VIDEO_STATUS.failed
+    });
+    broadcastRealtimeEvent('analysis:progress', {
+      video_id: videoId,
+      status: 'failed',
+      progress: 100,
+      message: error.message
     });
     throw error;
   }

@@ -1,8 +1,33 @@
 import { randomUUID } from 'node:crypto';
 
 import { TASK_STATUS } from '../config/constants.js';
+import { broadcastRealtimeEvent } from './realtimeService.js';
 
 const tasks = new Map();
+const taskEventTypeMap = Object.freeze({
+  split: 'split:progress',
+  merge: 'merge:progress'
+});
+
+const broadcastTaskUpdate = (task) => {
+  const eventType = taskEventTypeMap[task.type];
+
+  if (!eventType) {
+    return;
+  }
+
+  broadcastRealtimeEvent(eventType, {
+    task_id: task.id,
+    type: task.type,
+    status: task.status,
+    progress: task.progress,
+    message: task.errorMessage || task.message,
+    error_message: task.errorMessage,
+    result: task.result,
+    updated_at: task.updatedAt,
+    ...task.meta
+  });
+};
 
 const createTask = ({ type, meta = {}, message = 'Queued' }) => {
   const task = {
@@ -19,6 +44,7 @@ const createTask = ({ type, meta = {}, message = 'Queued' }) => {
   };
 
   tasks.set(task.id, task);
+  broadcastTaskUpdate(task);
   return { ...task };
 };
 
@@ -36,6 +62,7 @@ const updateTask = (taskId, updates) => {
   };
 
   tasks.set(taskId, nextTask);
+  broadcastTaskUpdate(nextTask);
   return { ...nextTask };
 };
 

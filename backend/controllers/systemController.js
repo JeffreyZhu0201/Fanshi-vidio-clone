@@ -1,4 +1,6 @@
 import { checkDatabaseHealth } from '../config/database.js';
+import { getMetricsContentType, getMetricsPayload } from '../services/metricsService.js';
+import { recordFrontendMonitoringEvent } from '../services/monitoringService.js';
 
 export const healthCheck = async (_request, response) => {
   const database = await checkDatabaseHealth();
@@ -19,5 +21,19 @@ export const databaseHealthCheck = async (_request, response) => {
     success: database.connected,
     database,
     timestamp: new Date().toISOString()
+  });
+};
+
+export const metrics = async (_request, response) => {
+  response.setHeader('Content-Type', getMetricsContentType());
+  response.status(200).send(await getMetricsPayload());
+};
+
+export const ingestMonitoringEvent = async (request, response) => {
+  const result = await recordFrontendMonitoringEvent(request.body);
+
+  response.status(202).json({
+    success: true,
+    ...result
   });
 };

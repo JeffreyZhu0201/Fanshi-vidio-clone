@@ -31,15 +31,9 @@ jobs:
         working-directory: backend
         run: npm ci
 
-      - name: Validate backend entry
-        working-directory: backend
-        run: npm run check
-
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
 
-      - name: Build frontend
-        working-directory: frontend
-        run: npm run build
-
+      - name: Run repository preflight
+        run: ./scripts/preflight-check.sh

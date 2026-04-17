@@ -8,3 +8,4 @@ export * as seedDanceService from './seedDanceService.js';
 export * as segmentService from './segmentService.js';
 export * as taskService from './taskService.js';
 export * as videoService from './videoService.js';
+export * as monitoringService from './monitoringService.js';

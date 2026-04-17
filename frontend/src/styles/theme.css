@@ -1,12 +1,12 @@
 :root {
-  --font-sans: Manrope, "Noto Sans SC", system-ui, sans-serif;
-  --color-ink-900: #10212b;
-  --color-ink-700: #3a4a55;
+  --font-sans: "Space Grotesk", "Noto Sans SC", "PingFang SC", sans-serif;
+  --color-ink-900: #1e293b;
+  --color-ink-700: #334155;
   --color-ink-500: #64748b;
-  --color-brand-500: #16a16f;
-  --color-brand-700: #0f7a55;
-  --color-accent-500: #f59e0b;
-  --color-surface: #f5fbf8;
+  --color-brand-500: #6366f1;
+  --color-brand-700: #4338ca;
+  --color-accent-500: #ec4899;
+  --color-surface: #f8fafc;
 }
 
 a {
@@ -19,4 +19,3 @@ input,
 textarea {
   font: inherit;
 }
-

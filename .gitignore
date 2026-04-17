@@ -23,6 +23,9 @@ backend/uploads/**
 !backend/uploads/segments/.gitkeep
 !backend/uploads/outputs/
 !backend/uploads/outputs/.gitkeep
+backend/.tmp/
+frontend/cypress/screenshots/
+frontend/cypress/videos/
 !certs/
 !certs/dev/
 !certs/dev/.gitkeep

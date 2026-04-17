@@ -82,6 +82,14 @@ const mergeStartBodySchema = Joi.object({
   video_id: Joi.number().integer().positive().required()
 });
 
+const monitoringEventBodySchema = Joi.object({
+  type: Joi.string().trim().max(64).required(),
+  payload: Joi.object().unknown(true).default({}),
+  url: Joi.string().uri().allow('').default(''),
+  userAgent: Joi.string().trim().max(1024).allow('').default(''),
+  recordedAt: Joi.string().isoDate().required()
+});
+
 export {
   idParamSchema,
   videoIdParamSchema,
@@ -92,5 +100,6 @@ export {
   optimizePromptBodySchema,
   splitVideoBodySchema,
   generateSegmentBodySchema,
-  mergeStartBodySchema
+  mergeStartBodySchema,
+  monitoringEventBodySchema
 };

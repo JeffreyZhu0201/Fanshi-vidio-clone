@@ -1,9 +1,14 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import env from './env.js';
+
 const currentFile = fileURLToPath(import.meta.url);
 const currentDirectory = path.dirname(currentFile);
 const backendRoot = path.resolve(currentDirectory, '..');
+const uploadRoot = env.UPLOAD_BASE_DIR
+  ? path.resolve(backendRoot, env.UPLOAD_BASE_DIR)
+  : path.join(backendRoot, 'uploads');
 
 export const APP_NAME = 'Fanshi Video Clone';
 export const API_PREFIX = '/api';
@@ -23,10 +28,10 @@ export const VIDEO_STATUS = Object.freeze({
 });
 
 export const UPLOAD_DIRECTORIES = Object.freeze({
-  root: path.join(backendRoot, 'uploads'),
-  videos: path.join(backendRoot, 'uploads', 'videos'),
-  segments: path.join(backendRoot, 'uploads', 'segments'),
-  outputs: path.join(backendRoot, 'uploads', 'outputs')
+  root: uploadRoot,
+  videos: path.join(uploadRoot, 'videos'),
+  segments: path.join(uploadRoot, 'segments'),
+  outputs: path.join(uploadRoot, 'outputs')
 });
 
 export const ALLOWED_VIDEO_EXTENSIONS = Object.freeze(['.mp4', '.mov', '.avi']);

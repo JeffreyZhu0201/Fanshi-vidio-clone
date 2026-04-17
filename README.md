@@ -9,6 +9,7 @@
 - 已完成 Express 与 Vite/Tailwind 的启动入口
 - 已完成 MySQL Schema、Sequelize 模型、迁移与种子数据
 - 已完成上传、整片分析、视频分割、片段生成、视频拼接 API
+- 已完成阶段 5 的后端集成测试、前端组件测试、性能监控与安全加固骨架
 
 ## 技术栈
 
@@ -149,6 +150,8 @@ npm run db:seed
 - `GET /api/merge/:taskId/progress`：查询拼接进度
 - `GET /api/merge/:taskId/download`：下载拼接结果
 - `GET /api/tasks/:taskId`：查询分割/拼接这类内存任务状态
+- `GET /api/metrics`：导出 Prometheus 指标
+- `POST /api/monitoring/events`：接收前端 Web Vitals / 运行时错误事件
 
 接口文档地址：
 - Swagger UI：`/api-docs`
@@ -161,6 +164,42 @@ npm run dev
 ```
 
 前端默认地址：`http://localhost:5173`
+
+## 阶段 5 验证
+
+### 自动化验证命令
+```bash
+cd backend && npm run test:coverage
+cd ../frontend && npm test
+cd ../frontend && npm run test:coverage
+cd ../frontend && npm run build
+```
+
+### 性能基准
+先启动后端，再执行：
+```bash
+cd backend
+npm run perf:benchmark
+```
+
+可选环境变量：
+- `BENCHMARK_BASE_URL`：默认 `http://127.0.0.1:5000`
+- `BENCHMARK_REQUESTS`：默认 `20`
+- `BENCHMARK_CONCURRENCY`：默认 `5`
+- `BENCHMARK_THRESHOLD_MS`：默认 `500`
+
+### 部署前检查
+```bash
+./scripts/preflight-check.sh
+```
+
+可选开关：
+- `RUN_E2E=true ./scripts/preflight-check.sh`
+- `RUN_PERF_BENCHMARK=true ./scripts/preflight-check.sh`
+
+### 当前已知限制
+- Cypress 端到端脚本已经在 `frontend/cypress/` 中完成，但在当前这台 Ubuntu 22.04 开发机上执行 `npm run test:e2e` 仍需要系统安装 `Xvfb`。
+- `frontend` 当前 `npm audit` 仍有 2 个 `moderate` 级开发期漏洞，来源于 Vite 开发服务器依赖；截至 `2026-04-17` 没有 `high` 或 `critical` 漏洞。
 
 ## Git 工作流
 - 稳定分支：`main`

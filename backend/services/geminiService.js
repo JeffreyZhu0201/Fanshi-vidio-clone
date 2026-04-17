@@ -1,6 +1,8 @@
 import env from '../config/env.js';
 import logger from '../utils/logger.js';
 
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const buildMockTimeAnchors = (durationSeconds = 12) => {
   const safeDuration = Math.max(6, durationSeconds || 12);
   const segmentCount = Math.min(4, Math.max(2, Math.ceil(safeDuration / 4)));
@@ -78,7 +80,7 @@ const createMockOptimizedPrompt = ({ prompt, characters }) => {
       return;
     }
 
-    const namePattern = new RegExp(character.name, 'g');
+    const namePattern = new RegExp(`(?<!@)${escapeRegExp(character.name)}`, 'gu');
     optimizedPrompt = optimizedPrompt.replace(namePattern, `@${character.name}`);
   });
 

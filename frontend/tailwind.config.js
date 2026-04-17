@@ -6,31 +6,35 @@ export default {
     extend: {
       colors: {
         brand: {
-          50: '#eefcf7',
-          100: '#d7f7ec',
-          500: '#16a16f',
-          700: '#0f7a55',
-          900: '#0d3d31'
+          50: '#eef2ff',
+          100: '#e0e7ff',
+          200: '#c7d2fe',
+          500: '#6366f1',
+          600: '#5457df',
+          700: '#4338ca',
+          900: '#312e81'
         },
         accent: {
-          100: '#fff0d8',
-          400: '#f59e0b',
-          600: '#d97706'
+          50: '#fdf2f8',
+          100: '#fce7f3',
+          200: '#fbcfe8',
+          500: '#ec4899',
+          600: '#db2777',
+          700: '#be185d'
         },
         ink: {
-          100: '#f4f5f7',
+          100: '#f1f5f9',
           700: '#334155',
-          900: '#10212b'
+          900: '#1e293b'
         }
       },
       boxShadow: {
-        glow: '0 24px 70px rgba(16, 33, 43, 0.14)'
+        glow: '0 24px 80px rgba(37, 99, 235, 0.10)'
       },
       fontFamily: {
-        sans: ['Manrope', 'Noto Sans SC', 'system-ui', 'sans-serif']
+        sans: ['Space Grotesk', 'Noto Sans SC', 'PingFang SC', 'sans-serif']
       }
     }
   },
   plugins: [forms]
 };
-

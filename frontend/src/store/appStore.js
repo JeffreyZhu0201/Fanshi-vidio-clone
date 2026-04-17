@@ -4,6 +4,7 @@ const useAppStore = create((set) => ({
   backendStatus: 'checking',
   errorMessage: '',
   lastCheckedAt: null,
+  realtimeStatus: 'idle',
   setBackendStatus: (status) =>
     set({
       backendStatus: status,
@@ -15,8 +16,11 @@ const useAppStore = create((set) => ({
       backendStatus: 'offline',
       errorMessage: message,
       lastCheckedAt: new Date().toISOString()
+    }),
+  setRealtimeStatus: (realtimeStatus) =>
+    set({
+      realtimeStatus
     })
 }));
 
 export { useAppStore };
-

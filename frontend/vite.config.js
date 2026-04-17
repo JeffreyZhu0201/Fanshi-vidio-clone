@@ -41,6 +41,7 @@ const loadHttpsOptions = (enabled, keyPath, certPath) => {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const httpsEnabled = env.VITE_DEV_HTTPS === 'true';
+  const devHost = env.VITE_DEV_HOST || '127.0.0.1';
   const httpsOptions = loadHttpsOptions(
     httpsEnabled,
     env.VITE_SSL_KEY_PATH,
@@ -50,12 +51,12 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
-      host: '0.0.0.0',
+      host: devHost,
       port: 5173,
       https: httpsOptions
     },
     preview: {
-      host: '0.0.0.0',
+      host: devHost,
       port: 4173,
       https: httpsOptions
     }

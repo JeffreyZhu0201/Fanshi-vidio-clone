@@ -16,9 +16,9 @@
     margin: 0;
     min-height: 100vh;
     background:
-      radial-gradient(circle at top left, rgba(22, 161, 111, 0.15), transparent 38%),
-      radial-gradient(circle at top right, rgba(245, 158, 11, 0.16), transparent 34%),
-      linear-gradient(180deg, #f8fffc 0%, #eef4f2 100%);
+      radial-gradient(circle at 8% 12%, rgba(99, 102, 241, 0.2), transparent 32%),
+      radial-gradient(circle at 92% 8%, rgba(236, 72, 153, 0.18), transparent 28%),
+      linear-gradient(180deg, #f8fafc 0%, #eef2ff 48%, #f8fafc 100%);
   }
 
   #root {
@@ -28,15 +28,62 @@
 
 @layer components {
   .dashboard-shell {
-    @apply relative min-h-screen px-4 py-6 md:px-8 lg:px-10;
+    @apply relative min-h-screen overflow-hidden px-4 py-5 md:px-6 lg:px-8;
   }
 
-  .dashboard-grid {
-    @apply mx-auto grid max-w-7xl gap-6 lg:grid-cols-[1.15fr_1fr];
+  .workspace-grid {
+    @apply mx-auto grid max-w-[1800px] gap-6 xl:grid-cols-[minmax(280px,320px)_minmax(0,1fr)_minmax(360px,430px)];
   }
 
-  .glass-panel {
-    @apply rounded-3xl border border-white/70 bg-white/75 shadow-glow backdrop-blur;
+  .panel-shell {
+    @apply rounded-[32px] border border-white/70 bg-white/80 shadow-glow backdrop-blur-xl;
+  }
+
+  .hero-shell {
+    @apply relative mx-auto mb-6 max-w-[1800px] overflow-hidden rounded-[36px] border border-white/10 bg-slate-950 px-5 py-5 shadow-[0_28px_80px_rgba(15,23,42,0.28)] md:px-7 md:py-7;
+  }
+
+  .hero-grid {
+    @apply relative grid gap-5;
+  }
+
+  .hero-metric {
+    @apply rounded-[28px] border border-white/10 px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)];
+  }
+
+  .timeline-item {
+    @apply relative rounded-[24px] border border-slate-200 bg-slate-50 px-4 py-4;
+  }
+
+  .timeline-item::before {
+    @apply absolute left-[-13px] top-6 h-3 w-3 rounded-full bg-brand-500 content-[''];
+  }
+
+  .segment-scroll {
+    max-height: calc(100vh - 260px);
+    overflow-y: auto;
+    padding-right: 0.25rem;
+  }
+
+  .preview-placeholder {
+    @apply relative flex min-h-[220px] flex-col items-center justify-center overflow-hidden bg-slate-50 px-6 py-8;
+  }
+
+  .preview-orb {
+    @apply absolute h-40 w-40 rounded-full bg-gradient-to-br from-brand-200/60 to-accent-200/50 blur-3xl;
   }
 }
 
+@layer utilities {
+  .dashboard-orb {
+    @apply pointer-events-none absolute rounded-full blur-3xl;
+  }
+
+  .dashboard-orb-left {
+    @apply left-[-120px] top-[-40px] h-[280px] w-[280px] bg-brand-200/55;
+  }
+
+  .dashboard-orb-right {
+    @apply right-[-120px] top-[120px] h-[340px] w-[340px] bg-accent-200/45;
+  }
+}

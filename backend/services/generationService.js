@@ -3,6 +3,7 @@ import { AppError } from '../middleware/errorHandler.js';
 import { TASK_STATUS } from '../config/constants.js';
 import { generateSegment as generateWithSeedDance } from './seedDanceService.js';
 import { resolveUploadPath } from './fileService.js';
+import { broadcastRealtimeEvent } from './realtimeService.js';
 
 const serializeGenerationTask = (task) => ({
   task_id: task.id,
@@ -16,6 +17,10 @@ const serializeGenerationTask = (task) => ({
   created_at: task.createdAt,
   updated_at: task.updatedAt
 });
+
+const broadcastGenerationTaskUpdate = (task) => {
+  broadcastRealtimeEvent('generation:progress', serializeGenerationTask(task));
+};
 
 const expandCharacterMentions = (prompt, characters) => {
   return prompt.replace(/@([\p{L}\p{N}_-]+)/gu, (match, characterName) => {
@@ -55,6 +60,7 @@ const processGenerationTask = async (taskId) => {
       status: TASK_STATUS.processing,
       progress: 10
     });
+    broadcastGenerationTaskUpdate(task);
 
     const characters = task.segment?.video?.analysis?.characters ?? [];
     const optimizedPrompt = expandCharacterMentions(task.prompt, characters);
@@ -63,6 +69,7 @@ const processGenerationTask = async (taskId) => {
       optimizedPrompt,
       progress: 45
     });
+    broadcastGenerationTaskUpdate(task);
 
     const result = await generateWithSeedDance({
       sourceAbsolutePath: resolveUploadPath(task.segment.filePath),
@@ -76,11 +83,13 @@ const processGenerationTask = async (taskId) => {
       resultUrl: result.fileUrl,
       errorMessage: null
     });
+    broadcastGenerationTaskUpdate(task);
   } catch (error) {
     await task.update({
       status: TASK_STATUS.failed,
       errorMessage: error.message
     });
+    broadcastGenerationTaskUpdate(task);
   }
 };
 
@@ -99,6 +108,7 @@ const startGeneration = async ({ segmentId, prompt }) => {
     status: TASK_STATUS.pending,
     progress: 0
   });
+  broadcastGenerationTaskUpdate(task);
 
   queueMicrotask(() => {
     void processGenerationTask(task.id);

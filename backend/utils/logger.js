@@ -12,7 +12,7 @@ const consoleFormat = winston.format.printf(
 );
 
 const logger = winston.createLogger({
-  level: env.NODE_ENV === 'development' ? 'debug' : 'info',
+  level: env.LOG_LEVEL || (env.NODE_ENV === 'development' ? 'debug' : 'info'),
   format: winston.format.combine(
     winston.format.errors({ stack: true }),
     winston.format.timestamp(),
@@ -28,4 +28,3 @@ export const morganStream = {
 };
 
 export default logger;
-
