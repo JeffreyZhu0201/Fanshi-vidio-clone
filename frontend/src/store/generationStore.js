@@ -9,6 +9,34 @@ const createInitialProgressState = (message) => ({
   updatedAt: null
 });
 
+const getNormalizedTaskId = (progressPayload = {}) => {
+  return progressPayload.taskId ?? progressPayload.task_id ?? '';
+};
+
+const shouldIgnoreTaskScopedUpdate = (currentTaskId, incomingTaskId) => {
+  if (!incomingTaskId) {
+    return false;
+  }
+
+  if (!currentTaskId) {
+    return true;
+  }
+
+  return currentTaskId !== incomingTaskId;
+};
+
+const buildProgressState = (currentState, partialProgress) => {
+  const { taskId, task_id, ...restProgress } = partialProgress;
+  const normalizedTaskId = taskId ?? task_id ?? '';
+
+  return {
+    ...currentState,
+    ...restProgress,
+    ...(normalizedTaskId ? { taskId: normalizedTaskId } : {}),
+    updatedAt: new Date().toISOString()
+  };
+};
+
 const useGenerationStore = create((set) => ({
   segments: [],
   tasks: [],
@@ -64,21 +92,39 @@ const useGenerationStore = create((set) => ({
         )
       };
     }),
+  beginMergeProgress: ({ taskId = '', status = 'pending', progress = 0, message = '拼接任务已提交' }) =>
+    set({
+      mergeProgress: {
+        ...createInitialProgressState('等待拼接'),
+        taskId,
+        status,
+        progress,
+        message,
+        updatedAt: new Date().toISOString()
+      }
+    }),
   setMergeProgress: (partialProgress) =>
     set((state) => ({
-      mergeProgress: {
-        ...state.mergeProgress,
-        ...partialProgress,
+      mergeProgress: shouldIgnoreTaskScopedUpdate(state.mergeProgress.taskId, getNormalizedTaskId(partialProgress))
+        ? state.mergeProgress
+        : buildProgressState(state.mergeProgress, partialProgress)
+    })),
+  beginSplitProgress: ({ taskId = '', status = 'pending', progress = 0, message = '分割任务已提交' }) =>
+    set({
+      splitProgress: {
+        ...createInitialProgressState('等待分割'),
+        taskId,
+        status,
+        progress,
+        message,
         updatedAt: new Date().toISOString()
       }
-    })),
+    }),
   setSplitProgress: (partialProgress) =>
     set((state) => ({
-      splitProgress: {
-        ...state.splitProgress,
-        ...partialProgress,
-        updatedAt: new Date().toISOString()
-      }
+      splitProgress: shouldIgnoreTaskScopedUpdate(state.splitProgress.taskId, getNormalizedTaskId(partialProgress))
+        ? state.splitProgress
+        : buildProgressState(state.splitProgress, partialProgress)
     })),
   setSegmentsLoading: (segmentsLoading) =>
     set({

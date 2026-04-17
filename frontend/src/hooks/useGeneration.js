@@ -24,6 +24,7 @@ const useGeneration = () => {
   const mergeProgress = useGenerationStore((state) => state.mergeProgress);
   const updateSegment = useGenerationStore((state) => state.updateSegment);
   const addTask = useGenerationStore((state) => state.addTask);
+  const beginMergeProgress = useGenerationStore((state) => state.beginMergeProgress);
   const updateTask = useGenerationStore((state) => state.updateTask);
   const setMergeProgress = useGenerationStore((state) => state.setMergeProgress);
   const [optimizingSegmentId, setOptimizingSegmentId] = useState(0);
@@ -32,26 +33,47 @@ const useGeneration = () => {
 
   useEffect(() => {
     return websocketService.subscribe('generation:progress', (payload) => {
-      updateTask(payload.task_id, payload);
+      const state = useGenerationStore.getState();
+      const payloadTaskId = payload.task_id;
+      const payloadSegmentId = Number(payload.segment_id ?? 0);
+      const trackedTask = state.tasks.find((task) => task.task_id === payloadTaskId);
+      const resolvedSegmentId = payloadSegmentId || trackedTask?.segment_id || 0;
+      const isTrackedSegment = state.segments.some((segment) => segment.id === resolvedSegmentId);
 
-      if (payload.segment_id) {
-        updateSegment(payload.segment_id, {
-          latestGenerationTask: {
-            task_id: payload.task_id,
-            status: payload.status,
-            progress: payload.progress,
-            result_url: toAbsoluteAssetUrl(payload.result_url)
-          },
-          generatedUrl: toAbsoluteAssetUrl(payload.result_url)
-        });
+      // Generation updates are ignored unless they belong to a segment rendered for the active video.
+      if (!payloadTaskId || !resolvedSegmentId || !isTrackedSegment) {
+        return;
       }
+
+      updateTask(payloadTaskId, {
+        ...payload,
+        segment_id: resolvedSegmentId
+      });
+
+      updateSegment(resolvedSegmentId, {
+        latestGenerationTask: {
+          task_id: payloadTaskId,
+          status: payload.status,
+          progress: payload.progress,
+          result_url: toAbsoluteAssetUrl(payload.result_url)
+        },
+        generatedUrl: toAbsoluteAssetUrl(payload.result_url)
+      });
     });
   }, [updateSegment, updateTask]);
 
   useEffect(() => {
     return websocketService.subscribe('merge:progress', (payload) => {
+      const activeMergeTaskId = useGenerationStore.getState().mergeProgress.taskId;
+      const payloadTaskId = payload.task_id ?? payload.taskId ?? '';
+
+      // Merge progress should only update the actively tracked merge task.
+      if (!activeMergeTaskId || !payloadTaskId || payloadTaskId !== activeMergeTaskId) {
+        return;
+      }
+
       setMergeProgress({
-        taskId: payload.task_id ?? payload.taskId ?? '',
+        taskId: payloadTaskId,
         status: payload.status ?? 'processing',
         progress: payload.progress ?? 0,
         message: payload.message ?? '正在拼接视频',
@@ -127,7 +149,8 @@ const useGeneration = () => {
 
   const startMerge = async () => {
     if (!currentVideo?.id) {
-      setMergeProgress({
+      beginMergeProgress({
+        taskId: '',
         status: 'failed',
         progress: 0,
         message: '请先上传并处理视频，再执行拼接。'
@@ -136,6 +159,12 @@ const useGeneration = () => {
     }
 
     const mergeTask = await mergeVideos(currentVideo.id);
+    beginMergeProgress({
+      taskId: mergeTask.task_id,
+      status: mergeTask.status,
+      progress: 0,
+      message: '拼接任务已提交'
+    });
 
     websocketService.emitLocal('merge:progress', {
       task_id: mergeTask.task_id,

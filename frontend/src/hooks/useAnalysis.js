@@ -21,6 +21,14 @@ const useAnalysis = () => {
 
   useEffect(() => {
     return websocketService.subscribe('analysis:progress', (payload) => {
+      const activeVideoId = useVideoStore.getState().currentVideo?.id;
+      const payloadVideoId = Number(payload.video_id ?? payload.videoId ?? 0);
+
+      // Analysis progress should only mutate the panel for the currently selected video.
+      if (!activeVideoId || payloadVideoId !== Number(activeVideoId)) {
+        return;
+      }
+
       setProgressState({
         progress: payload.progress ?? 0,
         status: payload.status ?? 'processing',
@@ -75,7 +83,10 @@ const useAnalysis = () => {
       return null;
     }
 
+    const currentVideoId = currentVideo.id;
+
     websocketService.emitLocal('analysis:progress', {
+      video_id: currentVideoId,
       progress: 12,
       status: 'processing',
       message: '正在提交 Gemini 整片分析任务'
@@ -90,6 +101,7 @@ const useAnalysis = () => {
       });
 
       websocketService.emitLocal('analysis:progress', {
+        video_id: currentVideoId,
         progress: 100,
         status: 'completed',
         message: '整片分析已完成'
@@ -98,6 +110,7 @@ const useAnalysis = () => {
       return analysisPayload;
     } catch (errorInstance) {
       websocketService.emitLocal('analysis:progress', {
+        video_id: currentVideoId,
         progress: 100,
         status: 'failed',
         message: errorInstance.message

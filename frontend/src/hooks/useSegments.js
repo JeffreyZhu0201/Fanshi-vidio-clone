@@ -38,18 +38,27 @@ const useSegments = () => {
   const segmentsLoading = useGenerationStore((state) => state.segmentsLoading);
   const segmentsError = useGenerationStore((state) => state.segmentsError);
   const setSegments = useGenerationStore((state) => state.setSegments);
+  const beginSplitProgress = useGenerationStore((state) => state.beginSplitProgress);
   const setSplitProgress = useGenerationStore((state) => state.setSplitProgress);
   const setSegmentsLoading = useGenerationStore((state) => state.setSegmentsLoading);
   const setSegmentsError = useGenerationStore((state) => state.setSegmentsError);
 
   useEffect(() => {
     return websocketService.subscribe('split:progress', (payload) => {
+      const activeSplitTaskId = useGenerationStore.getState().splitProgress.taskId;
+      const payloadTaskId = payload.task_id ?? payload.taskId ?? '';
+
+      // Split progress belongs to the actively tracked split task only.
+      if (!activeSplitTaskId || !payloadTaskId || payloadTaskId !== activeSplitTaskId) {
+        return;
+      }
+
       setSplitProgress({
-        taskId: payload.task_id ?? payload.taskId ?? '',
+        taskId: payloadTaskId,
         status: payload.status ?? 'processing',
         progress: payload.progress ?? 0,
         message: payload.message ?? '正在切分视频',
-        errorMessage: payload.errorMessage ?? ''
+        errorMessage: payload.error_message ?? payload.errorMessage ?? ''
       });
     });
   }, [setSplitProgress]);
@@ -116,6 +125,12 @@ const useSegments = () => {
     setSegmentsError('');
 
     const splitTask = await splitVideo(currentVideo.id, analysis.time_anchors);
+    beginSplitProgress({
+      taskId: splitTask.task_id,
+      status: splitTask.status,
+      progress: splitTask.progress ?? 0,
+      message: '分割任务已提交'
+    });
     websocketService.emitLocal('split:progress', {
       task_id: splitTask.task_id,
       status: splitTask.status,
