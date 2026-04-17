@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import {
+  analyzeSegment,
   downloadVideo,
   generateSegment,
   getGenerationTask,
@@ -49,12 +50,14 @@ const useGeneration = () => {
   const updateTask = useGenerationStore((state) => state.updateTask);
   const setMergeProgress = useGenerationStore((state) => state.setMergeProgress);
   const setSegmentsError = useGenerationStore((state) => state.setSegmentsError);
+  const [analyzingSegmentId, setAnalyzingSegmentId] = useState(0);
   const [optimizingSegmentId, setOptimizingSegmentId] = useState(0);
   const [generatingSegmentIds, setGeneratingSegmentIds] = useState([]);
   const characters = analysis?.characters ?? [];
   const mountedRef = useRef(false);
   const activeVideoIdRef = useRef(currentVideo?.id ?? null);
   const previousVideoIdRef = useRef(currentVideo?.id ?? null);
+  const segmentAnalysisRequestTokenRef = useRef(0);
   const optimizeRequestTokenRef = useRef(0);
   const generationPollingTokenRef = useRef(new Map());
   const mergePollingTokenRef = useRef(0);
@@ -72,6 +75,12 @@ const useGeneration = () => {
   const beginOptimizeRequest = () => {
     const nextToken = optimizeRequestTokenRef.current + 1;
     optimizeRequestTokenRef.current = nextToken;
+    return nextToken;
+  };
+
+  const beginSegmentAnalysisRequest = () => {
+    const nextToken = segmentAnalysisRequestTokenRef.current + 1;
+    segmentAnalysisRequestTokenRef.current = nextToken;
     return nextToken;
   };
 
@@ -120,6 +129,8 @@ const useGeneration = () => {
       task_id: taskId || currentSegment.latestGenerationTask?.task_id || '',
       status: 'failed',
       progress: currentSegment.latestGenerationTask?.progress ?? 0,
+      prompt: currentSegment.latestGenerationTask?.prompt ?? currentSegment.prompt ?? '',
+      optimizedPrompt: currentSegment.latestGenerationTask?.optimizedPrompt ?? '',
       result_url: currentSegment.latestGenerationTask?.result_url ?? '',
       error_message: message,
       created_at: currentSegment.latestGenerationTask?.created_at,
@@ -167,6 +178,7 @@ const useGeneration = () => {
 
     return () => {
       mountedRef.current = false;
+      segmentAnalysisRequestTokenRef.current += 1;
       optimizeRequestTokenRef.current += 1;
       generationPollingTokenRef.current = new Map();
       mergePollingTokenRef.current += 1;
@@ -176,6 +188,7 @@ const useGeneration = () => {
   useEffect(() => {
     const previousVideoId = previousVideoIdRef.current;
     activeVideoIdRef.current = currentVideo?.id ?? null;
+    segmentAnalysisRequestTokenRef.current += 1;
     optimizeRequestTokenRef.current += 1;
     generationPollingTokenRef.current = new Map();
     mergePollingTokenRef.current += 1;
@@ -192,6 +205,7 @@ const useGeneration = () => {
     }
 
     if (mountedRef.current) {
+      setAnalyzingSegmentId(0);
       setOptimizingSegmentId(0);
       setGeneratingSegmentIds([]);
     }
@@ -223,6 +237,9 @@ const useGeneration = () => {
         task_id: payloadTaskId,
         status: payload.status,
         progress: payload.progress,
+        prompt: payload.prompt ?? currentSegment?.latestGenerationTask?.prompt ?? currentSegment?.prompt ?? '',
+        optimizedPrompt:
+          payload.optimized_prompt ?? currentSegment?.latestGenerationTask?.optimizedPrompt ?? '',
         result_url: toAbsoluteAssetUrl(payload.result_url),
         error_message: payload.error_message ?? payload.message ?? '',
         created_at: payload.created_at,
@@ -326,10 +343,88 @@ const useGeneration = () => {
     });
   };
 
-  const optimizeSegmentPrompt = async (segmentId) => {
+  const analyzeSegmentById = async (segmentId) => {
     const segment = segments.find((item) => item.id === segmentId);
 
     if (!segment) {
+      return null;
+    }
+
+    const requestVideoId = Number(currentVideo?.id ?? 0);
+    const requestToken = beginSegmentAnalysisRequest();
+
+    setSegmentsError('');
+    setAnalyzingSegmentId(segmentId);
+
+    try {
+      const analyzedSegment = await analyzeSegment(segmentId);
+
+      if (isVideoScopedRequestCancelled(requestToken, requestVideoId, segmentAnalysisRequestTokenRef)) {
+        return null;
+      }
+
+      updateSegment(segmentId, {
+        scene: analyzedSegment.analysis?.scene ?? segment.scene,
+        action: analyzedSegment.analysis?.action ?? segment.action,
+        prompt: analyzedSegment.analysis?.prompt ?? segment.prompt,
+        characters: analyzedSegment.analysis?.characters ?? segment.characters,
+        highlightedPrompt: '',
+        latestCompletedGenerationTask: analyzedSegment.latest_generation_task
+          ? {
+              task_id: analyzedSegment.latest_generation_task.id,
+              status: analyzedSegment.latest_generation_task.status,
+              progress: analyzedSegment.latest_generation_task.progress,
+              prompt: analyzedSegment.latest_generation_task.prompt ?? '',
+              optimizedPrompt: analyzedSegment.latest_generation_task.optimized_prompt ?? '',
+              result_url: toAbsoluteAssetUrl(analyzedSegment.latest_generation_task.result_url),
+              error_message: analyzedSegment.latest_generation_task.error_message ?? '',
+              created_at: analyzedSegment.latest_generation_task.created_at,
+              updated_at: analyzedSegment.latest_generation_task.updated_at
+            }
+          : segment.latestCompletedGenerationTask,
+        latestGenerationTask: analyzedSegment.latest_attempt_task
+          ? {
+              task_id: analyzedSegment.latest_attempt_task.id,
+              status: analyzedSegment.latest_attempt_task.status,
+              progress: analyzedSegment.latest_attempt_task.progress,
+              prompt: analyzedSegment.latest_attempt_task.prompt ?? '',
+              optimizedPrompt: analyzedSegment.latest_attempt_task.optimized_prompt ?? '',
+              result_url: toAbsoluteAssetUrl(analyzedSegment.latest_attempt_task.result_url),
+              error_message: analyzedSegment.latest_attempt_task.error_message ?? '',
+              created_at: analyzedSegment.latest_attempt_task.created_at,
+              updated_at: analyzedSegment.latest_attempt_task.updated_at
+            }
+          : segment.latestGenerationTask,
+        generatedUrl:
+          toAbsoluteAssetUrl(analyzedSegment.latest_generation_task?.result_url) || segment.generatedUrl || ''
+      });
+
+      return analyzedSegment;
+    } catch (error) {
+      if (isVideoScopedRequestCancelled(requestToken, requestVideoId, segmentAnalysisRequestTokenRef)) {
+        return null;
+      }
+
+      setSegmentsError(getGenerationErrorMessage(error, '片段分析'));
+      return null;
+    } finally {
+      if (!isVideoScopedRequestCancelled(requestToken, requestVideoId, segmentAnalysisRequestTokenRef)) {
+        setAnalyzingSegmentId(0);
+      }
+    }
+  };
+
+  const optimizeSegmentPrompt = async (segmentId, promptOverride = '') => {
+    const segment = segments.find((item) => item.id === segmentId);
+
+    if (!segment) {
+      return null;
+    }
+
+    const sourcePrompt = String(promptOverride ?? '').trim() || segment.prompt;
+
+    if (!sourcePrompt?.trim()) {
+      setSegmentsError('请先输入片段提示词，再执行优化。');
       return null;
     }
 
@@ -339,15 +434,21 @@ const useGeneration = () => {
     setSegmentsError('');
     setOptimizingSegmentId(segmentId);
 
+    if (sourcePrompt !== segment.prompt) {
+      updateSegment(segmentId, {
+        prompt: sourcePrompt
+      });
+    }
+
     try {
-      const optimizedPayload = await optimizePrompt(segment.prompt, characters);
+      const optimizedPayload = await optimizePrompt(sourcePrompt, characters);
 
       if (isVideoScopedRequestCancelled(requestToken, requestVideoId, optimizeRequestTokenRef)) {
         return null;
       }
 
       updateSegment(segmentId, {
-        prompt: optimizedPayload.optimized_prompt || segment.prompt,
+        prompt: optimizedPayload.optimized_prompt || sourcePrompt,
         highlightedPrompt: optimizedPayload.highlighted_prompt || ''
       });
 
@@ -366,7 +467,7 @@ const useGeneration = () => {
     }
   };
 
-  const generateSegmentVideo = async (segmentId) => {
+  const generateSegmentVideo = async (segmentId, promptOverride = '') => {
     const segment = segments.find((item) => item.id === segmentId);
 
     if (!segment) {
@@ -378,6 +479,13 @@ const useGeneration = () => {
       return null;
     }
 
+    const sourcePrompt = String(promptOverride ?? '').trim() || segment.prompt;
+
+    if (!sourcePrompt?.trim()) {
+      setSegmentsError('请先输入片段提示词，再生成片段。');
+      return null;
+    }
+
     const requestVideoId = Number(currentVideo.id);
     const requestToken = beginGenerationPolling(segmentId);
     let activeTaskId = '';
@@ -385,8 +493,14 @@ const useGeneration = () => {
     setSegmentsError('');
     markSegmentGenerating(segmentId, true);
 
+    if (sourcePrompt !== segment.prompt) {
+      updateSegment(segmentId, {
+        prompt: sourcePrompt
+      });
+    }
+
     try {
-      const startPayload = await generateSegment(segmentId, segment.prompt);
+      const startPayload = await generateSegment(segmentId, sourcePrompt);
       activeTaskId = startPayload.task_id ?? '';
 
       if (isGenerationPollingCancelled(segmentId, requestToken, requestVideoId)) {
@@ -566,9 +680,11 @@ const useGeneration = () => {
   return {
     tasks,
     mergeProgress,
+    analyzingSegmentId,
     optimizingSegmentId,
     generatingSegmentIds,
     setSegmentPrompt,
+    analyzeSegmentById,
     optimizeSegmentPrompt,
     generateSegmentVideo,
     startMerge,

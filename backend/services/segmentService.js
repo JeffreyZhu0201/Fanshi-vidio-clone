@@ -3,10 +3,10 @@ import path from 'node:path';
 import { GenerationTask, Segment, Video } from '../models/index.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { analyzeSegmentContent, getAnalysisRecordByVideoId } from './analysisService.js';
+import { resolveUploadPath, toPublicUploadUrl } from './fileService.js';
 import { completeTask, createTask, failTask, updateTask } from './taskService.js';
 import { splitVideo } from './ffmpegService.js';
 import { getVideoRecordById, resolveVideoAbsolutePath } from './videoService.js';
-import { toPublicUploadUrl } from './fileService.js';
 
 const serializeGenerationTask = (task) => {
   if (!task) {
@@ -17,6 +17,8 @@ const serializeGenerationTask = (task) => {
     id: task.id,
     status: task.status,
     progress: task.progress,
+    prompt: task.prompt,
+    optimized_prompt: task.optimizedPrompt,
     result_url: task.resultUrl,
     error_message: task.errorMessage,
     created_at: task.createdAt,
@@ -45,6 +47,52 @@ const normalizeTimeAnchors = (timeAnchors) => {
       sceneSummary: item.sceneSummary ?? item.scene_summary ?? `Segment ${index + 1}`
     }))
     .sort((left, right) => left.startTime - right.startTime);
+};
+
+const getSegmentRecordById = async (segmentId, options = {}) => {
+  const segment = await Segment.findByPk(segmentId, options);
+
+  if (!segment) {
+    throw new AppError('Segment not found.', 404, {
+      segment_id: segmentId
+    });
+  }
+
+  return segment;
+};
+
+const getLatestTasksBySegmentIds = async (segmentIds) => {
+  if (!segmentIds.length) {
+    return {
+      latestAttemptTaskBySegmentId: new Map(),
+      latestCompletedTaskBySegmentId: new Map()
+    };
+  }
+
+  const latestTasks = await GenerationTask.findAll({
+    where: {
+      segmentId: segmentIds
+    },
+    order: [['createdAt', 'DESC']]
+  });
+
+  const latestAttemptTaskBySegmentId = new Map();
+  const latestCompletedTaskBySegmentId = new Map();
+
+  latestTasks.forEach((task) => {
+    if (!latestAttemptTaskBySegmentId.has(task.segmentId)) {
+      latestAttemptTaskBySegmentId.set(task.segmentId, task);
+    }
+
+    if (task.status === 'completed' && !latestCompletedTaskBySegmentId.has(task.segmentId)) {
+      latestCompletedTaskBySegmentId.set(task.segmentId, task);
+    }
+  });
+
+  return {
+    latestAttemptTaskBySegmentId,
+    latestCompletedTaskBySegmentId
+  };
 };
 
 const processSplitTask = async (taskId, videoId, timeAnchors) => {
@@ -91,7 +139,8 @@ const processSplitTask = async (taskId, videoId, timeAnchors) => {
     for (const segmentInfo of splitSegments) {
       const segmentAnalysis = await analyzeSegmentContent({
         segment: segmentInfo,
-        overallAnalysis
+        overallAnalysis,
+        segmentAbsolutePath: resolveUploadPath(segmentInfo.filePath)
       });
 
       const segment = await Segment.create({
@@ -147,6 +196,47 @@ const startSplitVideo = async ({ videoId, timeAnchors }) => {
   };
 };
 
+const analyzeSegmentById = async (segmentId) => {
+  const segment = await getSegmentRecordById(segmentId);
+  const overallAnalysis = await getAnalysisRecordByVideoId(segment.videoId);
+
+  if (!overallAnalysis) {
+    throw new AppError('请先完成整片分析，再执行片段分析。', 400, {
+      segment_id: segmentId,
+      video_id: segment.videoId
+    });
+  }
+
+  const nextSegmentAnalysis = await analyzeSegmentContent({
+    segment: {
+      id: segment.id,
+      segmentIndex: segment.segmentIndex,
+      startTime: Number(segment.startTime),
+      endTime: Number(segment.endTime),
+      filePath: segment.filePath
+    },
+    overallAnalysis,
+    segmentAbsolutePath: resolveUploadPath(segment.filePath)
+  });
+
+  await segment.update({
+    analysis: {
+      ...(segment.analysis ?? {}),
+      ...nextSegmentAnalysis
+    }
+  });
+
+  const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestTasksBySegmentIds([
+    segment.id
+  ]);
+
+  return serializeSegment(
+    segment,
+    latestCompletedTaskBySegmentId.get(segment.id) ?? null,
+    latestAttemptTaskBySegmentId.get(segment.id) ?? null
+  );
+};
+
 const listSegmentsByVideoId = async (videoId) => {
   await getVideoRecordById(videoId);
 
@@ -161,25 +251,9 @@ const listSegmentsByVideoId = async (videoId) => {
     return [];
   }
 
-  const latestTasks = await GenerationTask.findAll({
-    where: {
-      segmentId: segments.map((segment) => segment.id)
-    },
-    order: [['createdAt', 'DESC']]
-  });
-
-  const latestAttemptTaskBySegmentId = new Map();
-  const latestCompletedTaskBySegmentId = new Map();
-
-  latestTasks.forEach((task) => {
-    if (!latestAttemptTaskBySegmentId.has(task.segmentId)) {
-      latestAttemptTaskBySegmentId.set(task.segmentId, task);
-    }
-
-    if (task.status === 'completed' && !latestCompletedTaskBySegmentId.has(task.segmentId)) {
-      latestCompletedTaskBySegmentId.set(task.segmentId, task);
-    }
-  });
+  const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestTasksBySegmentIds(
+    segments.map((segment) => segment.id)
+  );
 
   return segments.map((segment) =>
     serializeSegment(
@@ -190,4 +264,4 @@ const listSegmentsByVideoId = async (videoId) => {
   );
 };
 
-export { startSplitVideo, listSegmentsByVideoId };
+export { startSplitVideo, listSegmentsByVideoId, analyzeSegmentById, getSegmentRecordById };

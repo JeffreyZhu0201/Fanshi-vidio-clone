@@ -30,22 +30,22 @@ const VideoMerge = ({
       actions={<StatusBadge status={mergeProgress.status} />}
     >
       <div className="grid gap-4 sm:grid-cols-3">
-        <div className="rounded-[24px] bg-slate-950 px-4 py-4 text-white">
-          <p className="text-xs uppercase tracking-[0.24em] text-white/45">当前项目</p>
+        <div className="rounded-[24px] border border-white/10 bg-black/25 px-4 py-4 text-white">
+          <p className="text-xs uppercase tracking-[0.24em] text-white/40">当前项目</p>
           <p className="mt-2 text-sm font-semibold">{video?.filename || '未选择视频'}</p>
         </div>
-        <div className="rounded-[24px] bg-brand-50 px-4 py-4">
-          <p className="text-xs uppercase tracking-[0.24em] text-brand-700">片段数量</p>
-          <p className="mt-2 text-xl font-bold text-ink-900">{segments.length}</p>
+        <div className="rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-4">
+          <p className="text-xs uppercase tracking-[0.24em] text-white/50">片段数量</p>
+          <p className="mt-2 text-xl font-bold text-white">{segments.length}</p>
         </div>
-        <div className="rounded-[24px] bg-accent-50 px-4 py-4">
-          <p className="text-xs uppercase tracking-[0.24em] text-accent-700">已生成片段</p>
-          <p className="mt-2 text-xl font-bold text-ink-900">{generatedSegments}</p>
+        <div className="rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-4">
+          <p className="text-xs uppercase tracking-[0.24em] text-white/50">已生成片段</p>
+          <p className="mt-2 text-xl font-bold text-white">{generatedSegments}</p>
         </div>
       </div>
 
       {mergeProgress.status !== 'idle' ? (
-        <div className="mt-4 rounded-[26px] border border-slate-200 bg-white px-4 py-4">
+        <div className="mt-4 rounded-[26px] border border-white/10 bg-white/[0.04] px-4 py-4">
           <ProgressBar
             value={mergeProgress.progress}
             status={mergeProgress.status}
@@ -56,13 +56,16 @@ const VideoMerge = ({
       ) : null}
 
       {mergeProgress.errorMessage ? (
-        <div className="mt-4 rounded-[24px] border border-accent-100 bg-accent-50/80 px-4 py-3 text-sm text-accent-700">
+        <div
+          role="alert"
+          className="mt-4 rounded-[24px] border border-accent-500/20 bg-accent-500/10 px-4 py-3 text-sm text-rose-200"
+        >
           {mergeProgress.errorMessage}
         </div>
       ) : null}
 
       {isCompleted ? (
-        <div className="mt-4 rounded-[24px] border border-emerald-100 bg-emerald-50/80 px-4 py-3 text-sm text-emerald-700">
+        <div className="mt-4 rounded-[24px] border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
           拼接完成，可以直接下载成片。
         </div>
       ) : null}
@@ -70,7 +73,7 @@ const VideoMerge = ({
       <div className="mt-5 flex flex-wrap items-center gap-3">
         <button
           type="button"
-          className="rounded-full bg-ink-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-ink-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-full bg-gradient-to-r from-brand-500 to-accent-500 px-5 py-3 text-sm font-semibold text-white transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50"
           onClick={() => void onMerge()}
           disabled={!canMerge || isMerging}
         >
@@ -78,7 +81,7 @@ const VideoMerge = ({
         </button>
         <button
           type="button"
-          className="rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-ink-700 transition hover:border-brand-300 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
           onClick={() => void onDownload()}
           disabled={!isCompleted}
         >

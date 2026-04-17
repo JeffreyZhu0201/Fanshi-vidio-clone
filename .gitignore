@@ -26,6 +26,8 @@ backend/uploads/**
 backend/.tmp/
 frontend/cypress/screenshots/
 frontend/cypress/videos/
+.playwright-cli/
+docs/AI_Service_API_Keys.md
 !certs/
 !certs/dev/
 !certs/dev/.gitkeep

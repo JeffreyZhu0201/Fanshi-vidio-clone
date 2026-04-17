@@ -45,12 +45,12 @@ const ProgressBar = ({
 
   return (
     <div className={`space-y-2 ${className}`}>
-      <div className="flex items-center justify-between gap-4 text-xs font-medium text-ink-500">
+      <div className="flex items-center justify-between gap-4 text-xs font-medium text-white/60">
         <span>{label}</span>
         <span>{progress}%</span>
       </div>
       <div
-        className={`overflow-hidden rounded-full bg-slate-200/80 ${
+        className={`overflow-hidden rounded-full border border-white/[0.06] bg-white/[0.08] ${
           compact ? 'h-2.5' : 'h-3.5'
         }`}
       >
@@ -59,7 +59,7 @@ const ProgressBar = ({
           style={{ width: `${progress}%` }}
         />
       </div>
-      <div className="flex items-center justify-between gap-3 text-[11px] text-ink-500">
+      <div className="flex items-center justify-between gap-3 text-[11px] text-white/40">
         <span>{status === 'completed' ? '任务已完成' : '进度实时刷新中'}</span>
         <span>{remaining}</span>
       </div>

@@ -23,6 +23,7 @@ const analysisServiceMock = {
 };
 
 const segmentServiceMock = {
+  analyzeSegmentById: jest.fn(),
   startSplitVideo: jest.fn(),
   listSegmentsByVideoId: jest.fn()
 };
@@ -91,7 +92,13 @@ beforeEach(() => {
     plot: '测试剧情',
     characters: [{ name: '主角', appearancePrompt: '电影感人物设定' }],
     backgrounds: [{ description: '测试背景' }],
-    time_anchors: [{ startTime: 0, endTime: 4, sceneSummary: '镜头一' }]
+    time_anchors: [{ startTime: 0, endTime: 4, sceneSummary: '镜头一' }],
+    provider: 'remote-gemini',
+    model: 'gemini-2.5-pro',
+    mode: 'google',
+    is_mock: false,
+    fallback_reason: '',
+    remote_error: ''
   });
   analysisServiceMock.getAnalysisByVideoId.mockResolvedValue({
     id: 201,
@@ -100,7 +107,13 @@ beforeEach(() => {
     plot: '测试剧情',
     characters: [{ name: '主角' }],
     backgrounds: [{ description: '测试背景' }],
-    time_anchors: [{ startTime: 0, endTime: 4, sceneSummary: '镜头一' }]
+    time_anchors: [{ startTime: 0, endTime: 4, sceneSummary: '镜头一' }],
+    provider: 'remote-gemini',
+    model: 'gemini-2.5-pro',
+    mode: 'google',
+    is_mock: false,
+    fallback_reason: '',
+    remote_error: ''
   });
   analysisServiceMock.optimizePrompt.mockResolvedValue({
     optimized_prompt: '@主角 走进场景。',
@@ -126,6 +139,22 @@ beforeEach(() => {
       latest_generation_task: null
     }
   ]);
+  segmentServiceMock.analyzeSegmentById.mockResolvedValue({
+    id: 301,
+    segment_index: 0,
+    start_time: 0,
+    end_time: 4,
+    file_path: 'segments/demo-0.mp4',
+    file_url: '/uploads/segments/demo-0.mp4',
+    analysis: {
+      prompt: '@主角 重新分析后的提示词。',
+      scene: '重新分析后的场景',
+      action: '重新分析后的动作',
+      characters: ['主角']
+    },
+    latest_generation_task: null,
+    latest_attempt_task: null
+  });
 
   generationServiceMock.startGeneration.mockResolvedValue({
     task_id: 401,
@@ -223,6 +252,7 @@ describe('Backend API integration', () => {
 
     expect(analyzeResponse.status).toBe(200);
     expect(analyzeResponse.body.status).toBe('completed');
+    expect(analyzeResponse.body.provider).toBe('remote-gemini');
     expect(fetchAnalysisResponse.status).toBe(200);
     expect(fetchAnalysisResponse.body.video_id).toBe(101);
     expect(promptResponse.status).toBe(200);
@@ -250,6 +280,7 @@ describe('Backend API integration', () => {
   test('returns segments, generation task status, merge progress and downloadable output', async () => {
     const videoResponse = await request(app).get('/api/videos/101');
     const segmentsResponse = await request(app).get('/api/segments/101');
+    const segmentAnalyzeResponse = await request(app).post('/api/segments/301/analyze');
     const generationResponse = await request(app).get('/api/generation/401');
     const mergeProgressResponse = await request(app).get('/api/merge/merge-task-001/progress');
     const downloadResponse = await request(app).get('/api/merge/merge-task-001/download');
@@ -259,6 +290,8 @@ describe('Backend API integration', () => {
     expect(videoResponse.body.id).toBe(101);
     expect(segmentsResponse.status).toBe(200);
     expect(segmentsResponse.body).toHaveLength(1);
+    expect(segmentAnalyzeResponse.status).toBe(200);
+    expect(segmentAnalyzeResponse.body.analysis.prompt).toContain('重新分析后');
     expect(generationResponse.status).toBe(200);
     expect(generationResponse.body.status).toBe('completed');
     expect(mergeProgressResponse.status).toBe(200);

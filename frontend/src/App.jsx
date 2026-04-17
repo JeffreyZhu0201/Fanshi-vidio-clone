@@ -6,7 +6,7 @@ const AppFallback = () => {
   return (
     <div className="min-h-screen bg-slate-950 px-6 py-10 text-white">
       <div className="mx-auto flex max-w-4xl flex-col gap-4 rounded-[32px] border border-white/10 bg-white/5 p-8 shadow-2xl shadow-slate-950/40">
-        <p className="text-xs font-semibold uppercase tracking-[0.34em] text-white/45">
+        <p className="text-xs font-semibold uppercase tracking-[0.34em] text-white/40">
           Fanshi Workbench
         </p>
         <h1 className="text-3xl font-black tracking-tight">正在加载前端工作台</h1>

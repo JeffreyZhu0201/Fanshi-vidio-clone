@@ -38,22 +38,79 @@ const loadHttpsOptions = (enabled, keyPath, certPath) => {
   };
 };
 
+const getDevOrigin = ({ host, httpsEnabled, port }) => {
+  const protocol = httpsEnabled ? 'https' : 'http';
+  return `${protocol}://${host}:${port}`;
+};
+
+const resolveProxyTarget = (env, devOrigin) => {
+  const configuredProxyTarget = env.VITE_API_PROXY_TARGET?.trim();
+
+  if (configuredProxyTarget) {
+    return configuredProxyTarget;
+  }
+
+  const configuredApiBaseUrl = env.VITE_API_BASE_URL?.trim();
+
+  if (!configuredApiBaseUrl) {
+    return '';
+  }
+
+  try {
+    return new URL(configuredApiBaseUrl, devOrigin).origin;
+  } catch {
+    return '';
+  }
+};
+
+const createDevProxy = (target) => {
+  if (!target) {
+    return undefined;
+  }
+
+  return {
+    '/api': {
+      target,
+      changeOrigin: true,
+      secure: false
+    },
+    '/uploads': {
+      target,
+      changeOrigin: true,
+      secure: false
+    },
+    '/ws': {
+      target,
+      changeOrigin: true,
+      secure: false,
+      ws: true
+    }
+  };
+};
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const httpsEnabled = env.VITE_DEV_HTTPS === 'true';
-  const devHost = env.VITE_DEV_HOST || '127.0.0.1';
+  const devHost = env.VITE_DEV_HOST || 'localhost';
   const httpsOptions = loadHttpsOptions(
     httpsEnabled,
     env.VITE_SSL_KEY_PATH,
     env.VITE_SSL_CERT_PATH
   );
+  const devOrigin = getDevOrigin({
+    host: devHost,
+    httpsEnabled,
+    port: 5173
+  });
+  const devProxy = createDevProxy(resolveProxyTarget(env, devOrigin));
 
   return {
     plugins: [react()],
     server: {
       host: devHost,
       port: 5173,
-      https: httpsOptions
+      https: httpsOptions,
+      proxy: devProxy
     },
     preview: {
       host: devHost,

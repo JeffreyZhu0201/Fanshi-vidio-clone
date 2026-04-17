@@ -58,7 +58,13 @@ const definition = {
           plot: { type: 'string' },
           characters: { type: 'array', items: { type: 'object' } },
           backgrounds: { type: 'array', items: { type: 'object' } },
-          time_anchors: { type: 'array', items: { type: 'object' } }
+          time_anchors: { type: 'array', items: { type: 'object' } },
+          provider: { type: 'string', example: 'remote-gemini' },
+          model: { type: 'string', example: 'gemini-2.5-pro' },
+          mode: { type: 'string', example: 'google' },
+          is_mock: { type: 'boolean', example: false },
+          fallback_reason: { type: 'string', nullable: true, example: '' },
+          remote_error: { type: 'string', nullable: true, example: '' }
         }
       },
       Segment: {
@@ -70,7 +76,15 @@ const definition = {
           end_time: { type: 'number', example: 4.5 },
           file_path: { type: 'string', example: 'segments/demo-segment-0.mp4' },
           file_url: { type: 'string', example: '/uploads/segments/demo-segment-0.mp4' },
-          analysis: { type: 'object' }
+          analysis: { type: 'object' },
+          latest_generation_task: {
+            allOf: [{ $ref: '#/components/schemas/GenerationTaskStatus' }],
+            nullable: true
+          },
+          latest_attempt_task: {
+            allOf: [{ $ref: '#/components/schemas/GenerationTaskStatus' }],
+            nullable: true
+          }
         }
       },
       TaskProgress: {
@@ -316,6 +330,31 @@ const definition = {
                   items: {
                     $ref: '#/components/schemas/Segment'
                   }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    '/api/segments/{id}/analyze': {
+      post: {
+        summary: 'Re-analyze a single segment with Gemini understanding',
+        parameters: [
+          {
+            in: 'path',
+            name: 'id',
+            required: true,
+            schema: { type: 'integer' }
+          }
+        ],
+        responses: {
+          200: {
+            description: 'Segment analysis refreshed',
+            content: {
+              'application/json': {
+                schema: {
+                  $ref: '#/components/schemas/Segment'
                 }
               }
             }
