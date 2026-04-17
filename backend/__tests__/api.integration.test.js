@@ -90,9 +90,30 @@ beforeEach(() => {
     video_id: 101,
     status: 'completed',
     plot: '测试剧情',
-    characters: [{ name: '主角', appearancePrompt: '电影感人物设定' }],
-    backgrounds: [{ description: '测试背景' }],
-    time_anchors: [{ startTime: 0, endTime: 4, sceneSummary: '镜头一' }],
+    characters: [
+      {
+        name: '主角',
+        appearancePrompt: '电影感人物设定',
+        representativeFrameTime: 1.2
+      }
+    ],
+    backgrounds: [
+      {
+        name: '测试场景',
+        description: '测试背景',
+        scenePrompt: '电影化测试场景提示词',
+        representativeFrameTime: 2.4
+      }
+    ],
+    time_anchors: [
+      {
+        startTime: 0,
+        endTime: 4,
+        sceneSummary: '镜头一',
+        scenePrompt: '镜头一场景提示词',
+        representativeFrameTime: 1.8
+      }
+    ],
     provider: 'remote-gemini',
     model: 'gemini-2.5-pro',
     mode: 'google',
@@ -105,9 +126,17 @@ beforeEach(() => {
     video_id: 101,
     status: 'completed',
     plot: '测试剧情',
-    characters: [{ name: '主角' }],
-    backgrounds: [{ description: '测试背景' }],
-    time_anchors: [{ startTime: 0, endTime: 4, sceneSummary: '镜头一' }],
+    characters: [{ name: '主角', representativeFrameTime: 1.2 }],
+    backgrounds: [{ name: '测试场景', description: '测试背景', scenePrompt: '电影化测试场景提示词' }],
+    time_anchors: [
+      {
+        startTime: 0,
+        endTime: 4,
+        sceneSummary: '镜头一',
+        scenePrompt: '镜头一场景提示词',
+        representativeFrameTime: 1.8
+      }
+    ],
     provider: 'remote-gemini',
     model: 'gemini-2.5-pro',
     mode: 'google',
@@ -262,7 +291,15 @@ describe('Backend API integration', () => {
   test('starts split and merge tasks and exposes task progress', async () => {
     const splitResponse = await request(app).post('/api/segments/split').send({
       video_id: 101,
-      time_anchors: [{ startTime: 0, endTime: 4, sceneSummary: '镜头一' }]
+      time_anchors: [
+        {
+          startTime: 0,
+          endTime: 4,
+          sceneSummary: '镜头一',
+          scenePrompt: '镜头一场景提示词',
+          representativeFrameTime: 1.8
+        }
+      ]
     });
     const taskResponse = await request(app).get('/api/tasks/split-task-001');
     const mergeResponse = await request(app).post('/api/merge/start').send({

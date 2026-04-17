@@ -50,6 +50,28 @@ const renderHighlightedPrompt = (prompt = '') => {
   );
 };
 
+const normalizeOptionalNumber = (value) => {
+  const parsedValue = Number(value);
+
+  if (!Number.isFinite(parsedValue) || parsedValue < 0) {
+    return null;
+  }
+
+  return Number(parsedValue.toFixed(2));
+};
+
+const normalizeOptionalString = (value, fallback = '') => {
+  const normalizedValue = String(value ?? '').trim();
+  return normalizedValue || fallback;
+};
+
+const getRepresentativeFrameTime = (startTime, endTime) => {
+  const safeStartTime = Math.max(0, Number(startTime) || 0);
+  const safeEndTime = Math.max(safeStartTime + 0.3, Number(endTime) || safeStartTime + 0.3);
+
+  return Number((safeStartTime + (safeEndTime - safeStartTime) / 2).toFixed(2));
+};
+
 const buildMockTimeAnchors = (durationSeconds = 12) => {
   const safeDuration = Math.max(6, durationSeconds || 12);
   const segmentCount = Math.min(4, Math.max(2, Math.ceil(safeDuration / 4)));
@@ -60,11 +82,14 @@ const buildMockTimeAnchors = (durationSeconds = 12) => {
     const endTime = Number(
       (index === segmentCount - 1 ? safeDuration : (index + 1) * segmentLength).toFixed(2)
     );
+    const representativeFrameTime = getRepresentativeFrameTime(startTime, endTime);
 
     return {
       startTime,
       endTime,
-      sceneSummary: `第 ${index + 1} 段镜头，围绕主角推进剧情。`
+      sceneSummary: `第 ${index + 1} 段镜头，围绕主角推进剧情。`,
+      scenePrompt: `电影感镜头，主角位于第 ${index + 1} 段场景中，环境细节完整，光线层次清晰，镜头语言连贯。`,
+      representativeFrameTime
     };
   });
 };
@@ -72,6 +97,7 @@ const buildMockTimeAnchors = (durationSeconds = 12) => {
 const createMockVideoAnalysis = ({ video, metadata }) => {
   const anchors = buildMockTimeAnchors(metadata.duration || 12);
   const baseName = video.filename.replace(/\.[^.]+$/, '');
+  const primaryFrameTime = anchors[0]?.representativeFrameTime ?? 1.2;
 
   return {
     plot: `${baseName} 的剧情围绕主角完成一个简短目标展开，整体节奏清晰，适合继续做片段级生成。`,
@@ -79,12 +105,18 @@ const createMockVideoAnalysis = ({ video, metadata }) => {
       {
         id: 'character_main',
         name: '主角',
-        appearancePrompt: '一位年轻主角，面部轮廓清晰，表情自然，服装简洁，镜头感强'
+        appearancePrompt: '一位年轻主角，面部轮廓清晰，表情自然，服装简洁，镜头感强',
+        representativeFrameTime: primaryFrameTime,
+        representativeFrameNote: '该帧能稳定体现主角的整体造型、服装和面部特征。'
       }
     ],
     backgrounds: anchors.map((anchor, index) => ({
       id: `background_${index + 1}`,
-      description: `${anchor.sceneSummary}，场景氛围偏电影化，光线柔和，环境细节完整。`
+      name: `场景 ${index + 1}`,
+      description: `${anchor.sceneSummary}，场景氛围偏电影化，光线柔和，环境细节完整。`,
+      scenePrompt: `电影化 ${anchor.sceneSummary}，突出空间纵深、环境光线、布景层次和主体运动关系。`,
+      representativeFrameTime: anchor.representativeFrameTime,
+      representativeFrameNote: '该帧能够代表当前镜头段的空间结构、光线和布景细节。'
     })),
     timeAnchors: anchors,
     geminiResponse: JSON.stringify({
@@ -216,7 +248,9 @@ const normalizeCharacter = (item, index) => {
     return {
       id: `character_${index + 1}`,
       name: item,
-      appearancePrompt: item
+      appearancePrompt: item,
+      representativeFrameTime: null,
+      representativeFrameNote: ''
     };
   }
 
@@ -229,7 +263,16 @@ const normalizeCharacter = (item, index) => {
   return {
     id: String(item.id ?? `character_${index + 1}`),
     name,
-    appearancePrompt: String(item.appearancePrompt ?? item.appearance_prompt ?? name).trim()
+    appearancePrompt: String(item.appearancePrompt ?? item.appearance_prompt ?? name).trim(),
+    representativeFrameTime: normalizeOptionalNumber(
+      item.representativeFrameTime ?? item.representative_frame_time
+    ),
+    representativeFrameNote: normalizeOptionalString(
+      item.representativeFrameNote ??
+        item.representative_frame_note ??
+        item.representativeFrameReason ??
+        item.representative_frame_reason
+    )
   };
 };
 
@@ -241,11 +284,19 @@ const normalizeBackground = (item, index) => {
   if (typeof item === 'string') {
     return {
       id: `background_${index + 1}`,
-      description: item
+      name: `场景 ${index + 1}`,
+      description: item,
+      scenePrompt: item,
+      representativeFrameTime: null,
+      representativeFrameNote: ''
     };
   }
 
   const description = String(item.description ?? item.summary ?? '').trim();
+  const name = normalizeOptionalString(
+    item.name ?? item.title ?? item.sceneName ?? item.scene_name,
+    `场景 ${index + 1}`
+  );
 
   if (!description) {
     return null;
@@ -253,7 +304,18 @@ const normalizeBackground = (item, index) => {
 
   return {
     id: String(item.id ?? `background_${index + 1}`),
-    description
+    name,
+    description,
+    scenePrompt: normalizeOptionalString(item.scenePrompt ?? item.scene_prompt, description),
+    representativeFrameTime: normalizeOptionalNumber(
+      item.representativeFrameTime ?? item.representative_frame_time
+    ),
+    representativeFrameNote: normalizeOptionalString(
+      item.representativeFrameNote ??
+        item.representative_frame_note ??
+        item.representativeFrameReason ??
+        item.representative_frame_reason
+    )
   };
 };
 
@@ -266,11 +328,25 @@ const normalizeTimeAnchor = (item, index, fallbackDuration = 0) => {
   const rawEndTime = Number(item.endTime ?? item.end_time ?? startTime + 3);
   const endTime = rawEndTime > startTime ? rawEndTime : startTime + 0.5;
   const sceneSummary = String(item.sceneSummary ?? item.scene_summary ?? `镜头 ${index + 1}`).trim();
+  const normalizedEndTime = Number(
+    Math.min(Math.max(endTime, startTime + 0.5), fallbackDuration || endTime).toFixed(2)
+  );
+  const representativeFrameTime =
+    normalizeOptionalNumber(item.representativeFrameTime ?? item.representative_frame_time) ??
+    getRepresentativeFrameTime(startTime, normalizedEndTime);
 
   return {
     startTime: Number(Math.max(0, startTime).toFixed(2)),
-    endTime: Number(Math.min(Math.max(endTime, startTime + 0.5), fallbackDuration || endTime).toFixed(2)),
-    sceneSummary
+    endTime: normalizedEndTime,
+    sceneSummary,
+    scenePrompt: normalizeOptionalString(item.scenePrompt ?? item.scene_prompt, sceneSummary),
+    representativeFrameTime,
+    representativeFrameNote: normalizeOptionalString(
+      item.representativeFrameNote ??
+        item.representative_frame_note ??
+        item.representativeFrameReason ??
+        item.representative_frame_reason
+    )
   };
 };
 
@@ -498,9 +574,34 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
     JSON.stringify(
       {
         plot: 'string',
-        characters: [{ id: 'character_1', name: '角色名', appearancePrompt: '角色完整形象设定' }],
-        backgrounds: [{ id: 'background_1', description: '镜头或场景背景描述' }],
-        timeAnchors: [{ startTime: 0, endTime: 3.2, sceneSummary: '镜头摘要' }]
+        characters: [
+          {
+            id: 'character_1',
+            name: '角色名',
+            appearancePrompt: '角色完整形象设定',
+            representativeFrameTime: 1.2,
+            representativeFrameNote: '该角色的典型帧说明'
+          }
+        ],
+        backgrounds: [
+          {
+            id: 'background_1',
+            name: '场景名称',
+            description: '镜头或场景背景描述',
+            scenePrompt: '可直接用于生成该场景的中文提示词',
+            representativeFrameTime: 2.8,
+            representativeFrameNote: '该场景的典型帧说明'
+          }
+        ],
+        timeAnchors: [
+          {
+            startTime: 0,
+            endTime: 3.2,
+            sceneSummary: '镜头摘要',
+            scenePrompt: '该镜头的场景提示词',
+            representativeFrameTime: 1.6
+          }
+        ]
       },
       null,
       2
@@ -510,11 +611,14 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
     '要求：',
     '1. plot 用中文概括整条视频的主要剧情、事件推进和结局走向，适合后续片段生成使用。',
     '2. characters 至少提取主要角色，name 要稳定，appearancePrompt 必须是可直接用于视频生成的人物外观设定。',
-    '3. backgrounds 需要概括主要场景、环境氛围、光线、天气、布景和空间信息。',
-    '4. timeAnchors 必须覆盖完整视频，startTime 和 endTime 为数字秒，严格按时间升序，不要重叠，不要遗漏关键镜头。',
-    '5. 每个 timeAnchor 都要给出 sceneSummary，概括该时间段发生的核心画面和动作。',
-    '6. 如果角色较少，也至少保证 characters 返回 1 个对象。',
-    '7. 输出必须是合法 JSON，字段名保持与示例完全一致。'
+    '3. 每个 character 都要返回 representativeFrameTime，表示最能代表该角色外观的时间点（单位秒）；representativeFrameNote 简要说明为什么选择该帧。',
+    '4. backgrounds 需要概括主要场景、环境氛围、光线、天气、布景和空间信息，name 为方便前端展示的场景名称。',
+    '5. 每个 background 都要返回 scenePrompt，内容是可直接用于生成该场景的中文场景提示词，同时返回 representativeFrameTime 和 representativeFrameNote。',
+    '6. timeAnchors 必须覆盖完整视频，startTime 和 endTime 为数字秒，严格按时间升序，不要重叠，不要遗漏关键镜头。',
+    '7. 每个 timeAnchor 都要给出 sceneSummary 和 scenePrompt；scenePrompt 要体现该镜头段的场景、氛围、布景、光线和镜头语义。',
+    '8. 每个 timeAnchor 都要返回 representativeFrameTime，且该时间点必须落在 startTime 到 endTime 之间。',
+    '9. 如果角色较少，也至少保证 characters 返回 1 个对象。',
+    '10. 输出必须是合法 JSON，字段名保持与示例完全一致。'
   ].join('\n');
 };
 
@@ -591,11 +695,30 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath }) => {
       (parsedPayload.timeAnchors ?? parsedPayload.time_anchors ?? [])
         .map((item, index) => normalizeTimeAnchor(item, index, Number(metadata.duration) || 0))
         .filter(Boolean) || [];
+    const normalizedBackgrounds = (parsedPayload.backgrounds ?? [])
+      .map(normalizeBackground)
+      .filter(Boolean);
+    const derivedBackgrounds =
+      normalizedBackgrounds.length > 0
+        ? normalizedBackgrounds
+        : normalizedTimeAnchors.map((anchor, index) =>
+            normalizeBackground(
+              {
+                id: `background_${index + 1}`,
+                name: `场景 ${index + 1}`,
+                description: anchor.sceneSummary,
+                scenePrompt: anchor.scenePrompt,
+                representativeFrameTime: anchor.representativeFrameTime,
+                representativeFrameNote: anchor.representativeFrameNote
+              },
+              index
+            )
+          );
 
     return {
       plot: String(parsedPayload.plot ?? '').trim(),
       characters: (parsedPayload.characters ?? []).map(normalizeCharacter).filter(Boolean),
-      backgrounds: (parsedPayload.backgrounds ?? []).map(normalizeBackground).filter(Boolean),
+      backgrounds: derivedBackgrounds.filter(Boolean),
       timeAnchors: normalizedTimeAnchors.length
         ? normalizedTimeAnchors
         : buildMockTimeAnchors(metadata.duration || 12),

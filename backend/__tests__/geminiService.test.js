@@ -45,9 +45,33 @@ describe('geminiService', () => {
                   {
                     text: JSON.stringify({
                       plot: '剧情摘要',
-                      characters: [{ id: 'character_1', name: '主角', appearancePrompt: '角色外观' }],
-                      backgrounds: [{ id: 'background_1', description: '背景描述' }],
-                      timeAnchors: [{ startTime: 0, endTime: 3, sceneSummary: '镜头摘要' }]
+                      characters: [
+                        {
+                          id: 'character_1',
+                          name: '主角',
+                          appearancePrompt: '角色外观',
+                          representativeFrameTime: 1.2,
+                          representativeFrameNote: '人物正面稳定镜头'
+                        }
+                      ],
+                      backgrounds: [
+                        {
+                          id: 'background_1',
+                          name: '咖啡馆内景',
+                          description: '背景描述',
+                          scenePrompt: '电影感咖啡馆内景提示词',
+                          representativeFrameTime: 2.1
+                        }
+                      ],
+                      timeAnchors: [
+                        {
+                          startTime: 0,
+                          endTime: 3,
+                          sceneSummary: '镜头摘要',
+                          scenePrompt: '镜头场景提示词',
+                          representativeFrameTime: 1.5
+                        }
+                      ]
                     })
                   }
                 ]
@@ -92,6 +116,8 @@ describe('geminiService', () => {
     expect(parts[0].inline_data.data).toBeTruthy();
     expect(parts[1].text).toContain('整体视频理解');
     expect(parts[1].text).toContain('返回结构必须完全符合');
+    expect(parts[1].text).toContain('representativeFrameTime');
+    expect(parts[1].text).toContain('scenePrompt');
     expect(requestBody.generationConfig).toMatchObject({
       temperature: 0.2,
       responseMimeType: 'application/json'
@@ -117,9 +143,30 @@ describe('geminiService', () => {
                     {
                       text: JSON.stringify({
                         plot: '剧情摘要',
-                        characters: [{ id: 'character_1', name: '主角', appearancePrompt: '角色外观' }],
-                        backgrounds: [{ id: 'background_1', description: '背景描述' }],
-                        timeAnchors: [{ startTime: 0, endTime: 3, sceneSummary: '镜头摘要' }]
+                        characters: [
+                          {
+                            id: 'character_1',
+                            name: '主角',
+                            appearancePrompt: '角色外观',
+                            representativeFrameTime: 1.2
+                          }
+                        ],
+                        backgrounds: [
+                          {
+                            id: 'background_1',
+                            description: '背景描述',
+                            scenePrompt: '电影感背景提示词'
+                          }
+                        ],
+                        timeAnchors: [
+                          {
+                            startTime: 0,
+                            endTime: 3,
+                            sceneSummary: '镜头摘要',
+                            scenePrompt: '镜头场景提示词',
+                            representativeFrameTime: 1.5
+                          }
+                        ]
                       })
                     }
                   ]

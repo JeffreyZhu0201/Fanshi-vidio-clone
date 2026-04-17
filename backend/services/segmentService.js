@@ -41,11 +41,24 @@ const serializeSegment = (segment, latestCompletedGenerationTask = null, latestA
 
 const normalizeTimeAnchors = (timeAnchors) => {
   return (timeAnchors ?? [])
-    .map((item, index) => ({
-      startTime: Number(item.startTime ?? item.start_time),
-      endTime: Number(item.endTime ?? item.end_time),
-      sceneSummary: item.sceneSummary ?? item.scene_summary ?? `Segment ${index + 1}`
-    }))
+    .map((item, index) => {
+      const representativeFrameTime = Number(
+        item.representativeFrameTime ?? item.representative_frame_time
+      );
+
+      return {
+        startTime: Number(item.startTime ?? item.start_time),
+        endTime: Number(item.endTime ?? item.end_time),
+        sceneSummary: item.sceneSummary ?? item.scene_summary ?? `Segment ${index + 1}`,
+        scenePrompt: item.scenePrompt ?? item.scene_prompt ?? '',
+        representativeFrameTime:
+          Number.isFinite(representativeFrameTime) && representativeFrameTime >= 0
+            ? representativeFrameTime
+            : null,
+        representativeFrameNote:
+          item.representativeFrameNote ?? item.representative_frame_note ?? ''
+      };
+    })
     .sort((left, right) => left.startTime - right.startTime);
 };
 

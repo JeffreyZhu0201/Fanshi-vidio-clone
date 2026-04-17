@@ -15,9 +15,34 @@ const buildVideoAnalysisPrompt = ({ video }) => {
     JSON.stringify(
       {
         plot: 'string',
-        characters: [{ id: 'character_1', name: '角色名', appearancePrompt: '角色完整形象设定' }],
-        backgrounds: [{ id: 'background_1', description: '镜头或场景背景描述' }],
-        timeAnchors: [{ startTime: 0, endTime: 3.2, sceneSummary: '镜头摘要' }]
+        characters: [
+          {
+            id: 'character_1',
+            name: '角色名',
+            appearancePrompt: '角色完整形象设定',
+            representativeFrameTime: 1.2,
+            representativeFrameNote: '该角色的典型帧说明'
+          }
+        ],
+        backgrounds: [
+          {
+            id: 'background_1',
+            name: '场景名称',
+            description: '镜头或场景背景描述',
+            scenePrompt: '可直接用于生成该场景的中文提示词',
+            representativeFrameTime: 2.8,
+            representativeFrameNote: '该场景的典型帧说明'
+          }
+        ],
+        timeAnchors: [
+          {
+            startTime: 0,
+            endTime: 3.2,
+            sceneSummary: '镜头摘要',
+            scenePrompt: '该镜头的场景提示词',
+            representativeFrameTime: 1.6
+          }
+        ]
       },
       null,
       2
@@ -27,11 +52,14 @@ const buildVideoAnalysisPrompt = ({ video }) => {
     '要求：',
     '1. plot 用中文概括整条视频的主要剧情、事件推进和结局走向，适合后续片段生成使用。',
     '2. characters 至少提取主要角色，name 要稳定，appearancePrompt 必须是可直接用于视频生成的人物外观设定。',
-    '3. backgrounds 需要概括主要场景、环境氛围、光线、天气、布景和空间信息。',
-    '4. timeAnchors 必须覆盖完整视频，startTime 和 endTime 为数字秒，严格按时间升序，不要重叠，不要遗漏关键镜头。',
-    '5. 每个 timeAnchor 都要给出 sceneSummary，概括该时间段发生的核心画面和动作。',
-    '6. 如果角色较少，也至少保证 characters 返回 1 个对象。',
-    '7. 输出必须是合法 JSON，字段名保持与示例完全一致。'
+    '3. 每个 character 都要返回 representativeFrameTime，表示最能代表该角色外观的时间点（单位秒）；representativeFrameNote 简要说明为什么选择该帧。',
+    '4. backgrounds 需要概括主要场景、环境氛围、光线、天气、布景和空间信息，name 为方便前端展示的场景名称。',
+    '5. 每个 background 都要返回 scenePrompt，内容是可直接用于生成该场景的中文场景提示词，同时返回 representativeFrameTime 和 representativeFrameNote。',
+    '6. timeAnchors 必须覆盖完整视频，startTime 和 endTime 为数字秒，严格按时间升序，不要重叠，不要遗漏关键镜头。',
+    '7. 每个 timeAnchor 都要给出 sceneSummary 和 scenePrompt；scenePrompt 要体现该镜头段的场景、氛围、布景、光线和镜头语义。',
+    '8. 每个 timeAnchor 都要返回 representativeFrameTime，且该时间点必须落在 startTime 到 endTime 之间。',
+    '9. 如果角色较少，也至少保证 characters 返回 1 个对象。',
+    '10. 输出必须是合法 JSON，字段名保持与示例完全一致。'
   ].join('\n');
 };
 

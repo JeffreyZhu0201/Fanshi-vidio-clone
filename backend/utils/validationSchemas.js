@@ -46,9 +46,15 @@ const timeAnchorSchema = Joi.object({
   startTime: Joi.number().min(0),
   endTime: Joi.number(),
   sceneSummary: Joi.string().trim().allow(''),
+  scenePrompt: Joi.string().trim().allow(''),
+  representativeFrameTime: Joi.number().min(0).allow(null),
+  representativeFrameNote: Joi.string().trim().allow(''),
   start_time: Joi.number().min(0),
   end_time: Joi.number(),
-  scene_summary: Joi.string().trim().allow('')
+  scene_summary: Joi.string().trim().allow(''),
+  scene_prompt: Joi.string().trim().allow(''),
+  representative_frame_time: Joi.number().min(0).allow(null),
+  representative_frame_note: Joi.string().trim().allow('')
 }).custom((value, helpers) => {
   const start = value.startTime ?? value.start_time;
   const end = value.endTime ?? value.end_time;
@@ -66,7 +72,7 @@ const timeAnchorSchema = Joi.object({
   }
 
   return value;
-});
+}).unknown(true);
 
 const splitVideoBodySchema = Joi.object({
   video_id: Joi.number().integer().positive().required(),
