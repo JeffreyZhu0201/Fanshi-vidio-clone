@@ -7,28 +7,47 @@ import { generationSessionStorage, useGenerationStore } from '../store/generatio
 import { useVideoStore, videoSessionStorage } from '../store/videoStore.js';
 import { sleep } from '../utils/sleep.js';
 
-const normalizeSegment = (segment) => ({
-  id: segment.id,
-  segmentIndex: segment.segment_index,
-  startTime: Number(segment.start_time),
-  endTime: Number(segment.end_time),
-  sourceUrl: toAbsoluteAssetUrl(segment.file_url),
-  sourcePath: segment.file_path,
-  generatedUrl: toAbsoluteAssetUrl(segment.latest_generation_task?.result_url),
-  scene: segment.analysis?.scene ?? '',
-  action: segment.analysis?.action ?? '',
-  prompt: segment.analysis?.prompt ?? '',
-  characters: segment.analysis?.characters ?? [],
-  highlightedPrompt: '',
-  latestGenerationTask: segment.latest_generation_task
+const normalizeSegment = (segment) => {
+  const latestCompletedGenerationTask = segment.latest_generation_task
     ? {
         task_id: segment.latest_generation_task.id,
         status: segment.latest_generation_task.status,
         progress: segment.latest_generation_task.progress,
-        result_url: toAbsoluteAssetUrl(segment.latest_generation_task.result_url)
+        result_url: toAbsoluteAssetUrl(segment.latest_generation_task.result_url),
+        error_message: segment.latest_generation_task.error_message ?? '',
+        created_at: segment.latest_generation_task.created_at,
+        updated_at: segment.latest_generation_task.updated_at
       }
-    : null
-});
+    : null;
+  const latestAttemptTask = segment.latest_attempt_task
+    ? {
+        task_id: segment.latest_attempt_task.id,
+        status: segment.latest_attempt_task.status,
+        progress: segment.latest_attempt_task.progress,
+        result_url: toAbsoluteAssetUrl(segment.latest_attempt_task.result_url),
+        error_message: segment.latest_attempt_task.error_message ?? '',
+        created_at: segment.latest_attempt_task.created_at,
+        updated_at: segment.latest_attempt_task.updated_at
+      }
+    : latestCompletedGenerationTask;
+
+  return {
+    id: segment.id,
+    segmentIndex: segment.segment_index,
+    startTime: Number(segment.start_time),
+    endTime: Number(segment.end_time),
+    sourceUrl: toAbsoluteAssetUrl(segment.file_url),
+    sourcePath: segment.file_path,
+    generatedUrl: latestCompletedGenerationTask?.result_url ?? '',
+    scene: segment.analysis?.scene ?? '',
+    action: segment.analysis?.action ?? '',
+    prompt: segment.analysis?.prompt ?? '',
+    characters: segment.analysis?.characters ?? [],
+    highlightedPrompt: '',
+    latestCompletedGenerationTask,
+    latestGenerationTask: latestAttemptTask
+  };
+};
 
 const useSegments = () => {
   const currentVideo = useVideoStore((state) => state.currentVideo);

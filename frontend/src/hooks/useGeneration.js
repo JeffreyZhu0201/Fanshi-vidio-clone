@@ -51,14 +51,27 @@ const useGeneration = () => {
         segment_id: resolvedSegmentId
       });
 
+      const currentSegment = state.segments.find((segment) => segment.id === resolvedSegmentId);
+      const nextGenerationTask = {
+        task_id: payloadTaskId,
+        status: payload.status,
+        progress: payload.progress,
+        result_url: toAbsoluteAssetUrl(payload.result_url),
+        error_message: payload.error_message ?? '',
+        created_at: payload.created_at,
+        updated_at: payload.updated_at
+      };
+
       updateSegment(resolvedSegmentId, {
-        latestGenerationTask: {
-          task_id: payloadTaskId,
-          status: payload.status,
-          progress: payload.progress,
-          result_url: toAbsoluteAssetUrl(payload.result_url)
-        },
-        generatedUrl: toAbsoluteAssetUrl(payload.result_url)
+        latestGenerationTask: nextGenerationTask,
+        latestCompletedGenerationTask:
+          payload.status === 'completed' && payload.result_url
+            ? nextGenerationTask
+            : currentSegment?.latestCompletedGenerationTask ?? null,
+        generatedUrl:
+          payload.status === 'completed' && payload.result_url
+            ? toAbsoluteAssetUrl(payload.result_url)
+            : currentSegment?.generatedUrl ?? ''
       });
     });
   }, [updateSegment, updateTask]);

@@ -8,7 +8,23 @@ import { splitVideo } from './ffmpegService.js';
 import { getVideoRecordById, resolveVideoAbsolutePath } from './videoService.js';
 import { toPublicUploadUrl } from './fileService.js';
 
-const serializeSegment = (segment, latestGenerationTask = null) => ({
+const serializeGenerationTask = (task) => {
+  if (!task) {
+    return null;
+  }
+
+  return {
+    id: task.id,
+    status: task.status,
+    progress: task.progress,
+    result_url: task.resultUrl,
+    error_message: task.errorMessage,
+    created_at: task.createdAt,
+    updated_at: task.updatedAt
+  };
+};
+
+const serializeSegment = (segment, latestCompletedGenerationTask = null, latestAttemptTask = null) => ({
   id: segment.id,
   segment_index: segment.segmentIndex,
   start_time: Number(segment.startTime),
@@ -16,14 +32,9 @@ const serializeSegment = (segment, latestGenerationTask = null) => ({
   file_path: segment.filePath,
   file_url: toPublicUploadUrl(segment.filePath),
   analysis: segment.analysis,
-  latest_generation_task: latestGenerationTask
-    ? {
-        id: latestGenerationTask.id,
-        status: latestGenerationTask.status,
-        progress: latestGenerationTask.progress,
-        result_url: latestGenerationTask.resultUrl
-      }
-    : null
+  // Keep the display source aligned with merge: both use the latest completed generation result.
+  latest_generation_task: serializeGenerationTask(latestCompletedGenerationTask),
+  latest_attempt_task: serializeGenerationTask(latestAttemptTask)
 });
 
 const normalizeTimeAnchors = (timeAnchors) => {
@@ -157,16 +168,25 @@ const listSegmentsByVideoId = async (videoId) => {
     order: [['createdAt', 'DESC']]
   });
 
-  const latestTaskBySegmentId = new Map();
+  const latestAttemptTaskBySegmentId = new Map();
+  const latestCompletedTaskBySegmentId = new Map();
 
   latestTasks.forEach((task) => {
-    if (!latestTaskBySegmentId.has(task.segmentId)) {
-      latestTaskBySegmentId.set(task.segmentId, task);
+    if (!latestAttemptTaskBySegmentId.has(task.segmentId)) {
+      latestAttemptTaskBySegmentId.set(task.segmentId, task);
+    }
+
+    if (task.status === 'completed' && !latestCompletedTaskBySegmentId.has(task.segmentId)) {
+      latestCompletedTaskBySegmentId.set(task.segmentId, task);
     }
   });
 
   return segments.map((segment) =>
-    serializeSegment(segment, latestTaskBySegmentId.get(segment.id) ?? null)
+    serializeSegment(
+      segment,
+      latestCompletedTaskBySegmentId.get(segment.id) ?? null,
+      latestAttemptTaskBySegmentId.get(segment.id) ?? null
+    )
   );
 };
 
