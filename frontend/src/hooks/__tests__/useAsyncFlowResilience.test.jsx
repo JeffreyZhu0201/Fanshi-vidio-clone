@@ -313,7 +313,8 @@ describe('async flow resilience', () => {
 
     useAnalysisStore.setState({
       analysis: {
-        characters: [{ name: '主角', appearancePrompt: '稳定角色设定' }]
+        characters: [{ name: '主角', appearancePrompt: '稳定角色设定' }],
+        backgrounds: [{ name: '咖啡馆内景', scenePrompt: '稳定场景设定' }]
       }
     });
 
@@ -346,6 +347,11 @@ describe('async flow resilience', () => {
       {
         name: '主角',
         appearancePrompt: '稳定角色设定'
+      }
+    ], [
+      {
+        name: '咖啡馆内景',
+        scenePrompt: '稳定场景设定'
       }
     ]);
     expect(useGenerationStore.getState().segments[0].prompt).toBe('@主角 新提示词，镜头更明确');

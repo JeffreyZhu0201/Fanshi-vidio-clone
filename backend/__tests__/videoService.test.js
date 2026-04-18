@@ -59,35 +59,6 @@ describe('videoService upload validation', () => {
     });
   });
 
-  test('rejects duplicate uploads based on filename and file size', async () => {
-    getVideoMetadata.mockResolvedValue({
-      duration: 12,
-      durationSecondsExact: 12,
-      width: 1920,
-      height: 1080,
-      codec: 'h264',
-      engine: 'ffprobe'
-    });
-    Video.findOne.mockResolvedValue({
-      id: 999,
-      filename: baseFile.originalname,
-      fileSize: baseFile.size
-    });
-
-    await expect(
-      createVideoFromUpload({
-        file: baseFile
-      })
-    ).rejects.toMatchObject({
-      statusCode: 409,
-      message: '已存在同名且大小一致的视频，请勿重复上传。'
-    });
-
-    expect(removeFileIfExists).toHaveBeenCalledWith(baseFile.path);
-    expect(Project.create).not.toHaveBeenCalled();
-    expect(Video.create).not.toHaveBeenCalled();
-  });
-
   test('rejects uploads that exceed the duration limit', async () => {
     getVideoMetadata.mockResolvedValue({
       duration: 601,
@@ -111,5 +82,55 @@ describe('videoService upload validation', () => {
     expect(Video.findOne).not.toHaveBeenCalled();
     expect(Project.create).not.toHaveBeenCalled();
     expect(Video.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects uploads with unreadable video metadata', async () => {
+    getVideoMetadata.mockResolvedValue({
+      duration: null,
+      durationSecondsExact: null,
+      width: null,
+      height: null,
+      codec: null,
+      engine: 'ffprobe'
+    });
+
+    await expect(
+      createVideoFromUpload({
+        file: baseFile
+      })
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: '无法解析视频元数据，请确认文件未损坏且为有效的视频文件。'
+    });
+
+    expect(removeFileIfExists).toHaveBeenCalledWith(baseFile.path);
+    expect(Video.findOne).not.toHaveBeenCalled();
+    expect(Project.create).not.toHaveBeenCalled();
+    expect(Video.create).not.toHaveBeenCalled();
+  });
+
+  test('allows re-uploading the same original filename and file size', async () => {
+    getVideoMetadata.mockResolvedValue({
+      duration: 12,
+      durationSecondsExact: 12,
+      width: 1920,
+      height: 1080,
+      codec: 'h264',
+      engine: 'ffprobe'
+    });
+
+    const result = await createVideoFromUpload({
+      file: baseFile
+    });
+
+    expect(result).toMatchObject({
+      id: 301,
+      filename: 'demo.mp4',
+      file_url: '/uploads/videos/uploaded-demo.mp4',
+      file_size: 1024
+    });
+    expect(Project.create).toHaveBeenCalledTimes(1);
+    expect(Video.create).toHaveBeenCalledTimes(1);
+    expect(removeFileIfExists).not.toHaveBeenCalled();
   });
 });

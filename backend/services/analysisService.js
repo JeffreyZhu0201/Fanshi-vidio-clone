@@ -144,10 +144,12 @@ const getAnalysisRecordByVideoId = async (videoId) => {
   });
 };
 
-const optimizePrompt = async ({ prompt, characters }) => {
+const optimizePrompt = async ({ prompt, characters, backgrounds, mode = 'generation' }) => {
   const result = await optimizePromptWithGemini({
     prompt,
-    characters
+    characters,
+    backgrounds,
+    mode
   });
 
   return {

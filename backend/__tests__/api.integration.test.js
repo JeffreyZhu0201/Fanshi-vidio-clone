@@ -33,6 +33,10 @@ const generationServiceMock = {
   getGenerationTaskStatus: jest.fn()
 };
 
+const backgroundAssetServiceMock = {
+  listBackgroundAssetsByVideoId: jest.fn()
+};
+
 const mergeServiceMock = {
   startMerge: jest.fn(),
   getMergeTaskProgress: jest.fn(),
@@ -48,6 +52,7 @@ await jest.unstable_mockModule('../services/videoService.js', () => videoService
 await jest.unstable_mockModule('../services/analysisService.js', () => analysisServiceMock);
 await jest.unstable_mockModule('../services/segmentService.js', () => segmentServiceMock);
 await jest.unstable_mockModule('../services/generationService.js', () => generationServiceMock);
+await jest.unstable_mockModule('../services/backgroundAssetService.js', () => backgroundAssetServiceMock);
 await jest.unstable_mockModule('../services/mergeService.js', () => mergeServiceMock);
 await jest.unstable_mockModule('../services/taskService.js', () => taskServiceMock);
 
@@ -90,9 +95,30 @@ beforeEach(() => {
     video_id: 101,
     status: 'completed',
     plot: '测试剧情',
-    characters: [{ name: '主角', appearancePrompt: '电影感人物设定' }],
-    backgrounds: [{ description: '测试背景' }],
-    time_anchors: [{ startTime: 0, endTime: 4, sceneSummary: '镜头一' }],
+    characters: [
+      {
+        name: '主角',
+        appearancePrompt: '电影感人物设定',
+        representativeFrameTime: 1.2
+      }
+    ],
+    backgrounds: [
+      {
+        name: '测试场景',
+        description: '测试背景',
+        scenePrompt: '电影化测试场景提示词',
+        representativeFrameTime: 2.4
+      }
+    ],
+    time_anchors: [
+      {
+        startTime: 0,
+        endTime: 4,
+        sceneSummary: '镜头一',
+        scenePrompt: '镜头一场景提示词',
+        representativeFrameTime: 1.8
+      }
+    ],
     provider: 'remote-gemini',
     model: 'gemini-2.5-pro',
     mode: 'google',
@@ -105,9 +131,17 @@ beforeEach(() => {
     video_id: 101,
     status: 'completed',
     plot: '测试剧情',
-    characters: [{ name: '主角' }],
-    backgrounds: [{ description: '测试背景' }],
-    time_anchors: [{ startTime: 0, endTime: 4, sceneSummary: '镜头一' }],
+    characters: [{ name: '主角', representativeFrameTime: 1.2 }],
+    backgrounds: [{ name: '测试场景', description: '测试背景', scenePrompt: '电影化测试场景提示词' }],
+    time_anchors: [
+      {
+        startTime: 0,
+        endTime: 4,
+        sceneSummary: '镜头一',
+        scenePrompt: '镜头一场景提示词',
+        representativeFrameTime: 1.8
+      }
+    ],
     provider: 'remote-gemini',
     model: 'gemini-2.5-pro',
     mode: 'google',
@@ -161,6 +195,7 @@ beforeEach(() => {
     status: 'pending',
     progress: 0
   });
+  backgroundAssetServiceMock.listBackgroundAssetsByVideoId.mockResolvedValue([]);
   generationServiceMock.getGenerationTaskStatus.mockResolvedValue({
     task_id: 401,
     segment_id: 301,
@@ -247,7 +282,8 @@ describe('Backend API integration', () => {
     const fetchAnalysisResponse = await request(app).get('/api/analysis/101');
     const promptResponse = await request(app).post('/api/analysis/optimize-prompt').send({
       prompt: '主角 走进场景。',
-      characters: [{ name: '主角', appearancePrompt: '电影感人物设定' }]
+      characters: [{ name: '主角', appearancePrompt: '电影感人物设定' }],
+      backgrounds: [{ name: '测试场景', scenePrompt: '电影化测试场景提示词' }]
     });
 
     expect(analyzeResponse.status).toBe(200);
@@ -257,12 +293,26 @@ describe('Backend API integration', () => {
     expect(fetchAnalysisResponse.body.video_id).toBe(101);
     expect(promptResponse.status).toBe(200);
     expect(promptResponse.body.optimized_prompt).toContain('@主角');
+    expect(analysisServiceMock.optimizePrompt).toHaveBeenCalledWith({
+      prompt: '主角 走进场景。',
+      characters: [{ name: '主角', appearancePrompt: '电影感人物设定' }],
+      backgrounds: [{ name: '测试场景', scenePrompt: '电影化测试场景提示词' }],
+      mode: 'generation'
+    });
   });
 
   test('starts split and merge tasks and exposes task progress', async () => {
     const splitResponse = await request(app).post('/api/segments/split').send({
       video_id: 101,
-      time_anchors: [{ startTime: 0, endTime: 4, sceneSummary: '镜头一' }]
+      time_anchors: [
+        {
+          startTime: 0,
+          endTime: 4,
+          sceneSummary: '镜头一',
+          scenePrompt: '镜头一场景提示词',
+          representativeFrameTime: 1.8
+        }
+      ]
     });
     const taskResponse = await request(app).get('/api/tasks/split-task-001');
     const mergeResponse = await request(app).post('/api/merge/start').send({

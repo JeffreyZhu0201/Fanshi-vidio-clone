@@ -2,8 +2,11 @@ import { jest } from '@jest/globals';
 
 const getVideoRecordById = jest.fn();
 const resolveVideoAbsolutePath = jest.fn();
+const analyzeSegmentContent = jest.fn();
+const getAnalysisRecordByVideoId = jest.fn();
 
 const Segment = {
+  findByPk: jest.fn(),
   findAll: jest.fn(),
   destroy: jest.fn(),
   create: jest.fn()
@@ -25,8 +28,8 @@ await jest.unstable_mockModule('../services/videoService.js', () => ({
 }));
 
 await jest.unstable_mockModule('../services/analysisService.js', () => ({
-  analyzeSegmentContent: jest.fn(),
-  getAnalysisRecordByVideoId: jest.fn()
+  analyzeSegmentContent,
+  getAnalysisRecordByVideoId
 }));
 
 await jest.unstable_mockModule('../services/taskService.js', () => ({
@@ -45,7 +48,7 @@ await jest.unstable_mockModule('../services/fileService.js', () => ({
   toPublicUploadUrl: jest.fn((assetPath) => `/uploads/${assetPath}`)
 }));
 
-const { listSegmentsByVideoId } = await import('../services/segmentService.js');
+const { analyzeSegmentById, listSegmentsByVideoId } = await import('../services/segmentService.js');
 
 describe('segmentService', () => {
   beforeEach(() => {
@@ -53,6 +56,31 @@ describe('segmentService', () => {
 
     getVideoRecordById.mockResolvedValue({
       id: 101
+    });
+
+    getAnalysisRecordByVideoId.mockResolvedValue({
+      id: 501,
+      backgrounds: [
+        {
+          id: 'background_cafe',
+          name: '咖啡馆内景',
+          scenePrompt: '暖色咖啡馆场景提示词',
+          representativeFrameNote: '背景代表帧'
+        }
+      ],
+      timeAnchors: [
+        {
+          startTime: 0,
+          endTime: 4,
+          sceneSummary: '角色在咖啡馆里落座',
+          scenePrompt: '咖啡馆靠窗座位，暖色灯光',
+          backgroundId: 'background_cafe',
+          backgroundAction: 'create_new',
+          backgroundName: '咖啡馆内景',
+          representativeFrameTime: 1.6,
+          representativeFrameNote: '角色落座瞬间'
+        }
+      ]
     });
   });
 
@@ -113,6 +141,51 @@ describe('segmentService', () => {
       status: 'failed',
       prompt: '@主角 第二次尝试',
       error_message: 'Latest generation failed'
+    });
+  });
+
+  test('preserves scene binding metadata when re-analyzing a segment', async () => {
+    Segment.findByPk.mockResolvedValue({
+      id: 201,
+      videoId: 101,
+      segmentIndex: 0,
+      startTime: 0,
+      endTime: 4,
+      filePath: 'segments/source/demo-0.mp4',
+      analysis: {
+        backgroundId: 'background_cafe',
+        backgroundAction: 'create_new',
+        backgroundName: '咖啡馆内景',
+        backgroundPrompt: '暖色咖啡馆场景提示词',
+        sceneSummary: '角色在咖啡馆里落座',
+        scenePrompt: '咖啡馆靠窗座位，暖色灯光',
+        prompt: '@主角 在咖啡馆落座'
+      },
+      update: jest.fn().mockImplementation(function update(payload) {
+        this.analysis = payload.analysis;
+        return Promise.resolve(this);
+      })
+    });
+    analyzeSegmentContent.mockResolvedValue({
+      characters: ['主角'],
+      scene: '咖啡馆里人物情绪平稳',
+      action: '主角坐下并观察四周',
+      prompt: '@主角 坐在暖色咖啡馆靠窗座位，观察四周'
+    });
+    GenerationTask.findAll.mockResolvedValue([]);
+
+    const segment = await analyzeSegmentById(201);
+
+    expect(analyzeSegmentContent).toHaveBeenCalled();
+    expect(segment.analysis).toMatchObject({
+      backgroundId: 'background_cafe',
+      backgroundAction: 'create_new',
+      backgroundName: '咖啡馆内景',
+      backgroundPrompt: '暖色咖啡馆场景提示词',
+      sceneSummary: '角色在咖啡馆里落座',
+      scenePrompt: '咖啡馆靠窗座位，暖色灯光',
+      scene: '咖啡馆里人物情绪平稳',
+      action: '主角坐下并观察四周'
     });
   });
 });

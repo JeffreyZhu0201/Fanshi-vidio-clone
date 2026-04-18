@@ -14,6 +14,8 @@ const VideoMerge = ({
     errorMessage: '',
     updatedAt: ''
   },
+  className = '',
+  compactMode = false,
   onMerge,
   onDownload
 }) => {
@@ -26,26 +28,65 @@ const VideoMerge = ({
     <SectionPanel
       eyebrow="Merge"
       title="成片拼接"
-      description="拼接任务会优先使用已生成的片段，没有生成结果的片段会自动回退到原片内容。"
+      description={
+        compactMode
+          ? '优先使用已生成片段，缺失部分自动回退到原片。'
+          : '拼接任务会优先使用已生成的片段，没有生成结果的片段会自动回退到原片内容。'
+      }
       actions={<StatusBadge status={mergeProgress.status} />}
+      compact={compactMode}
+      className={className}
     >
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div className="rounded-[24px] border border-white/10 bg-black/25 px-4 py-4 text-white">
-          <p className="text-xs uppercase tracking-[0.24em] text-white/40">当前项目</p>
-          <p className="mt-2 text-sm font-semibold">{video?.filename || '未选择视频'}</p>
+      <div className="rounded-[22px] border border-white/10 bg-black/20 px-4 py-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-[0.24em] text-white/40">当前项目</p>
+            <p className="mt-2 truncate text-sm font-semibold text-white">{video?.filename || '未选择视频'}</p>
+            <p className="mt-1 text-[11px] leading-5 text-white/55">
+              优先使用已生成片段，缺失部分自动回退到原片内容，保证成片导出不断链。
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="rounded-full bg-gradient-to-r from-brand-500 to-accent-500 px-4 py-2.5 text-xs font-semibold text-white transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => void onMerge()}
+              disabled={!canMerge || isMerging}
+            >
+              {isMerging ? '拼接中...' : '开始拼接'}
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-xs font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={() => void onDownload()}
+              disabled={!isCompleted}
+            >
+              下载成片
+            </button>
+          </div>
         </div>
-        <div className="rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-4">
-          <p className="text-xs uppercase tracking-[0.24em] text-white/50">片段数量</p>
-          <p className="mt-2 text-xl font-bold text-white">{segments.length}</p>
-        </div>
-        <div className="rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-4">
-          <p className="text-xs uppercase tracking-[0.24em] text-white/50">已生成片段</p>
-          <p className="mt-2 text-xl font-bold text-white">{generatedSegments}</p>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          <div className="rounded-[16px] border border-white/10 bg-white/[0.04] px-3 py-2.5">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">片段数量</p>
+            <p className="mt-1 text-sm font-bold text-white">{segments.length}</p>
+          </div>
+          <div className="rounded-[16px] border border-white/10 bg-white/[0.04] px-3 py-2.5">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">已生成片段</p>
+            <p className="mt-1 text-sm font-bold text-white">{generatedSegments}</p>
+          </div>
+          <div className="rounded-[16px] border border-white/10 bg-white/[0.04] px-3 py-2.5">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">拼接状态</p>
+            <div className="mt-1">
+              <StatusBadge status={mergeProgress.status} />
+            </div>
+          </div>
         </div>
       </div>
 
       {mergeProgress.status !== 'idle' ? (
-        <div className="mt-4 rounded-[26px] border border-white/10 bg-white/[0.04] px-4 py-4">
+        <div className="mt-3 rounded-[22px] border border-white/10 bg-white/[0.04] px-4 py-3">
           <ProgressBar
             value={mergeProgress.progress}
             status={mergeProgress.status}
@@ -58,36 +99,17 @@ const VideoMerge = ({
       {mergeProgress.errorMessage ? (
         <div
           role="alert"
-          className="mt-4 rounded-[24px] border border-accent-500/20 bg-accent-500/10 px-4 py-3 text-sm text-rose-200"
+          className="mt-3 rounded-[20px] border border-accent-500/20 bg-accent-500/10 px-4 py-3 text-xs leading-5 text-rose-200"
         >
           {mergeProgress.errorMessage}
         </div>
       ) : null}
 
       {isCompleted ? (
-        <div className="mt-4 rounded-[24px] border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+        <div className="mt-3 rounded-[20px] border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-xs leading-5 text-emerald-200">
           拼接完成，可以直接下载成片。
         </div>
       ) : null}
-
-      <div className="mt-5 flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          className="rounded-full bg-gradient-to-r from-brand-500 to-accent-500 px-5 py-3 text-sm font-semibold text-white transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50"
-          onClick={() => void onMerge()}
-          disabled={!canMerge || isMerging}
-        >
-          {isMerging ? '拼接中...' : '开始拼接'}
-        </button>
-        <button
-          type="button"
-          className="rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
-          onClick={() => void onDownload()}
-          disabled={!isCompleted}
-        >
-          下载成片
-        </button>
-      </div>
     </SectionPanel>
   );
 };
@@ -110,6 +132,8 @@ VideoMerge.propTypes = {
     errorMessage: PropTypes.string,
     updatedAt: PropTypes.string
   }),
+  className: PropTypes.string,
+  compactMode: PropTypes.bool,
   onMerge: PropTypes.func.isRequired,
   onDownload: PropTypes.func.isRequired
 };

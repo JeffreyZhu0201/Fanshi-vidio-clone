@@ -50,21 +50,90 @@ const renderHighlightedPrompt = (prompt = '') => {
   );
 };
 
+const normalizeOptionalNumber = (value) => {
+  const parsedValue = Number(value);
+
+  if (!Number.isFinite(parsedValue) || parsedValue < 0) {
+    return null;
+  }
+
+  return Number(parsedValue.toFixed(2));
+};
+
+const normalizeOptionalString = (value, fallback = '') => {
+  const normalizedValue = String(value ?? '').trim();
+  return normalizedValue || fallback;
+};
+
+const normalizeBackgroundAction = (value) => {
+  const normalizedValue = String(value ?? '')
+    .trim()
+    .toLowerCase();
+
+  if (normalizedValue === 'create_new') {
+    return 'create_new';
+  }
+
+  if (normalizedValue === 'reuse_existing') {
+    return 'reuse_existing';
+  }
+
+  return '';
+};
+
+const normalizeSceneKey = (value) => {
+  return String(value ?? '')
+    .trim()
+    .replace(/\s+/gu, ' ')
+    .toLowerCase();
+};
+
+const getRepresentativeFrameTime = (startTime, endTime) => {
+  const safeStartTime = Math.max(0, Number(startTime) || 0);
+  const safeEndTime = Math.max(safeStartTime + 0.3, Number(endTime) || safeStartTime + 0.3);
+
+  return Number((safeStartTime + (safeEndTime - safeStartTime) / 2).toFixed(2));
+};
+
+const getMockScenePattern = (anchorCount) => {
+  if (anchorCount >= 4) {
+    return ['background_1', 'background_1', 'background_2', 'background_1'];
+  }
+
+  if (anchorCount === 3) {
+    return ['background_1', 'background_2', 'background_1'];
+  }
+
+  return Array.from({ length: anchorCount }, (_, index) => `background_${index + 1}`);
+};
+
 const buildMockTimeAnchors = (durationSeconds = 12) => {
   const safeDuration = Math.max(6, durationSeconds || 12);
   const segmentCount = Math.min(4, Math.max(2, Math.ceil(safeDuration / 4)));
   const segmentLength = Number((safeDuration / segmentCount).toFixed(2));
+  const mockScenePattern = getMockScenePattern(segmentCount);
+  const seenBackgroundIds = new Set();
 
   return Array.from({ length: segmentCount }, (_, index) => {
     const startTime = Number((index * segmentLength).toFixed(2));
     const endTime = Number(
       (index === segmentCount - 1 ? safeDuration : (index + 1) * segmentLength).toFixed(2)
     );
+    const representativeFrameTime = getRepresentativeFrameTime(startTime, endTime);
+    const backgroundId = mockScenePattern[index] || `background_${index + 1}`;
+    const backgroundName = backgroundId === 'background_1' ? '主场景' : '切换场景';
+    const backgroundAction = seenBackgroundIds.has(backgroundId) ? 'reuse_existing' : 'create_new';
+    seenBackgroundIds.add(backgroundId);
 
     return {
       startTime,
       endTime,
-      sceneSummary: `第 ${index + 1} 段镜头，围绕主角推进剧情。`
+      sceneSummary: `第 ${index + 1} 个片段，围绕主角推进一段完整动作与场景变化。`,
+      scenePrompt: `电影化片段场景，主角位于第 ${index + 1} 个片段的核心空间中，突出环境层次、主体关系、光线氛围与可直接复用的生成细节。`,
+      representativeFrameTime,
+      backgroundId,
+      backgroundAction,
+      backgroundName
     };
   });
 };
@@ -72,20 +141,39 @@ const buildMockTimeAnchors = (durationSeconds = 12) => {
 const createMockVideoAnalysis = ({ video, metadata }) => {
   const anchors = buildMockTimeAnchors(metadata.duration || 12);
   const baseName = video.filename.replace(/\.[^.]+$/, '');
+  const primaryFrameTime = anchors[0]?.representativeFrameTime ?? 1.2;
+  const backgrounds = Array.from(
+    anchors.reduce((accumulator, anchor) => {
+      if (accumulator.has(anchor.backgroundId)) {
+        return accumulator;
+      }
+
+      accumulator.set(anchor.backgroundId, {
+        id: anchor.backgroundId,
+        name: anchor.backgroundName,
+        description: `${anchor.sceneSummary}，场景氛围偏电影化，光线柔和，环境细节完整。`,
+        scenePrompt: `电影化 ${anchor.sceneSummary}，突出空间纵深、环境光线、布景层次、主体关系与适合直接复用的片段生成信息。`,
+        representativeFrameTime: anchor.representativeFrameTime,
+        representativeFrameNote: '该帧能够代表当前片段场景的空间结构、光线和布景细节。'
+      });
+
+      return accumulator;
+    }, new Map()).values()
+  );
 
   return {
-    plot: `${baseName} 的剧情围绕主角完成一个简短目标展开，整体节奏清晰，适合继续做片段级生成。`,
+    plot: `${baseName} 的剧情围绕主角完成一个简短目标展开，整体节奏清晰，便于后续按片段继续重生成。`,
     characters: [
       {
         id: 'character_main',
         name: '主角',
-        appearancePrompt: '一位年轻主角，面部轮廓清晰，表情自然，服装简洁，镜头感强'
+        appearancePrompt: '一位年轻主角，面部轮廓清晰，表情自然，服装简洁，镜头感强',
+        personalityPrompt: '冷静克制，观察力强，带一点疏离感但行动果断',
+        representativeFrameTime: primaryFrameTime,
+        representativeFrameNote: '该帧能稳定体现主角的整体造型、服装和面部特征。'
       }
     ],
-    backgrounds: anchors.map((anchor, index) => ({
-      id: `background_${index + 1}`,
-      description: `${anchor.sceneSummary}，场景氛围偏电影化，光线柔和，环境细节完整。`
-    })),
+    backgrounds,
     timeAnchors: anchors,
     geminiResponse: JSON.stringify({
       provider: 'mock-gemini',
@@ -120,43 +208,148 @@ const buildGeminiResponseEnvelope = ({
 
 const createMockSegmentAnalysis = ({ segment, overallAnalysis }) => {
   const characters = overallAnalysis?.characters ?? [];
+  const backgrounds = overallAnalysis?.backgrounds ?? [];
   const primaryCharacter = characters[0]?.name || '主角';
+  const fallbackSceneName =
+    segment?.analysis?.backgroundName ||
+    backgrounds.find((item) => String(item?.id ?? '').trim() === String(segment?.analysis?.backgroundId ?? '').trim())
+      ?.name ||
+    '主场景';
 
   return {
     characters: characters.map((item) => item.name || item),
+    scenes: [fallbackSceneName],
     scene: `片段 ${segment.segmentIndex + 1} 的场景延续整体剧情，强调环境氛围和镜头层次。`,
     action: `${primaryCharacter} 在当前片段中推进主要动作，镜头聚焦人物状态变化。`,
-    prompt: `@${primaryCharacter} 在 cinematic 风格场景中推进剧情，保持人物一致性、镜头连贯和环境细节。`
+    prompt: `@${primaryCharacter} 在 @${fallbackSceneName} 中推进剧情，保持人物一致性、镜头连贯和环境细节。`
   };
 };
 
-const createMockOptimizedPrompt = ({ prompt, characters }) => {
-  const normalizedCharacters = characters.map((item) =>
-    typeof item === 'string'
-      ? {
-          name: item,
-          appearancePrompt: item
-        }
-      : {
-          name: item.name,
-          appearancePrompt: item.appearancePrompt || item.appearance_prompt || item.name
-        }
-  );
+const normalizePromptOptimizationMode = (mode = '') => {
+  const normalizedMode = String(mode ?? '').trim();
+
+  if (['character_resource', 'scene_resource', 'generation'].includes(normalizedMode)) {
+    return normalizedMode;
+  }
+
+  return 'generation';
+};
+
+const createMockOptimizedPrompt = ({ prompt, characters, backgrounds, mode = 'generation' }) => {
+  const normalizedMode = normalizePromptOptimizationMode(mode);
+  const normalizedCharacters = (characters ?? [])
+    .map((item) =>
+      typeof item === 'string'
+        ? {
+            name: item,
+            appearancePrompt: item,
+            personalityPrompt: ''
+          }
+        : {
+            name: item?.name,
+            appearancePrompt: item?.appearancePrompt ?? item?.appearance_prompt ?? item?.name ?? '',
+            personalityPrompt:
+              item?.personalityPrompt ??
+              item?.personality_prompt ??
+              item?.temperament ??
+              item?.personality ??
+              item?.traits ??
+              ''
+          }
+    )
+    .filter((item) => item?.name);
+  const normalizedBackgrounds = (backgrounds ?? [])
+    .map((item, index) =>
+      typeof item === 'string'
+        ? {
+            name: `场景 ${index + 1}`
+          }
+        : {
+            name: item?.name || item?.title || item?.sceneName || item?.scene_name
+          }
+    )
+    .filter((item) => item?.name);
 
   let optimizedPrompt = prompt.trim();
 
-  normalizedCharacters.forEach((character) => {
-    if (!character.name) {
-      return;
-    }
+  if (normalizedMode === 'character_resource') {
+    const primaryCharacter = normalizedCharacters[0] ?? null;
 
-    const namePattern = new RegExp(`(?<!@)${escapeRegExp(character.name)}`, 'gu');
-    optimizedPrompt = optimizedPrompt.replace(namePattern, `@${character.name}`);
-  });
+    optimizedPrompt = [
+      primaryCharacter?.appearancePrompt ? `外表描述：${primaryCharacter.appearancePrompt}` : '',
+      primaryCharacter?.personalityPrompt ? `性格气质：${primaryCharacter.personalityPrompt}` : '',
+      '单人角色三视图设定，纯白无缝背景，全身完整入镜，中性站姿，写实电影角色美术风格，服装结构与面部特征稳定清晰。'
+    ]
+      .filter(Boolean)
+      .join('，');
+
+    return {
+      optimizedPrompt,
+      highlightedPrompt: renderHighlightedPrompt(optimizedPrompt)
+    };
+  }
+
+  if (normalizedMode === 'scene_resource') {
+    const primaryBackground = normalizedBackgrounds[0] ?? null;
+
+    optimizedPrompt = [
+      prompt.trim(),
+      primaryBackground?.name ? `场景名称：${primaryBackground.name}` : '',
+      '纯场景背景参考图，不要人物，不要文字，突出空间结构、光线、材质与纵深关系。'
+    ]
+      .filter(Boolean)
+      .join('，');
+
+    return {
+      optimizedPrompt,
+      highlightedPrompt: renderHighlightedPrompt(optimizedPrompt)
+    };
+  }
+
+  [...normalizedCharacters, ...normalizedBackgrounds]
+    .sort((left, right) => String(right.name).length - String(left.name).length)
+    .forEach((resource) => {
+      if (!resource.name) {
+        return;
+      }
+
+      const namePattern = new RegExp(`(?<!@)${escapeRegExp(resource.name)}`, 'gu');
+      optimizedPrompt = optimizedPrompt.replace(namePattern, `@${resource.name}`);
+    });
 
   return {
     optimizedPrompt,
     highlightedPrompt: renderHighlightedPrompt(optimizedPrompt)
+  };
+};
+
+const normalizeSceneNameList = (value) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => String(item ?? '').trim()).filter(Boolean);
+};
+
+const ensureSceneList = (sceneNames = [], fallbackSceneName = '') => {
+  const normalizedSceneNames = normalizeSceneNameList(sceneNames);
+
+  if (normalizedSceneNames.length) {
+    return normalizedSceneNames;
+  }
+
+  const fallback = String(fallbackSceneName ?? '').trim();
+
+  return fallback ? [fallback] : [];
+};
+
+const normalizeSegmentAnalysisPayload = (payload = {}, fallbackSceneName = '') => {
+  return {
+    characters: (payload.characters ?? []).map((item) => String(item).trim()).filter(Boolean),
+    scenes: ensureSceneList(payload.scenes, fallbackSceneName),
+    scene: String(payload.scene ?? '').trim(),
+    action: String(payload.action ?? '').trim(),
+    prompt: String(payload.prompt ?? '').trim()
   };
 };
 
@@ -216,7 +409,9 @@ const normalizeCharacter = (item, index) => {
     return {
       id: `character_${index + 1}`,
       name: item,
-      appearancePrompt: item
+      appearancePrompt: item,
+      representativeFrameTime: null,
+      representativeFrameNote: ''
     };
   }
 
@@ -229,7 +424,23 @@ const normalizeCharacter = (item, index) => {
   return {
     id: String(item.id ?? `character_${index + 1}`),
     name,
-    appearancePrompt: String(item.appearancePrompt ?? item.appearance_prompt ?? name).trim()
+    appearancePrompt: String(item.appearancePrompt ?? item.appearance_prompt ?? name).trim(),
+    personalityPrompt: normalizeOptionalString(
+      item.personalityPrompt ??
+        item.personality_prompt ??
+        item.temperament ??
+        item.personality ??
+        item.traits
+    ),
+    representativeFrameTime: normalizeOptionalNumber(
+      item.representativeFrameTime ?? item.representative_frame_time
+    ),
+    representativeFrameNote: normalizeOptionalString(
+      item.representativeFrameNote ??
+        item.representative_frame_note ??
+        item.representativeFrameReason ??
+        item.representative_frame_reason
+    )
   };
 };
 
@@ -241,11 +452,19 @@ const normalizeBackground = (item, index) => {
   if (typeof item === 'string') {
     return {
       id: `background_${index + 1}`,
-      description: item
+      name: `场景 ${index + 1}`,
+      description: item,
+      scenePrompt: item,
+      representativeFrameTime: null,
+      representativeFrameNote: ''
     };
   }
 
   const description = String(item.description ?? item.summary ?? '').trim();
+  const name = normalizeOptionalString(
+    item.name ?? item.title ?? item.sceneName ?? item.scene_name,
+    `场景 ${index + 1}`
+  );
 
   if (!description) {
     return null;
@@ -253,7 +472,18 @@ const normalizeBackground = (item, index) => {
 
   return {
     id: String(item.id ?? `background_${index + 1}`),
-    description
+    name,
+    description,
+    scenePrompt: normalizeOptionalString(item.scenePrompt ?? item.scene_prompt, description),
+    representativeFrameTime: normalizeOptionalNumber(
+      item.representativeFrameTime ?? item.representative_frame_time
+    ),
+    representativeFrameNote: normalizeOptionalString(
+      item.representativeFrameNote ??
+        item.representative_frame_note ??
+        item.representativeFrameReason ??
+        item.representative_frame_reason
+    )
   };
 };
 
@@ -265,12 +495,149 @@ const normalizeTimeAnchor = (item, index, fallbackDuration = 0) => {
   const startTime = Number(item.startTime ?? item.start_time ?? index * 3);
   const rawEndTime = Number(item.endTime ?? item.end_time ?? startTime + 3);
   const endTime = rawEndTime > startTime ? rawEndTime : startTime + 0.5;
-  const sceneSummary = String(item.sceneSummary ?? item.scene_summary ?? `镜头 ${index + 1}`).trim();
+  const sceneSummary = String(item.sceneSummary ?? item.scene_summary ?? `片段 ${index + 1}`).trim();
+  const normalizedEndTime = Number(
+    Math.min(Math.max(endTime, startTime + 0.5), fallbackDuration || endTime).toFixed(2)
+  );
+  const representativeFrameTime =
+    normalizeOptionalNumber(item.representativeFrameTime ?? item.representative_frame_time) ??
+    getRepresentativeFrameTime(startTime, normalizedEndTime);
 
   return {
     startTime: Number(Math.max(0, startTime).toFixed(2)),
-    endTime: Number(Math.min(Math.max(endTime, startTime + 0.5), fallbackDuration || endTime).toFixed(2)),
-    sceneSummary
+    endTime: normalizedEndTime,
+    sceneSummary,
+    scenePrompt: normalizeOptionalString(item.scenePrompt ?? item.scene_prompt, sceneSummary),
+    representativeFrameTime,
+    representativeFrameNote: normalizeOptionalString(
+      item.representativeFrameNote ??
+        item.representative_frame_note ??
+        item.representativeFrameReason ??
+        item.representative_frame_reason
+    ),
+    backgroundId: normalizeOptionalString(item.backgroundId ?? item.background_id),
+    backgroundAction: normalizeBackgroundAction(item.backgroundAction ?? item.background_action),
+    backgroundName: normalizeOptionalString(item.backgroundName ?? item.background_name)
+  };
+};
+
+const buildDerivedBackgroundFromAnchor = (anchor, index) => {
+  return normalizeBackground(
+    {
+      id: anchor.backgroundId || `background_${index + 1}`,
+      name: anchor.backgroundName || `场景 ${index + 1}`,
+      description: anchor.sceneSummary,
+      scenePrompt: anchor.scenePrompt,
+      representativeFrameTime: anchor.representativeFrameTime,
+      representativeFrameNote: anchor.representativeFrameNote
+    },
+    index
+  );
+};
+
+const hydrateSceneRelationships = ({ timeAnchors = [], backgrounds = [] }) => {
+  const backgroundList = backgrounds
+    .map((item, index) => normalizeBackground(item, index))
+    .filter(Boolean);
+  const backgroundById = new Map();
+  const backgroundKeyToId = new Map();
+  let nextBackgroundIndex = backgroundList.length;
+
+  backgroundList.forEach((background, index) => {
+    backgroundById.set(background.id, background);
+    [background.id, background.name, background.scenePrompt, background.description].forEach((value) => {
+      const normalizedKey = normalizeSceneKey(value);
+
+      if (normalizedKey && !backgroundKeyToId.has(normalizedKey)) {
+        backgroundKeyToId.set(normalizedKey, background.id);
+      }
+    });
+
+    nextBackgroundIndex = Math.max(nextBackgroundIndex, index + 1);
+  });
+
+  const getOrCreateBackground = (anchor, index) => {
+    const lookupKeys = [
+      anchor.backgroundId,
+      anchor.backgroundName,
+      anchor.scenePrompt,
+      anchor.sceneSummary
+    ]
+      .map(normalizeSceneKey)
+      .filter(Boolean);
+    const explicitBackgroundId =
+      anchor.backgroundId && backgroundById.has(anchor.backgroundId) ? anchor.backgroundId : '';
+
+    if (explicitBackgroundId) {
+      return backgroundById.get(explicitBackgroundId);
+    }
+
+    const matchedBackgroundId = lookupKeys.find((key) => backgroundKeyToId.has(key))
+      ? backgroundKeyToId.get(lookupKeys.find((key) => backgroundKeyToId.has(key)))
+      : '';
+
+    if (matchedBackgroundId && backgroundById.has(matchedBackgroundId)) {
+      return backgroundById.get(matchedBackgroundId);
+    }
+
+    if (!anchor.backgroundId && !anchor.backgroundName && backgroundList.length === 1) {
+      return backgroundList[0];
+    }
+
+    let candidateId = anchor.backgroundId || `background_${nextBackgroundIndex + 1}`;
+
+    while (backgroundById.has(candidateId)) {
+      nextBackgroundIndex += 1;
+      candidateId = `background_${nextBackgroundIndex + 1}`;
+    }
+
+    nextBackgroundIndex += 1;
+
+    const derivedBackground = buildDerivedBackgroundFromAnchor(
+      {
+        ...anchor,
+        backgroundId: candidateId
+      },
+      index
+    );
+
+    backgroundList.push(derivedBackground);
+    backgroundById.set(derivedBackground.id, derivedBackground);
+
+    [derivedBackground.id, derivedBackground.name, derivedBackground.scenePrompt, derivedBackground.description]
+      .map(normalizeSceneKey)
+      .filter(Boolean)
+      .forEach((key) => {
+        if (!backgroundKeyToId.has(key)) {
+          backgroundKeyToId.set(key, derivedBackground.id);
+        }
+      });
+
+    return derivedBackground;
+  };
+
+  const firstBackgroundUsage = new Set();
+  const hydratedTimeAnchors = timeAnchors.map((anchor, index) => {
+    const background = getOrCreateBackground(anchor, index);
+    const backgroundId = background?.id || anchor.backgroundId || `background_${index + 1}`;
+    const backgroundName = anchor.backgroundName || background?.name || `场景 ${index + 1}`;
+    const normalizedAction = firstBackgroundUsage.has(backgroundId)
+      ? 'reuse_existing'
+      : 'create_new';
+
+    firstBackgroundUsage.add(backgroundId);
+
+    return {
+      ...anchor,
+      backgroundId,
+      backgroundName,
+      backgroundAction: normalizedAction
+    };
+  });
+
+  return {
+    backgrounds: backgroundList,
+    timeAnchors: hydratedTimeAnchors
   };
 };
 
@@ -498,9 +865,38 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
     JSON.stringify(
       {
         plot: 'string',
-        characters: [{ id: 'character_1', name: '角色名', appearancePrompt: '角色完整形象设定' }],
-        backgrounds: [{ id: 'background_1', description: '镜头或场景背景描述' }],
-        timeAnchors: [{ startTime: 0, endTime: 3.2, sceneSummary: '镜头摘要' }]
+        characters: [
+          {
+            id: 'character_1',
+            name: '角色名',
+            appearancePrompt: '角色完整形象设定',
+            personalityPrompt: '角色的性格气质设定',
+            representativeFrameTime: 1.2,
+            representativeFrameNote: '该角色的典型帧说明'
+          }
+        ],
+        backgrounds: [
+          {
+            id: 'background_1',
+            name: '场景名称',
+            description: '片段或场景背景描述',
+            scenePrompt: '可直接用于生成该场景的中文提示词',
+            representativeFrameTime: 2.8,
+            representativeFrameNote: '该场景的典型帧说明'
+          }
+        ],
+        timeAnchors: [
+          {
+            startTime: 0,
+            endTime: 3.2,
+            sceneSummary: '片段解释',
+            scenePrompt: '该片段可直接复用的场景提示词',
+            representativeFrameTime: 1.6,
+            backgroundId: 'background_1',
+            backgroundAction: 'create_new',
+            backgroundName: '场景名称'
+          }
+        ]
       },
       null,
       2
@@ -510,25 +906,46 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
     '要求：',
     '1. plot 用中文概括整条视频的主要剧情、事件推进和结局走向，适合后续片段生成使用。',
     '2. characters 至少提取主要角色，name 要稳定，appearancePrompt 必须是可直接用于视频生成的人物外观设定。',
-    '3. backgrounds 需要概括主要场景、环境氛围、光线、天气、布景和空间信息。',
-    '4. timeAnchors 必须覆盖完整视频，startTime 和 endTime 为数字秒，严格按时间升序，不要重叠，不要遗漏关键镜头。',
-    '5. 每个 timeAnchor 都要给出 sceneSummary，概括该时间段发生的核心画面和动作。',
-    '6. 如果角色较少，也至少保证 characters 返回 1 个对象。',
-    '7. 输出必须是合法 JSON，字段名保持与示例完全一致。'
+    '3. 每个 character 还必须返回 personalityPrompt，用中文概括角色的性格气质、情绪底色、行为风格或表演状态，方便后续角色资源与生成提示词复用。',
+    '4. 每个 character 都要返回 representativeFrameTime，表示最能代表该角色外观的时间点（单位秒）；representativeFrameNote 简要说明为什么选择该帧。',
+    '5. backgrounds 需要概括主要场景、环境氛围、光线、天气、布景和空间信息，name 为方便前端展示的场景名称。',
+    '6. 每个 background 都要返回 scenePrompt，内容是可直接用于生成该场景的中文场景提示词，同时返回 representativeFrameTime 和 representativeFrameNote。',
+    '7. 先识别整片有哪些可复用场景，并把它们沉淀到 backgrounds 这个场景资源库里。',
+    '8. timeAnchors 必须覆盖完整视频，startTime 和 endTime 为数字秒，严格按时间升序，不要重叠，不要遗漏关键内容。',
+    '9. 片段切分必须以场景切换为硬边界；只有在同一场景内动作阶段明显不同且确实需要独立生成时，才继续细分。',
+    '10. 每个 timeAnchor 代表一个后续可独立生成的片段，而不是纯观感镜头；片段边界要尽量保证动作完整、人物连续、场景切换清晰、前后文衔接稳定。',
+    '11. 避免输出明显过短且没有独立生成价值的片段；如果视频较短，也要保证切分结果仍然覆盖全片。',
+    '12. 每个 timeAnchor 都要给出 sceneSummary 和 scenePrompt；sceneSummary 用中文解释该片段发生了什么，scenePrompt 必须是可直接复用的片段场景提示词，包含场景、光线、主体关系、空间结构和镜头氛围，不要只写事件摘要。',
+    '13. 每个 timeAnchor 都必须绑定 backgroundId、backgroundAction、backgroundName。',
+    '14. 同一 backgroundId 首次出现的片段标记为 create_new，后续再次出现的同场景片段标记为 reuse_existing。',
+    '15. 每个 timeAnchor 都要返回 representativeFrameTime，且该时间点必须落在 startTime 到 endTime 之间；优先选择最适合做预览、最能代表人物或场景的画面，而不是机械取中点。',
+    '16. 如果同一场景在多个片段重复出现，允许每个片段返回更贴合该片段语境的 scenePrompt，但 backgroundId 必须保持一致。',
+    '17. 如果角色较少，也至少保证 characters 返回 1 个对象。',
+    '18. 输出必须是合法 JSON，字段名保持与示例完全一致。'
   ].join('\n');
 };
 
 const buildSegmentAnalysisPrompt = ({ segment, overallAnalysis }) => {
+  const currentBackgroundBinding = {
+    backgroundId: segment?.analysis?.backgroundId ?? '',
+    backgroundAction: segment?.analysis?.backgroundAction ?? '',
+    backgroundName: segment?.analysis?.backgroundName ?? '',
+    backgroundPrompt: segment?.analysis?.backgroundPrompt ?? '',
+    scenePrompt: segment?.analysis?.scenePrompt ?? '',
+    sceneSummary: segment?.analysis?.sceneSummary ?? ''
+  };
+
   return [
-    '你是一名资深短视频镜头拆解助手。',
+    '你是一名资深短视频片段拆解助手。',
     '请分析输入的视频片段，并严格返回 JSON，不要输出 Markdown、解释或额外文本。',
     '返回结构必须完全符合：',
     JSON.stringify(
       {
         characters: ['角色名'],
+        scenes: ['场景名称'],
         scene: '片段场景描述',
         action: '片段主要动作描述',
-        prompt: '@角色名 + 场景 + 动作 + 镜头语言 的可编辑中文提示词'
+        prompt: '@角色名 + @场景名 + 动作 + 镜头语言 的可编辑中文提示词'
       },
       null,
       2
@@ -537,33 +954,94 @@ const buildSegmentAnalysisPrompt = ({ segment, overallAnalysis }) => {
     `片段时间：${segment.startTime} - ${segment.endTime} 秒`,
     `整片剧情摘要：${overallAnalysis?.plot ?? '暂无'}`,
     `整片角色设定：${JSON.stringify(overallAnalysis?.characters ?? [])}`,
+    `整片场景资源库：${JSON.stringify(overallAnalysis?.backgrounds ?? [])}`,
+    `当前片段绑定场景：${JSON.stringify(currentBackgroundBinding)}`,
     '要求：',
     '1. characters 返回当前片段真正出现或应重点关注的角色名称列表。',
-    '2. prompt 必须为后续视频生成可直接编辑的中文提示词。',
-    '3. prompt 中涉及角色时，用 @角色名 标记，而不是展开成长描述。',
-    '4. 输出必须是有效 JSON。'
+    '2. scenes 返回当前片段涉及到的场景资源名称，必须优先复用整片场景资源库里的原始名称，并按叙事出现顺序返回。',
+    '3. prompt 必须为后续视频生成可直接编辑的中文提示词。',
+    '4. prompt 中涉及角色时，用 @角色名 标记，而不是展开成长描述。',
+    '5. prompt 中涉及场景时，用 @场景名 标记，而不是直接展开真实场景资源提示词。',
+    '6. 如果片段中出现多个场景，请在 scenes 中列全，并在 prompt 里按顺序引用对应的 @场景名。',
+    '7. 当前片段必须服从已绑定的 backgroundId/backgroundAction/backgroundName，不要重新发明新的场景决策。',
+    '8. 如果当前片段标记为 reuse_existing，需要在 scene 和 prompt 中强调延续同一场景资源，只变化动作、表演或镜头阶段。',
+    '9. 输出必须是有效 JSON。'
   ].join('\n');
 };
 
-const buildPromptOptimizationPrompt = ({ prompt, characters }) => {
+const buildPromptOptimizationPrompt = ({ prompt, characters, backgrounds, mode = 'generation' }) => {
+  const normalizedMode = normalizePromptOptimizationMode(mode);
+
+  if (normalizedMode === 'character_resource') {
+    return [
+      '你是一名角色资源提示词优化助手。',
+      '请把下面的角色描述整理为适合 Gemini 生图模型生成角色三视图的中文提示词，并严格返回 JSON。',
+      '不要输出 Markdown，不要输出解释，不要输出额外文本。',
+      '返回结构必须完全符合：',
+      JSON.stringify(
+        {
+          optimizedPrompt: '外表描述 + 性格气质 + 纯白背景角色三视图要求'
+        },
+        null,
+        2
+      ),
+      `原始提示词：${prompt}`,
+      `角色列表：${JSON.stringify(characters ?? [])}`,
+      '要求：',
+      '1. 只围绕角色本身优化，不要引入任何场景、环境、道具或镜头叙事。',
+      '2. 必须综合角色的外貌描述和性格气质，整理为单人角色三视图资源提示词。',
+      '3. 明确纯白无缝背景、全身完整入镜、中性站姿、正面/侧面/背面都可复用。',
+      '4. 不要使用 @场景名，也不要引入任何场景资源。',
+      '5. 不必使用 @角色名，直接输出纯角色资源提示词正文。',
+      '6. 只返回 JSON。'
+    ].join('\n');
+  }
+
+  if (normalizedMode === 'scene_resource') {
+    return [
+      '你是一名场景资源提示词优化助手。',
+      '请把下面的场景描述整理为适合 Gemini 生图模型生成背景参考图的中文提示词，并严格返回 JSON。',
+      '不要输出 Markdown，不要输出解释，不要输出额外文本。',
+      '返回结构必须完全符合：',
+      JSON.stringify(
+        {
+          optimizedPrompt: '纯场景背景参考图提示词'
+        },
+        null,
+        2
+      ),
+      `原始提示词：${prompt}`,
+      `场景资源库：${JSON.stringify(backgrounds ?? [])}`,
+      '要求：',
+      '1. 只优化场景本身，不要引入人物或角色动作。',
+      '2. 强调空间结构、材质、光线、景深和镜头角度兼容性。',
+      '3. 输出适合作为多角度背景参考图的纯场景提示词。',
+      '4. 不要使用 @角色名 或 @场景名。',
+      '5. 只返回 JSON。'
+    ].join('\n');
+  }
+
   return [
     '你是一名视频生成提示词优化助手。',
     '请优化下面的提示词，并严格返回 JSON，不要输出 Markdown 或额外解释。',
     '返回结构必须完全符合：',
     JSON.stringify(
       {
-        optimizedPrompt: '@角色名 出现在更清晰的镜头描述中'
+        optimizedPrompt: '@角色名 在 @场景名 中完成更清晰的镜头描述'
       },
       null,
       2
     ),
     `原始提示词：${prompt}`,
     `角色列表：${JSON.stringify(characters ?? [])}`,
+    `场景资源库：${JSON.stringify(backgrounds ?? [])}`,
     '要求：',
     '1. 保持中文输出。',
     '2. 所有角色名称统一替换成 @角色名。',
-    '3. 提示词要更适合视频生成，补足镜头、场景、动作、氛围，但不要改变核心语义。',
-    '4. 只返回 JSON。'
+    '3. 如果提示词中出现了场景资源库中的场景名称，也统一替换成 @场景名。',
+    '4. 如果原始提示词已经包含 @角色名 或 @场景名，继续保留这种引用形式，不要把资源提示词正文直接展开。',
+    '5. 提示词要更适合视频生成或资源设计，补足镜头、场景、动作、氛围，但不要改变核心语义。',
+    '6. 只返回 JSON。'
   ].join('\n');
 };
 
@@ -591,14 +1069,23 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath }) => {
       (parsedPayload.timeAnchors ?? parsedPayload.time_anchors ?? [])
         .map((item, index) => normalizeTimeAnchor(item, index, Number(metadata.duration) || 0))
         .filter(Boolean) || [];
+    const normalizedBackgrounds = (parsedPayload.backgrounds ?? []).filter(Boolean);
+    const hydratedScenePayload = hydrateSceneRelationships({
+      timeAnchors: normalizedTimeAnchors,
+      backgrounds: normalizedBackgrounds
+    });
+    const derivedTimeAnchors = hydratedScenePayload.timeAnchors.length
+      ? hydratedScenePayload.timeAnchors
+      : buildMockTimeAnchors(metadata.duration || 12);
+    const derivedBackgrounds = hydratedScenePayload.backgrounds.length
+      ? hydratedScenePayload.backgrounds
+      : derivedTimeAnchors.map(buildDerivedBackgroundFromAnchor).filter(Boolean);
 
     return {
       plot: String(parsedPayload.plot ?? '').trim(),
       characters: (parsedPayload.characters ?? []).map(normalizeCharacter).filter(Boolean),
-      backgrounds: (parsedPayload.backgrounds ?? []).map(normalizeBackground).filter(Boolean),
-      timeAnchors: normalizedTimeAnchors.length
-        ? normalizedTimeAnchors
-        : buildMockTimeAnchors(metadata.duration || 12),
+      backgrounds: derivedBackgrounds.filter(Boolean),
+      timeAnchors: derivedTimeAnchors,
       geminiResponse: buildGeminiResponseEnvelope({
         provider: 'remote-gemini',
         model: env.GEMINI_MODEL,
@@ -646,13 +1133,9 @@ const analyzeSegment = async ({ segment, overallAnalysis, segmentAbsolutePath = 
       model: env.GEMINI_SEGMENT_MODEL || env.GEMINI_MODEL
     });
     const parsedPayload = parseJsonPayload(responseText, '片段分析模型');
+    const fallbackSceneName = String(segment?.analysis?.backgroundName ?? '').trim();
 
-    return {
-      characters: (parsedPayload.characters ?? []).map((item) => String(item).trim()).filter(Boolean),
-      scene: String(parsedPayload.scene ?? '').trim(),
-      action: String(parsedPayload.action ?? '').trim(),
-      prompt: String(parsedPayload.prompt ?? '').trim()
-    };
+    return normalizeSegmentAnalysisPayload(parsedPayload, fallbackSceneName);
   } catch (error) {
     if (shouldUseStrictRemoteGemini()) {
       throw error;
@@ -665,14 +1148,14 @@ const analyzeSegment = async ({ segment, overallAnalysis, segmentAbsolutePath = 
   }
 };
 
-const optimizePrompt = async ({ prompt, characters }) => {
+const optimizePrompt = async ({ prompt, characters, backgrounds, mode = 'generation' }) => {
   if (!canUseRemoteGemini) {
-    return createMockOptimizedPrompt({ prompt, characters });
+    return createMockOptimizedPrompt({ prompt, characters, backgrounds, mode });
   }
 
   try {
     const { responseText } = await callRemoteGemini({
-      prompt: buildPromptOptimizationPrompt({ prompt, characters })
+      prompt: buildPromptOptimizationPrompt({ prompt, characters, backgrounds, mode })
     });
     const parsedPayload = parseJsonPayload(responseText, '提示词优化模型');
     const optimizedPrompt = String(parsedPayload.optimizedPrompt ?? prompt).trim() || prompt;
@@ -689,7 +1172,7 @@ const optimizePrompt = async ({ prompt, characters }) => {
     logger.warn('Remote Gemini optimizePrompt failed, using mock prompt optimization instead.', {
       message: error.message
     });
-    return createMockOptimizedPrompt({ prompt, characters });
+    return createMockOptimizedPrompt({ prompt, characters, backgrounds, mode });
   }
 };
 

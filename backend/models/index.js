@@ -1,5 +1,6 @@
 import { sequelize } from '../config/database.js';
 import defineAnalysisModel from './Analysis.js';
+import defineBackgroundAssetModel from './BackgroundAsset.js';
 import defineGenerationTaskModel from './GenerationTask.js';
 import defineProjectModel from './Project.js';
 import defineSegmentModel from './Segment.js';
@@ -11,6 +12,7 @@ const modelRegistry = {
   Project: defineProjectModel(sequelize),
   Video: defineVideoModel(sequelize),
   Analysis: defineAnalysisModel(sequelize),
+  BackgroundAsset: defineBackgroundAssetModel(sequelize),
   Segment: defineSegmentModel(sequelize),
   GenerationTask: defineGenerationTaskModel(sequelize)
 };
@@ -34,7 +36,7 @@ const initializeModels = () => {
 
 initializeModels();
 
-const { Project, Video, Analysis, Segment, GenerationTask } = modelRegistry;
+const { Project, Video, Analysis, BackgroundAsset, Segment, GenerationTask } = modelRegistry;
 
 export {
   modelRegistry,
@@ -42,6 +44,7 @@ export {
   Project,
   Video,
   Analysis,
+  BackgroundAsset,
   Segment,
   GenerationTask
 };

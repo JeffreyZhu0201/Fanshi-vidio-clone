@@ -19,6 +19,10 @@ const createDurationLimitErrorMessage = () => {
   return `视频时长不能超过 ${durationMinutes} 分钟。`;
 };
 
+const createInvalidUploadMetadataErrorMessage = () => {
+  return '无法解析视频元数据，请确认文件未损坏且为有效的视频文件。';
+};
+
 const serializeVideo = (video, { metadata = null } = {}) => ({
   id: video.id,
   filename: video.filename,
@@ -53,22 +57,26 @@ const ensureUploadDurationWithinLimit = (metadata = {}) => {
   }
 };
 
-const ensureUploadIsNotDuplicate = async ({ filename, fileSize }) => {
-  const duplicateVideo = await Video.findOne({
-    where: {
-      filename,
-      fileSize
-    },
-    order: [['createdAt', 'DESC']]
-  });
+const ensureUploadMetadataIsValid = (metadata = {}) => {
+  const comparableDurationSeconds = getComparableDurationSeconds(metadata);
+  const width = Number(metadata.width);
+  const height = Number(metadata.height);
+  const codec = typeof metadata.codec === 'string' ? metadata.codec.trim() : '';
+  const hasVisualTrackShape = Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0;
+  const hasProbeBackedDuration = Number.isFinite(comparableDurationSeconds) && comparableDurationSeconds > 0;
 
-  if (duplicateVideo) {
-    throw new AppError('已存在同名且大小一致的视频，请勿重复上传。', 409, {
-      existing_video_id: duplicateVideo.id,
-      filename,
-      file_size: fileSize
-    });
+  if (hasProbeBackedDuration && (hasVisualTrackShape || codec)) {
+    return;
   }
+
+  throw new AppError(createInvalidUploadMetadataErrorMessage(), 400, {
+    engine: metadata.engine ?? null,
+    duration: metadata.duration ?? null,
+    duration_seconds_exact: metadata.durationSecondsExact ?? null,
+    width: metadata.width ?? null,
+    height: metadata.height ?? null,
+    codec: metadata.codec ?? null
+  });
 };
 
 const ensureProject = async ({ projectId, projectName, filename }) => {
@@ -100,11 +108,8 @@ const createVideoFromUpload = async ({ file, projectId, projectName }) => {
 
   try {
     const metadata = await getVideoMetadata(file.path);
+    ensureUploadMetadataIsValid(metadata);
     ensureUploadDurationWithinLimit(metadata);
-    await ensureUploadIsNotDuplicate({
-      filename: file.originalname,
-      fileSize: file.size
-    });
 
     const project = await ensureProject({
       projectId,

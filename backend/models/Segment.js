@@ -77,7 +77,7 @@ const defineSegmentModel = (sequelize) => {
     }
   );
 
-  Segment.associate = ({ Video, GenerationTask }) => {
+  Segment.associate = ({ Video, BackgroundAsset, GenerationTask }) => {
     if (Video) {
       Segment.belongsTo(Video, {
         foreignKey: 'videoId',
@@ -91,6 +91,15 @@ const defineSegmentModel = (sequelize) => {
         foreignKey: 'segmentId',
         as: 'generationTasks',
         onDelete: 'CASCADE',
+        hooks: true
+      });
+    }
+
+    if (BackgroundAsset) {
+      Segment.hasMany(BackgroundAsset, {
+        foreignKey: 'sourceSegmentId',
+        as: 'backgroundAssets',
+        onDelete: 'SET NULL',
         hooks: true
       });
     }

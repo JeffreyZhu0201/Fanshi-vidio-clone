@@ -41,12 +41,149 @@ const serializeSegment = (segment, latestCompletedGenerationTask = null, latestA
 
 const normalizeTimeAnchors = (timeAnchors) => {
   return (timeAnchors ?? [])
-    .map((item, index) => ({
-      startTime: Number(item.startTime ?? item.start_time),
-      endTime: Number(item.endTime ?? item.end_time),
-      sceneSummary: item.sceneSummary ?? item.scene_summary ?? `Segment ${index + 1}`
-    }))
+    .map((item, index) => {
+      const representativeFrameTime = Number(
+        item.representativeFrameTime ?? item.representative_frame_time
+      );
+
+      return {
+        startTime: Number(item.startTime ?? item.start_time),
+        endTime: Number(item.endTime ?? item.end_time),
+        sceneSummary: item.sceneSummary ?? item.scene_summary ?? `Segment ${index + 1}`,
+        scenePrompt: item.scenePrompt ?? item.scene_prompt ?? '',
+        representativeFrameTime:
+          Number.isFinite(representativeFrameTime) && representativeFrameTime >= 0
+            ? representativeFrameTime
+            : null,
+        representativeFrameNote:
+          item.representativeFrameNote ?? item.representative_frame_note ?? '',
+        backgroundId: String(item.backgroundId ?? item.background_id ?? '').trim(),
+        backgroundAction: String(item.backgroundAction ?? item.background_action ?? '').trim(),
+        backgroundName: String(item.backgroundName ?? item.background_name ?? '').trim()
+      };
+    })
     .sort((left, right) => left.startTime - right.startTime);
+};
+
+const getBackgroundLibraryById = (overallAnalysis) => {
+  return new Map(
+    (overallAnalysis?.backgrounds ?? [])
+      .filter(Boolean)
+      .map((background, index) => [
+        String(background.id ?? `background_${index + 1}`),
+        {
+          id: String(background.id ?? `background_${index + 1}`),
+          name: String(background.name ?? `场景 ${index + 1}`),
+          description: String(background.description ?? background.summary ?? '').trim(),
+          scenePrompt: String(background.scenePrompt ?? background.scene_prompt ?? '').trim(),
+          representativeFrameTime: Number(
+            background.representativeFrameTime ?? background.representative_frame_time
+          ),
+          representativeFrameNote: String(
+            background.representativeFrameNote ?? background.representative_frame_note ?? ''
+          ).trim()
+        }
+      ])
+  );
+};
+
+const normalizeSceneNameList = (value) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => String(item ?? '').trim()).filter(Boolean);
+};
+
+const buildBaseSegmentAnalysis = ({ segment, timeAnchor = {}, overallAnalysis, previousAnalysis = {} }) => {
+  const backgroundLibrary = getBackgroundLibraryById(overallAnalysis);
+  const backgroundId =
+    String(
+      timeAnchor.backgroundId ??
+        timeAnchor.background_id ??
+        previousAnalysis.backgroundId ??
+        previousAnalysis.background_id ??
+        ''
+    ).trim() || `background_${Number(segment.segmentIndex) + 1}`;
+  const background = backgroundLibrary.get(backgroundId);
+  const sceneSummary =
+    String(timeAnchor.sceneSummary ?? timeAnchor.scene_summary ?? previousAnalysis.sceneSummary ?? '').trim() ||
+    previousAnalysis.scene ||
+    '';
+  const scenePrompt =
+    String(timeAnchor.scenePrompt ?? timeAnchor.scene_prompt ?? previousAnalysis.scenePrompt ?? '').trim() ||
+    previousAnalysis.prompt ||
+    '';
+  const representativeFrameTime = Number(
+    timeAnchor.representativeFrameTime ??
+      timeAnchor.representative_frame_time ??
+      previousAnalysis.representativeFrameTime
+  );
+  const backgroundName =
+    String(
+      timeAnchor.backgroundName ??
+        timeAnchor.background_name ??
+        previousAnalysis.backgroundName ??
+        previousAnalysis.background_name ??
+        background?.name ??
+        `场景 ${Number(segment.segmentIndex) + 1}`
+    ).trim() || `场景 ${Number(segment.segmentIndex) + 1}`;
+  const scenes = normalizeSceneNameList(previousAnalysis.scenes);
+
+  return {
+    sceneSummary,
+    scenePrompt,
+    backgroundId,
+    backgroundAction:
+      String(
+        timeAnchor.backgroundAction ??
+          timeAnchor.background_action ??
+          previousAnalysis.backgroundAction ??
+          previousAnalysis.background_action ??
+          ''
+      ).trim() || 'create_new',
+    backgroundName,
+    backgroundPrompt:
+      String(previousAnalysis.backgroundPrompt ?? background?.scenePrompt ?? scenePrompt ?? '').trim() ||
+      scenePrompt,
+    representativeFrameTime:
+      Number.isFinite(representativeFrameTime) && representativeFrameTime >= 0
+        ? Number(representativeFrameTime.toFixed(2))
+        : null,
+    representativeFrameNote: String(
+      timeAnchor.representativeFrameNote ??
+        timeAnchor.representative_frame_note ??
+        previousAnalysis.representativeFrameNote ??
+        background?.representativeFrameNote ??
+        ''
+    ).trim(),
+    scenes: scenes.length ? scenes : backgroundName ? [backgroundName] : [],
+    characters: Array.isArray(previousAnalysis.characters) ? previousAnalysis.characters : [],
+    scene: String(previousAnalysis.scene ?? sceneSummary).trim(),
+    action: String(previousAnalysis.action ?? '').trim(),
+    prompt: String(previousAnalysis.prompt ?? scenePrompt).trim()
+  };
+};
+
+const mergeSegmentAnalysis = ({ baseAnalysis, nextSegmentAnalysis = {} }) => {
+  return {
+    ...baseAnalysis,
+    scenes:
+      Array.isArray(nextSegmentAnalysis.scenes) && nextSegmentAnalysis.scenes.length
+        ? nextSegmentAnalysis.scenes
+        : baseAnalysis.scenes ?? [],
+    characters:
+      Array.isArray(nextSegmentAnalysis.characters) && nextSegmentAnalysis.characters.length
+        ? nextSegmentAnalysis.characters
+        : baseAnalysis.characters ?? [],
+    scene: String(nextSegmentAnalysis.scene ?? '').trim() || baseAnalysis.scene || baseAnalysis.sceneSummary,
+    action: String(nextSegmentAnalysis.action ?? '').trim() || baseAnalysis.action || '',
+    prompt:
+      String(nextSegmentAnalysis.prompt ?? '').trim() ||
+      baseAnalysis.prompt ||
+      baseAnalysis.scenePrompt ||
+      baseAnalysis.backgroundPrompt
+  };
 };
 
 const getSegmentRecordById = async (segmentId, options = {}) => {
@@ -137,10 +274,23 @@ const processSplitTask = async (taskId, videoId, timeAnchors) => {
     const createdSegments = [];
 
     for (const segmentInfo of splitSegments) {
-      const segmentAnalysis = await analyzeSegmentContent({
+      const timeAnchor = normalizedAnchors[segmentInfo.segmentIndex] ?? {};
+      const baseSegmentAnalysis = buildBaseSegmentAnalysis({
         segment: segmentInfo,
+        timeAnchor,
+        overallAnalysis
+      });
+      const analyzedSegment = await analyzeSegmentContent({
+        segment: {
+          ...segmentInfo,
+          analysis: baseSegmentAnalysis
+        },
         overallAnalysis,
         segmentAbsolutePath: resolveUploadPath(segmentInfo.filePath)
+      });
+      const segmentAnalysis = mergeSegmentAnalysis({
+        baseAnalysis: baseSegmentAnalysis,
+        nextSegmentAnalysis: analyzedSegment
       });
 
       const segment = await Segment.create({
@@ -207,7 +357,8 @@ const analyzeSegmentById = async (segmentId) => {
     });
   }
 
-  const nextSegmentAnalysis = await analyzeSegmentContent({
+  const timeAnchor = normalizeTimeAnchors(overallAnalysis.timeAnchors ?? [])[segment.segmentIndex] ?? {};
+  const baseSegmentAnalysis = buildBaseSegmentAnalysis({
     segment: {
       id: segment.id,
       segmentIndex: segment.segmentIndex,
@@ -215,15 +366,28 @@ const analyzeSegmentById = async (segmentId) => {
       endTime: Number(segment.endTime),
       filePath: segment.filePath
     },
+    timeAnchor,
+    overallAnalysis,
+    previousAnalysis: segment.analysis ?? {}
+  });
+  const nextSegmentAnalysis = await analyzeSegmentContent({
+    segment: {
+      id: segment.id,
+      segmentIndex: segment.segmentIndex,
+      startTime: Number(segment.startTime),
+      endTime: Number(segment.endTime),
+      filePath: segment.filePath,
+      analysis: baseSegmentAnalysis
+    },
     overallAnalysis,
     segmentAbsolutePath: resolveUploadPath(segment.filePath)
   });
 
   await segment.update({
-    analysis: {
-      ...(segment.analysis ?? {}),
-      ...nextSegmentAnalysis
-    }
+    analysis: mergeSegmentAnalysis({
+      baseAnalysis: baseSegmentAnalysis,
+      nextSegmentAnalysis
+    })
   });
 
   const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestTasksBySegmentIds([
