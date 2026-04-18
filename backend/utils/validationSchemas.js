@@ -27,6 +27,7 @@ const analyzeVideoBodySchema = Joi.object({
 
 const optimizePromptBodySchema = Joi.object({
   prompt: Joi.string().trim().min(1).required(),
+  mode: Joi.string().trim().valid('generation', 'character_resource', 'scene_resource').default('generation'),
   characters: Joi.array()
     .items(
       Joi.alternatives().try(
@@ -35,7 +36,32 @@ const optimizePromptBodySchema = Joi.object({
           id: Joi.string().trim().allow(''),
           name: Joi.string().trim().required(),
           appearancePrompt: Joi.string().trim().allow(''),
-          appearance_prompt: Joi.string().trim().allow('')
+          appearance_prompt: Joi.string().trim().allow(''),
+          personalityPrompt: Joi.string().trim().allow(''),
+          personality_prompt: Joi.string().trim().allow(''),
+          temperament: Joi.string().trim().allow(''),
+          personality: Joi.string().trim().allow(''),
+          traits: Joi.string().trim().allow('')
+        })
+      )
+    )
+    .default([]),
+  backgrounds: Joi.array()
+    .items(
+      Joi.alternatives().try(
+        Joi.string().trim().min(1),
+        Joi.object({
+          id: Joi.string().trim().allow(''),
+          name: Joi.string().trim().allow(''),
+          title: Joi.string().trim().allow(''),
+          sceneName: Joi.string().trim().allow(''),
+          scene_name: Joi.string().trim().allow(''),
+          scenePrompt: Joi.string().trim().allow(''),
+          scene_prompt: Joi.string().trim().allow(''),
+          backgroundPrompt: Joi.string().trim().allow(''),
+          background_prompt: Joi.string().trim().allow(''),
+          description: Joi.string().trim().allow(''),
+          summary: Joi.string().trim().allow('')
         })
       )
     )

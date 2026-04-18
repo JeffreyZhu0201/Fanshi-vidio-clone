@@ -100,9 +100,12 @@ const buildResetGenerationState = () => {
 
   return {
     segments: [],
+    backgroundAssets: [],
     tasks: [],
     mergeProgress: nextMergeProgress,
     splitProgress: nextSplitProgress,
+    backgroundAssetsLoading: false,
+    backgroundAssetsError: '',
     segmentsLoading: false,
     segmentsError: ''
   };
@@ -110,9 +113,12 @@ const buildResetGenerationState = () => {
 
 const useGenerationStore = create((set) => ({
   segments: [],
+  backgroundAssets: [],
   tasks: [],
   mergeProgress: createInitialProgressState('等待拼接'),
   splitProgress: createInitialProgressState('等待分割'),
+  backgroundAssetsLoading: false,
+  backgroundAssetsError: '',
   segmentsLoading: false,
   segmentsError: '',
   setSegments: (segments) =>
@@ -132,6 +138,21 @@ const useGenerationStore = create((set) => ({
           : segment
       )
     })),
+  setBackgroundAssets: (backgroundAssets) =>
+    set({
+      backgroundAssets,
+      backgroundAssetsLoading: false,
+      backgroundAssetsError: ''
+    }),
+  setBackgroundAssetsLoading: (backgroundAssetsLoading) =>
+    set({
+      backgroundAssetsLoading
+    }),
+  setBackgroundAssetsError: (backgroundAssetsError) =>
+    set({
+      backgroundAssetsError,
+      backgroundAssetsLoading: false
+    }),
   addTask: (task) =>
     set((state) => ({
       tasks: [task, ...state.tasks.filter((item) => item.task_id !== task.task_id)]

@@ -1,5 +1,4 @@
-const runtimeEnv =
-  typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : {};
+const runtimeEnv = typeof __APP_ENV__ !== 'undefined' ? __APP_ENV__ : {};
 
 const getEnv = (key, fallbackValue = '') => {
   if (runtimeEnv[key] !== undefined) {

@@ -73,7 +73,7 @@ const defineVideoModel = (sequelize) => {
     }
   );
 
-  Video.associate = ({ Project, Analysis, Segment }) => {
+  Video.associate = ({ Project, Analysis, BackgroundAsset, Segment }) => {
     if (Project) {
       Video.belongsTo(Project, {
         foreignKey: 'projectId',
@@ -95,6 +95,15 @@ const defineVideoModel = (sequelize) => {
       Video.hasMany(Segment, {
         foreignKey: 'videoId',
         as: 'segments',
+        onDelete: 'CASCADE',
+        hooks: true
+      });
+    }
+
+    if (BackgroundAsset) {
+      Video.hasMany(BackgroundAsset, {
+        foreignKey: 'videoId',
+        as: 'backgroundAssets',
         onDelete: 'CASCADE',
         hooks: true
       });

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import multer from 'multer';
 
@@ -11,17 +11,28 @@ import {
 } from '../config/constants.js';
 import { AppError } from './errorHandler.js';
 
+const createHashedUploadFilename = (file) => {
+  const originalExtension = path.extname(file.originalname).toLowerCase();
+  const safeExtension = ALLOWED_VIDEO_EXTENSIONS.includes(originalExtension)
+    ? originalExtension
+    : '.mp4';
+  const hashSeed = [
+    file.originalname,
+    file.mimetype,
+    Date.now(),
+    randomUUID()
+  ].join('::');
+  const hashedFilename = createHash('sha256').update(hashSeed).digest('hex');
+
+  return `${hashedFilename}${safeExtension}`;
+};
+
 const storage = multer.diskStorage({
   destination: (_request, _file, callback) => {
     callback(null, UPLOAD_DIRECTORIES.videos);
   },
   filename: (_request, file, callback) => {
-    const originalExtension = path.extname(file.originalname).toLowerCase();
-    const safeExtension = ALLOWED_VIDEO_EXTENSIONS.includes(originalExtension)
-      ? originalExtension
-      : '.mp4';
-
-    callback(null, `${Date.now()}-${randomUUID()}${safeExtension}`);
+    callback(null, createHashedUploadFilename(file));
   }
 });
 
@@ -51,4 +62,4 @@ const uploadVideo = multer({
   }
 });
 
-export { uploadVideo };
+export { createHashedUploadFilename, uploadVideo };

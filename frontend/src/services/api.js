@@ -2,9 +2,15 @@ import axios from 'axios';
 
 import { getEnv } from '../utils/env.js';
 
+const normalizeTimeout = (value, fallbackValue) => {
+  const parsedValue = Number(value);
+  return Number.isFinite(parsedValue) && parsedValue >= 0 ? parsedValue : fallbackValue;
+};
+
 const API_BASE_URL = getEnv('VITE_API_BASE_URL', 'http://localhost:5000/api');
-const API_TIMEOUT = Number(getEnv('VITE_API_TIMEOUT', '30000'));
-const ANALYSIS_TIMEOUT = Number(getEnv('VITE_ANALYSIS_TIMEOUT', '600000'));
+const API_TIMEOUT = normalizeTimeout(getEnv('VITE_API_TIMEOUT', '30000'), 30000);
+const ANALYSIS_TIMEOUT = normalizeTimeout(getEnv('VITE_ANALYSIS_TIMEOUT', '600000'), 600000);
+const UPLOAD_TIMEOUT = normalizeTimeout(getEnv('VITE_UPLOAD_TIMEOUT', '0'), 0);
 const MAX_RETRIES = 3;
 const RETRYABLE_METHODS = new Set(['get', 'head', 'options']);
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
@@ -19,12 +25,21 @@ const resolveRuntimeOrigin = () => {
 
 const API_ORIGIN = new URL(API_BASE_URL, resolveRuntimeOrigin()).origin;
 
+const getTimeoutErrorMessage = (requestLabel = '') => {
+  if (requestLabel === 'upload') {
+    return '上传超时，请检查网络连接，或调大 VITE_UPLOAD_TIMEOUT 后重试。';
+  }
+
+  return '请求超时，请稍后重试。';
+};
+
 const createApiError = (error) => {
+  const requestLabel = String(error.config?.__requestLabel || '').trim().toLowerCase();
   const message =
     error.response?.data?.message ||
     error.response?.data?.error ||
     (error.code === 'ECONNABORTED'
-      ? '请求超时，请稍后重试。'
+      ? getTimeoutErrorMessage(requestLabel)
       : '当前无法连接到服务端，请检查网络或后端服务状态。');
 
   const normalizedError = new Error(message);
@@ -131,9 +146,11 @@ const uploadVideo = async (file, options = {}) => {
   }
 
   const response = await api.post('/videos/upload', formData, {
+    __requestLabel: 'upload',
     headers: {
       'Content-Type': 'multipart/form-data'
     },
+    timeout: UPLOAD_TIMEOUT,
     onUploadProgress: options.onUploadProgress
   });
 
@@ -156,15 +173,22 @@ const getAnalysis = async (videoId) => {
   return response.data;
 };
 
+const getBackgroundAssets = async (videoId) => {
+  const response = await api.get(`/background-assets/${videoId}`);
+  return response.data;
+};
+
 const getVideo = async (videoId) => {
   const response = await api.get(`/videos/${videoId}`);
   return response.data;
 };
 
-const optimizePrompt = async (prompt, characters = []) => {
+const optimizePrompt = async (prompt, characters = [], backgrounds = [], options = {}) => {
   const response = await api.post('/analysis/optimize-prompt', {
     prompt,
-    characters
+    characters,
+    backgrounds,
+    ...(options.mode ? { mode: options.mode } : {})
   });
 
   return response.data;
@@ -238,6 +262,7 @@ export {
   downloadVideo,
   generateSegment,
   getAnalysis,
+  getBackgroundAssets,
   getGenerationTask,
   getMergeProgress,
   getSegments,

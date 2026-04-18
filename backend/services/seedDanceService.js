@@ -101,23 +101,35 @@ const downloadRemoteVideoToUploads = async (remoteUrl, basename) => {
   };
 };
 
-const createRemoteGenerationTask = async ({ prompt, sourcePublicUrl = '' }) => {
+const createRemoteGenerationTask = async ({ prompt, sourcePublicUrl = '', referenceVideos = [] }) => {
   const content = [
     {
       type: 'text',
       text: prompt
     }
   ];
+  const normalizedReferenceVideos = [...referenceVideos];
 
-  if (/^https?:\/\//iu.test(sourcePublicUrl)) {
-    content.push({
-      type: 'video_url',
-      video_url: {
-        url: sourcePublicUrl
-      },
+  if (sourcePublicUrl && !normalizedReferenceVideos.some((item) => item?.url === sourcePublicUrl)) {
+    normalizedReferenceVideos.unshift({
+      url: sourcePublicUrl,
       role: 'reference_video'
     });
   }
+
+  normalizedReferenceVideos.forEach((referenceVideo) => {
+    if (!/^https?:\/\//iu.test(referenceVideo?.url ?? '')) {
+      return;
+    }
+
+    content.push({
+      type: 'video_url',
+      video_url: {
+        url: referenceVideo.url
+      },
+      role: referenceVideo.role || 'reference_video'
+    });
+  });
 
   return fetchSeedDanceJson(resolveSeedDanceCreateEndpoint(), {
     method: 'POST',
@@ -167,7 +179,8 @@ const generateSegment = async ({
   sourceAbsolutePath,
   sourcePublicUrl = '',
   prompt,
-  basename = 'generated-segment'
+  basename = 'generated-segment',
+  referenceVideos = []
 }) => {
   const extension = path.extname(sourceAbsolutePath) || '.mp4';
 
@@ -175,7 +188,8 @@ const generateSegment = async ({
     try {
       const createResult = await createRemoteGenerationTask({
         prompt,
-        sourcePublicUrl
+        sourcePublicUrl,
+        referenceVideos
       });
       const taskId = createResult.id ?? createResult.task_id ?? '';
 

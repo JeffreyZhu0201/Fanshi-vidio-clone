@@ -123,7 +123,8 @@ describe('realtime context filtering', () => {
     useVideoStore.setState({
       currentVideo: {
         id: 101,
-        filename: 'current.mp4'
+        filename: 'current.mp4',
+        status: 'analyzed'
       }
     });
 

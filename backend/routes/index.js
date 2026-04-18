@@ -10,6 +10,7 @@ import { validateRequest } from '../middleware/validation.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { monitoringEventBodySchema } from '../utils/validationSchemas.js';
 import analysisRouter from './analysis.js';
+import backgroundAssetsRouter from './backgroundAssets.js';
 import generationRouter from './generation.js';
 import mergeRouter from './merge.js';
 import segmentsRouter from './segments.js';
@@ -28,6 +29,7 @@ router.post(
 );
 router.use('/videos', videoRouter);
 router.use('/analysis', analysisRouter);
+router.use('/background-assets', backgroundAssetsRouter);
 router.use('/segments', segmentsRouter);
 router.use('/generation', generationRouter);
 router.use('/merge', mergeRouter);

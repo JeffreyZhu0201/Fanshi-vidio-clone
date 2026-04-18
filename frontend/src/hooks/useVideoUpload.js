@@ -14,28 +14,6 @@ const uploadDurationLimitSeconds = 600;
 const allowedMimeTypes = new Set(['video/mp4', 'video/quicktime', 'video/x-msvideo']);
 const allowedExtensions = ['.mp4', '.mov', '.avi'];
 
-const collectKnownVideos = ({ currentVideo, videos }) => {
-  const currentVideoEntry = currentVideo ? [currentVideo] : [];
-  const knownVideos = [...currentVideoEntry, ...(videos ?? [])];
-  const uniqueVideoMap = new Map();
-
-  knownVideos.forEach((video) => {
-    if (video?.id) {
-      uniqueVideoMap.set(video.id, video);
-      return;
-    }
-
-    uniqueVideoMap.set(`${video?.filename ?? 'unknown'}-${video?.file_size ?? video?.fileSize ?? 0}`, video);
-  });
-
-  return [...uniqueVideoMap.values()];
-};
-
-const getKnownVideoFileSize = (video) => {
-  const comparableFileSize = Number(video?.file_size ?? video?.fileSize ?? 0);
-  return Number.isFinite(comparableFileSize) && comparableFileSize > 0 ? comparableFileSize : 0;
-};
-
 const probeVideoDurationSeconds = async (file) => {
   if (
     typeof document === 'undefined' ||
@@ -84,7 +62,7 @@ const probeVideoDurationSeconds = async (file) => {
   }
 };
 
-const validateVideoFile = async (file, { currentVideo, videos } = {}) => {
+const validateVideoFile = async (file) => {
   if (!file) {
     return '请先选择一个视频文件。';
   }
@@ -100,18 +78,6 @@ const validateVideoFile = async (file, { currentVideo, videos } = {}) => {
 
   if (file.size > uploadLimit) {
     return `文件大小不能超过 ${formatBytes(uploadLimit)}。`;
-  }
-
-  const knownVideos = collectKnownVideos({
-    currentVideo,
-    videos
-  });
-  const duplicateVideo = knownVideos.find((video) => {
-    return video?.filename === file.name && getKnownVideoFileSize(video) === file.size;
-  });
-
-  if (duplicateVideo) {
-    return '当前项目中已存在同名且大小一致的视频，请勿重复上传。';
   }
 
   const durationSeconds = await probeVideoDurationSeconds(file);
@@ -157,10 +123,7 @@ const useVideoUpload = () => {
   }, [setUploadState, updateProgress]);
 
   const uploadSelectedFile = async (file) => {
-    const validationError = await validateVideoFile(file, {
-      currentVideo,
-      videos
-    });
+    const validationError = await validateVideoFile(file);
 
     if (validationError) {
       setUploadState({
@@ -212,7 +175,7 @@ const useVideoUpload = () => {
       setValidationMessage(`上传完成，当前视频 ID：${video.id}`);
       return video;
     } catch (error) {
-      setValidationMessage('上传失败，请稍后重试。');
+      setValidationMessage(error?.isTimeout ? '上传超时，请检查网络后重试。' : '上传失败，请稍后重试。');
       websocketService.emitLocal('upload:progress', {
         progress: 0,
         status: 'error',

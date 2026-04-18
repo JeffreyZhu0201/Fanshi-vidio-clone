@@ -189,6 +189,11 @@ const useAnalysis = () => {
       return undefined;
     }
 
+    if (currentVideo.status !== 'analyzed') {
+      clearAnalysis();
+      return undefined;
+    }
+
     let active = true;
 
     const hydrateExistingAnalysis = async () => {

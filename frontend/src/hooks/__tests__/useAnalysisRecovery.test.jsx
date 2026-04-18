@@ -132,21 +132,40 @@ describe('useAnalysis recovery flow', () => {
     });
 
     const { result, unmount } = renderHook(() => useAnalysis());
-
-    await waitFor(() => {
-      expect(getAnalysis).toHaveBeenCalledWith(501);
-    });
+    expect(getAnalysis).not.toHaveBeenCalled();
 
     await act(async () => {
       await result.current.runAnalysis();
     });
 
     expect(analyzeVideo).toHaveBeenCalledWith(501);
+    expect(getAnalysis).toHaveBeenCalledWith(501);
     expect(sleep).toHaveBeenCalled();
     expect(useAnalysisStore.getState().analysis).toEqual(analysisPayload);
     expect(useAnalysisStore.getState().status).toBe('completed');
     expect(useAnalysisStore.getState().error).toBe('');
     expect(useVideoStore.getState().currentVideo.status).toBe('analyzed');
+
+    unmount();
+  });
+
+  it('does not hydrate analysis before the current video enters analyzed state', async () => {
+    useVideoStore.setState({
+      currentVideo: {
+        id: 504,
+        filename: 'analysis-not-ready.mp4',
+        status: 'uploaded'
+      }
+    });
+
+    const { unmount } = renderHook(() => useAnalysis());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(getAnalysis).not.toHaveBeenCalled();
+    expect(useAnalysisStore.getState().analysis).toBeNull();
 
     unmount();
   });
@@ -164,10 +183,7 @@ describe('useAnalysis recovery flow', () => {
     });
 
     const { result, unmount } = renderHook(() => useAnalysis());
-
-    await waitFor(() => {
-      expect(getAnalysis).toHaveBeenCalledWith(502);
-    });
+    expect(getAnalysis).not.toHaveBeenCalled();
 
     let runResult;
 
@@ -205,10 +221,7 @@ describe('useAnalysis recovery flow', () => {
     });
 
     const { result, unmount } = renderHook(() => useAnalysis());
-
-    await waitFor(() => {
-      expect(getAnalysis).toHaveBeenCalledWith(503);
-    });
+    expect(getAnalysis).not.toHaveBeenCalled();
 
     let runResultPromise;
 

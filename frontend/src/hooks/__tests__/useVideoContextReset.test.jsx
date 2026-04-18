@@ -254,12 +254,10 @@ describe('video context reset', () => {
     });
 
     await waitFor(() => {
-      expect(getAnalysis).toHaveBeenCalledWith(newVideo.id);
-    });
-
-    await waitFor(() => {
       expect(getSegments).toHaveBeenCalledWith(newVideo.id);
     });
+
+    expect(getAnalysis).not.toHaveBeenCalledWith(newVideo.id);
 
     expect(useAnalysisStore.getState().analysis).toBeNull();
     expect(useGenerationStore.getState().segments).toEqual([]);
@@ -361,12 +359,10 @@ describe('video context reset', () => {
     });
 
     await waitFor(() => {
-      expect(getAnalysis).toHaveBeenCalledWith(newVideo.id);
-    });
-
-    await waitFor(() => {
       expect(getSegments).toHaveBeenCalledWith(newVideo.id);
     });
+
+    expect(getAnalysis).not.toHaveBeenCalledWith(newVideo.id);
 
     expect(useAnalysisStore.getState().analysis).toBeNull();
     expect(useGenerationStore.getState().segments).toEqual([]);

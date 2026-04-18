@@ -106,6 +106,13 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    define: {
+      __APP_ENV__: JSON.stringify(
+        Object.fromEntries(
+          Object.entries(env).filter(([key]) => key.startsWith('VITE_'))
+        )
+      )
+    },
     server: {
       host: devHost,
       port: 5173,

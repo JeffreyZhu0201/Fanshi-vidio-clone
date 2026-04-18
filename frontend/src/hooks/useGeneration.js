@@ -4,6 +4,7 @@ import {
   analyzeSegment,
   downloadVideo,
   generateSegment,
+  getBackgroundAssets,
   getGenerationTask,
   getMergeProgress,
   mergeVideos,
@@ -37,16 +38,47 @@ const getGenerationErrorMessage = (error, phase = '片段生成') => {
   return error?.message || `${phase}失败，请稍后重试。`;
 };
 
+const normalizeBackgroundAsset = (backgroundAsset) => {
+  return {
+    id: backgroundAsset.id,
+    videoId: Number(backgroundAsset.video_id),
+    backgroundId: backgroundAsset.background_id ?? '',
+    assetType: backgroundAsset.asset_type ?? 'reference_video',
+    status: backgroundAsset.status ?? 'pending',
+    name: backgroundAsset.name ?? '',
+    description: backgroundAsset.description ?? '',
+    scenePrompt: backgroundAsset.scene_prompt ?? '',
+    assetPath: backgroundAsset.asset_path ?? '',
+    assetUrl: toAbsoluteAssetUrl(backgroundAsset.asset_url),
+    sourceSegmentId: Number(backgroundAsset.source_segment_id ?? 0) || null,
+    representativeFrameTime:
+      Number.isFinite(Number(backgroundAsset.representative_frame_time)) &&
+      Number(backgroundAsset.representative_frame_time) >= 0
+        ? Number(Number(backgroundAsset.representative_frame_time).toFixed(2))
+        : null,
+    errorMessage: backgroundAsset.error_message ?? '',
+    meta: backgroundAsset.meta ?? {},
+    createdAt: backgroundAsset.created_at,
+    updatedAt: backgroundAsset.updated_at
+  };
+};
+
 const useGeneration = () => {
   const currentVideo = useVideoStore((state) => state.currentVideo);
   const analysis = useAnalysisStore((state) => state.analysis);
   const segments = useGenerationStore((state) => state.segments);
+  const backgroundAssets = useGenerationStore((state) => state.backgroundAssets);
+  const backgroundAssetsLoading = useGenerationStore((state) => state.backgroundAssetsLoading);
+  const backgroundAssetsError = useGenerationStore((state) => state.backgroundAssetsError);
   const tasks = useGenerationStore((state) => state.tasks);
   const mergeProgress = useGenerationStore((state) => state.mergeProgress);
   const updateSegment = useGenerationStore((state) => state.updateSegment);
   const addTask = useGenerationStore((state) => state.addTask);
   const beginMergeProgress = useGenerationStore((state) => state.beginMergeProgress);
   const resetMergeProgress = useGenerationStore((state) => state.resetMergeProgress);
+  const setBackgroundAssets = useGenerationStore((state) => state.setBackgroundAssets);
+  const setBackgroundAssetsLoading = useGenerationStore((state) => state.setBackgroundAssetsLoading);
+  const setBackgroundAssetsError = useGenerationStore((state) => state.setBackgroundAssetsError);
   const updateTask = useGenerationStore((state) => state.updateTask);
   const setMergeProgress = useGenerationStore((state) => state.setMergeProgress);
   const setSegmentsError = useGenerationStore((state) => state.setSegmentsError);
@@ -54,6 +86,7 @@ const useGeneration = () => {
   const [optimizingSegmentId, setOptimizingSegmentId] = useState(0);
   const [generatingSegmentIds, setGeneratingSegmentIds] = useState([]);
   const characters = analysis?.characters ?? [];
+  const backgrounds = analysis?.backgrounds ?? [];
   const mountedRef = useRef(false);
   const activeVideoIdRef = useRef(currentVideo?.id ?? null);
   const previousVideoIdRef = useRef(currentVideo?.id ?? null);
@@ -337,6 +370,45 @@ const useGeneration = () => {
     };
   }, [beginMergeProgress, currentVideo?.id, resetMergeProgress, setMergeProgress]);
 
+  const refreshBackgroundAssets = async (videoId = Number(currentVideo?.id ?? 0), options = {}) => {
+    if (!videoId) {
+      setBackgroundAssets([]);
+      return [];
+    }
+
+    if (!options.silent) {
+      setBackgroundAssetsLoading(true);
+      setBackgroundAssetsError('');
+    }
+
+    try {
+      const assetPayload = await getBackgroundAssets(videoId);
+
+      if (Number(useVideoStore.getState().currentVideo?.id ?? activeVideoIdRef.current ?? 0) !== Number(videoId)) {
+        return [];
+      }
+
+      const normalizedBackgroundAssets = assetPayload.map(normalizeBackgroundAsset);
+      setBackgroundAssets(normalizedBackgroundAssets);
+      return normalizedBackgroundAssets;
+    } catch (error) {
+      if (Number(useVideoStore.getState().currentVideo?.id ?? activeVideoIdRef.current ?? 0) === Number(videoId)) {
+        setBackgroundAssetsError(getGenerationErrorMessage(error, '背景资产加载'));
+      }
+
+      return [];
+    }
+  };
+
+  useEffect(() => {
+    if (!currentVideo?.id) {
+      setBackgroundAssets([]);
+      return;
+    }
+
+    void refreshBackgroundAssets(Number(currentVideo.id));
+  }, [currentVideo?.id, setBackgroundAssets]);
+
   const setSegmentPrompt = (segmentId, prompt) => {
     updateSegment(segmentId, {
       prompt
@@ -365,9 +437,20 @@ const useGeneration = () => {
 
       updateSegment(segmentId, {
         scene: analyzedSegment.analysis?.scene ?? segment.scene,
+        scenes: analyzedSegment.analysis?.scenes ?? segment.scenes ?? [],
         action: analyzedSegment.analysis?.action ?? segment.action,
         prompt: analyzedSegment.analysis?.prompt ?? segment.prompt,
         characters: analyzedSegment.analysis?.characters ?? segment.characters,
+        sceneSummary: analyzedSegment.analysis?.sceneSummary ?? segment.sceneSummary,
+        scenePrompt: analyzedSegment.analysis?.scenePrompt ?? segment.scenePrompt,
+        backgroundId: analyzedSegment.analysis?.backgroundId ?? segment.backgroundId,
+        backgroundAction: analyzedSegment.analysis?.backgroundAction ?? segment.backgroundAction,
+        backgroundName: analyzedSegment.analysis?.backgroundName ?? segment.backgroundName,
+        backgroundPrompt: analyzedSegment.analysis?.backgroundPrompt ?? segment.backgroundPrompt,
+        representativeFrameTime:
+          analyzedSegment.analysis?.representativeFrameTime ?? segment.representativeFrameTime,
+        representativeFrameNote:
+          analyzedSegment.analysis?.representativeFrameNote ?? segment.representativeFrameNote,
         highlightedPrompt: '',
         latestCompletedGenerationTask: analyzedSegment.latest_generation_task
           ? {
@@ -441,7 +524,7 @@ const useGeneration = () => {
     }
 
     try {
-      const optimizedPayload = await optimizePrompt(sourcePrompt, characters);
+      const optimizedPayload = await optimizePrompt(sourcePrompt, characters, backgrounds);
 
       if (isVideoScopedRequestCancelled(requestToken, requestVideoId, optimizeRequestTokenRef)) {
         return null;
@@ -515,6 +598,11 @@ const useGeneration = () => {
         ...startPayload,
         segment_id: segmentId
       });
+      window.setTimeout(() => {
+        void refreshBackgroundAssets(requestVideoId, {
+          silent: true
+        });
+      }, 500);
 
       while (!isGenerationPollingCancelled(segmentId, requestToken, requestVideoId)) {
         let taskPayload;
@@ -540,6 +628,9 @@ const useGeneration = () => {
         websocketService.emitLocal('generation:progress', taskPayload);
 
         if (taskPayload.status === 'completed' || taskPayload.status === 'failed') {
+          void refreshBackgroundAssets(requestVideoId, {
+            silent: true
+          });
           return taskPayload;
         }
 
@@ -678,6 +769,9 @@ const useGeneration = () => {
   };
 
   return {
+    backgroundAssets,
+    backgroundAssetsLoading,
+    backgroundAssetsError,
     tasks,
     mergeProgress,
     analyzingSegmentId,
@@ -687,6 +781,7 @@ const useGeneration = () => {
     analyzeSegmentById,
     optimizeSegmentPrompt,
     generateSegmentVideo,
+    refreshBackgroundAssets,
     startMerge,
     downloadMergedVideo
   };

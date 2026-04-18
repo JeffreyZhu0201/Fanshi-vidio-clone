@@ -139,7 +139,8 @@ describe('useVideoUpload validation', () => {
     websocketService.__reset();
   });
 
-  it('rejects duplicate uploads before calling the backend', async () => {
+  it('allows uploading a file even when the current project already has the same name and size', async () => {
+    const restoreMetadataProbe = mockVideoMetadataProbe(12);
     useVideoStore.setState({
       currentVideo: {
         id: 901,
@@ -148,6 +149,12 @@ describe('useVideoUpload validation', () => {
         status: 'uploaded'
       },
       videos: []
+    });
+    uploadVideo.mockResolvedValue({
+      id: 902,
+      filename: 'duplicate.mp4',
+      file_size: 4,
+      status: 'uploaded'
     });
 
     const { result, unmount } = renderHook(() => useVideoUpload());
@@ -159,11 +166,17 @@ describe('useVideoUpload validation', () => {
       uploadResult = await result.current.uploadSelectedFile(file);
     });
 
-    expect(uploadResult).toBeNull();
-    expect(uploadVideo).not.toHaveBeenCalled();
-    expect(useVideoStore.getState().uploadStatus).toBe('error');
-    expect(useVideoStore.getState().uploadError).toBe('当前项目中已存在同名且大小一致的视频，请勿重复上传。');
+    expect(uploadResult).toEqual({
+      id: 902,
+      filename: 'duplicate.mp4',
+      file_size: 4,
+      status: 'uploaded'
+    });
+    expect(uploadVideo).toHaveBeenCalledTimes(1);
+    expect(useVideoStore.getState().uploadStatus).toBe('completed');
+    expect(useVideoStore.getState().uploadError).toBe('');
 
+    restoreMetadataProbe();
     unmount();
   });
 
@@ -182,6 +195,36 @@ describe('useVideoUpload validation', () => {
     expect(uploadVideo).not.toHaveBeenCalled();
     expect(useVideoStore.getState().uploadStatus).toBe('error');
     expect(useVideoStore.getState().uploadError).toBe('视频时长不能超过 10:00。');
+
+    restoreMetadataProbe();
+    unmount();
+  });
+
+  it('surfaces a clearer message when upload times out', async () => {
+    const restoreMetadataProbe = mockVideoMetadataProbe(12);
+    uploadVideo.mockRejectedValue(
+      Object.assign(new Error('上传超时，请检查网络连接，或调大 VITE_UPLOAD_TIMEOUT 后重试。'), {
+        isTimeout: true,
+        code: 'ECONNABORTED'
+      })
+    );
+
+    const { result, unmount } = renderHook(() => useVideoUpload());
+    const file = new File(['demo'], 'slow-upload.mp4', { type: 'video/mp4' });
+
+    let uploadResult;
+
+    await act(async () => {
+      uploadResult = await result.current.uploadSelectedFile(file);
+    });
+
+    expect(uploadResult).toBeNull();
+    expect(uploadVideo).toHaveBeenCalledTimes(1);
+    expect(useVideoStore.getState().uploadStatus).toBe('error');
+    expect(useVideoStore.getState().uploadError).toBe(
+      '上传超时，请检查网络连接，或调大 VITE_UPLOAD_TIMEOUT 后重试。'
+    );
+    expect(useVideoStore.getState().validationMessage).toBe('上传超时，请检查网络后重试。');
 
     restoreMetadataProbe();
     unmount();
