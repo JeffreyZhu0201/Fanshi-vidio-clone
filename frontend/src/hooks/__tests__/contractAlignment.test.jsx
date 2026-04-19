@@ -63,7 +63,20 @@ const resetAppStore = () => {
     backendStatus: 'checking',
     errorMessage: '',
     lastCheckedAt: null,
-    realtimeStatus: 'idle'
+    realtimeStatus: 'idle',
+    providerStatuses: {
+      seedance: {
+        ready: false,
+        reason: '',
+        allowMockFallback: false,
+        model: ''
+      },
+      geminiImage: {
+        ready: false,
+        reason: '',
+        model: ''
+      }
+    }
   });
 };
 
@@ -129,6 +142,19 @@ describe('health and error contract alignment', () => {
       status: 'ok',
       database: {
         connected: true
+      },
+      providers: {
+        seedance: {
+          ready: false,
+          reason: '缺少 SEED_DANCE_API_KEY',
+          allow_mock_fallback: false,
+          model: 'doubao-seedance-2-0-260128'
+        },
+        gemini_image: {
+          ready: true,
+          reason: '',
+          model: 'gemini-3-pro-image-preview'
+        }
       }
     });
 
@@ -139,6 +165,8 @@ describe('health and error contract alignment', () => {
     });
 
     expect(useAppStore.getState().errorMessage).toBe('');
+    expect(useAppStore.getState().providerStatuses.seedance.reason).toBe('缺少 SEED_DANCE_API_KEY');
+    expect(useAppStore.getState().providerStatuses.geminiImage.ready).toBe(true);
 
     unmount();
   });

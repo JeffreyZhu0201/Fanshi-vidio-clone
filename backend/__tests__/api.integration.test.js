@@ -37,6 +37,11 @@ const backgroundAssetServiceMock = {
   listBackgroundAssetsByVideoId: jest.fn()
 };
 
+const resourceImageServiceMock = {
+  listResourceImageAssetsByVideoId: jest.fn(),
+  generateResourceImageBundle: jest.fn()
+};
+
 const mergeServiceMock = {
   startMerge: jest.fn(),
   getMergeTaskProgress: jest.fn(),
@@ -53,6 +58,7 @@ await jest.unstable_mockModule('../services/analysisService.js', () => analysisS
 await jest.unstable_mockModule('../services/segmentService.js', () => segmentServiceMock);
 await jest.unstable_mockModule('../services/generationService.js', () => generationServiceMock);
 await jest.unstable_mockModule('../services/backgroundAssetService.js', () => backgroundAssetServiceMock);
+await jest.unstable_mockModule('../services/resourceImageService.js', () => resourceImageServiceMock);
 await jest.unstable_mockModule('../services/mergeService.js', () => mergeServiceMock);
 await jest.unstable_mockModule('../services/taskService.js', () => taskServiceMock);
 
@@ -196,6 +202,57 @@ beforeEach(() => {
     progress: 0
   });
   backgroundAssetServiceMock.listBackgroundAssetsByVideoId.mockResolvedValue([]);
+  resourceImageServiceMock.listResourceImageAssetsByVideoId.mockResolvedValue([
+    {
+      id: 501,
+      video_id: 101,
+      resource_type: 'character',
+      resource_id: 'char-1',
+      name: '主角',
+      variant_id: 'front',
+      variant_label: '正面',
+      sort_order: 0,
+      source_prompt: '角色原始资源提示词',
+      prompt: '角色三视图正面提示词',
+      status: 'completed',
+      asset_path: 'resource-images/char-1-front.png',
+      asset_url: '/uploads/resource-images/char-1-front.png',
+      mime_type: 'image/png',
+      representative_frame_time: 1.2,
+      error_message: '',
+      meta: {}
+    }
+  ]);
+  resourceImageServiceMock.generateResourceImageBundle.mockResolvedValue({
+    video_id: 101,
+    resource_type: 'character',
+    resource_id: 'char-1',
+    completed_count: 3,
+    failed_count: 0,
+    partial_success: false,
+    error_summary: '',
+    assets: [
+      {
+        id: 501,
+        video_id: 101,
+        resource_type: 'character',
+        resource_id: 'char-1',
+        name: '主角',
+        variant_id: 'front',
+        variant_label: '正面',
+        sort_order: 0,
+        source_prompt: '角色原始资源提示词',
+        prompt: '角色三视图正面提示词',
+        status: 'completed',
+        asset_path: 'resource-images/char-1-front.png',
+        asset_url: '/uploads/resource-images/char-1-front.png',
+        mime_type: 'image/png',
+        representative_frame_time: 1.2,
+        error_message: '',
+        meta: {}
+      }
+    ]
+  });
   generationServiceMock.getGenerationTaskStatus.mockResolvedValue({
     task_id: 401,
     segment_id: 301,
@@ -301,6 +358,50 @@ describe('Backend API integration', () => {
     });
   });
 
+  test('lists and generates persisted resource image assets', async () => {
+    const listResponse = await request(app).get('/api/resource-images/101');
+    const generateResponse = await request(app).post('/api/resource-images/generate').send({
+      video_id: 101,
+      resource_type: 'character',
+      resource_id: 'char-1',
+      resource_name: '主角',
+      source_prompt: '角色原始资源提示词',
+      representative_frame_time: 1.2,
+      variants: [
+        {
+          id: 'front',
+          label: '正面',
+          prompt: '角色三视图正面提示词',
+          sortOrder: 0
+        }
+      ]
+    });
+
+    expect(listResponse.status).toBe(200);
+    expect(listResponse.body).toHaveLength(1);
+    expect(listResponse.body[0].resource_type).toBe('character');
+    expect(generateResponse.status).toBe(200);
+    expect(generateResponse.body.resource_id).toBe('char-1');
+    expect(generateResponse.body.completed_count).toBe(3);
+    expect(resourceImageServiceMock.listResourceImageAssetsByVideoId).toHaveBeenCalledWith(101);
+    expect(resourceImageServiceMock.generateResourceImageBundle).toHaveBeenCalledWith({
+      videoId: 101,
+      resourceType: 'character',
+      resourceId: 'char-1',
+      resourceName: '主角',
+      sourcePrompt: '角色原始资源提示词',
+      representativeFrameTime: 1.2,
+      variants: [
+        {
+          id: 'front',
+          label: '正面',
+          prompt: '角色三视图正面提示词',
+          sortOrder: 0
+        }
+      ]
+    });
+  });
+
   test('starts split and merge tasks and exposes task progress', async () => {
     const splitResponse = await request(app).post('/api/segments/split').send({
       video_id: 101,
@@ -358,7 +459,11 @@ describe('Backend API integration', () => {
         video_id: 999
       })
     );
-    generationServiceMock.startGeneration.mockRejectedValueOnce(new Error('Seed service unavailable'));
+    generationServiceMock.startGeneration.mockRejectedValueOnce(
+      new AppError('Seedance 未配置完成，无法发起真实片段生成。 缺少 SEED_DANCE_API_KEY', 503, {
+        provider: 'seedance'
+      })
+    );
     taskServiceMock.getTask.mockReturnValueOnce(null);
 
     const invalidBodyResponse = await request(app).post('/api/analysis/analyze').send({});
@@ -374,8 +479,8 @@ describe('Backend API integration', () => {
     expect(invalidBodyResponse.body.message).toBe('Request validation failed');
     expect(notFoundResponse.status).toBe(404);
     expect(notFoundResponse.body.message).toBe('Analysis not found.');
-    expect(serverErrorResponse.status).toBe(500);
-    expect(serverErrorResponse.body.message).toBe('Internal server error');
+    expect(serverErrorResponse.status).toBe(503);
+    expect(serverErrorResponse.body.message).toContain('Seedance 未配置完成');
     expect(missingTaskResponse.status).toBe(404);
     expect(missingTaskResponse.body.message).toBe('Task not found.');
     expect(unknownRouteResponse.status).toBe(404);
@@ -398,6 +503,12 @@ describe('Backend API integration', () => {
 
     expect(healthResponse.status).toBe(200);
     expect(healthResponse.body.success).toBe(true);
+    expect(healthResponse.body.providers).toEqual(
+      expect.objectContaining({
+        seedance: expect.any(Object),
+        gemini_image: expect.any(Object)
+      })
+    );
     expect(ingestMonitoringResponse.status).toBe(202);
     expect(ingestMonitoringResponse.body.accepted).toBe(true);
     expect(metricsResponse.status).toBe(200);

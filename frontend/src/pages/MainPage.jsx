@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
 
 import AnalysisDisplay from '../components/AnalysisDisplay.jsx';
 import ModalSheet from '../components/ModalSheet.jsx';
@@ -45,8 +45,7 @@ const CompactStat = ({ label, value, note }) => {
 
 const MainPage = () => {
   const [systemModalOpen, setSystemModalOpen] = useState(false);
-  const [expandedSegmentId, setExpandedSegmentId] = useState(null);
-  const { backendStatus, errorMessage, lastCheckedAt, realtimeStatus } = useAppHealth();
+  const { backendStatus, errorMessage, lastCheckedAt, realtimeStatus, providerStatuses } = useAppHealth();
   const {
     currentVideo,
     videos,
@@ -133,29 +132,6 @@ const MainPage = () => {
           ? '离线'
           : '检查中';
   const analysisSourceLabel = analysis?.is_mock ? 'Mock 回退' : analysis ? '真实 Gemini' : '等待分析';
-  const activeSegmentId = useMemo(() => {
-    return generatingSegmentIds[0] || optimizingSegmentId || analyzingSegmentId || null;
-  }, [analyzingSegmentId, generatingSegmentIds, optimizingSegmentId]);
-
-  useEffect(() => {
-    if (!segments.length) {
-      setExpandedSegmentId(null);
-      return;
-    }
-
-    if (activeSegmentId && segments.some((segment) => segment.id === activeSegmentId)) {
-      setExpandedSegmentId(activeSegmentId);
-      return;
-    }
-
-    setExpandedSegmentId((currentExpandedId) => {
-      if (currentExpandedId && segments.some((segment) => segment.id === currentExpandedId)) {
-        return currentExpandedId;
-      }
-
-      return segments[0]?.id ?? null;
-    });
-  }, [activeSegmentId, segments]);
 
   const topMetrics = [
     {
@@ -245,6 +221,12 @@ const MainPage = () => {
     segmentsError,
     backgroundAssetsError,
     mergeProgress.errorMessage,
+    backendStatus === 'offline' || providerStatuses.seedance.ready
+      ? ''
+      : `Seedance 未就绪：${providerStatuses.seedance.reason || '缺少必要配置。'}`,
+    backendStatus === 'offline' || providerStatuses.geminiImage.ready
+      ? ''
+      : `Gemini 生图未就绪：${providerStatuses.geminiImage.reason || '缺少必要配置。'}`,
     analysis?.is_mock ? '当前整片分析回退到了 mock 结果，请关注系统状态中的调用说明。' : ''
   ].filter(Boolean);
 
@@ -265,7 +247,7 @@ const MainPage = () => {
               <p className="compact-topbar-eyebrow">Fanshi Vidio Clone</p>
               <h1 className="compact-topbar-title">AI 片段控制台</h1>
               <p className="compact-topbar-subtitle">
-                顶部状态栏 + 三列工作台。左列聚合项目与上传，中列专注片段工作区，右列集中拼接与导出。
+                顶部状态栏 + 双列工作台。左列聚合项目、上传与整片资源，右列专注片段工位，导出固定在右下角。
               </p>
             </div>
           </div>
@@ -386,7 +368,7 @@ const MainPage = () => {
                   <p className="compact-card-eyebrow">Workbench</p>
                   <h2 className="compact-card-title">片段工作台</h2>
                   <p className="compact-card-note">
-                    右上固定为片段工位。默认只展开一个片段，其他片段保持紧凑摘要行。
+                    右上固定为片段工位。每个片段都保持单卡常驻，只展示预览、最终提示词、生成结果和关键操作。
                   </p>
                 </div>
                 <StatusBadge
@@ -422,12 +404,8 @@ const MainPage = () => {
                       backgroundAsset={
                         backgroundAssets.find((asset) => asset.backgroundId === segment.backgroundId) || null
                       }
-                      expanded={expandedSegmentId === segment.id}
-                      onToggle={(segmentId) =>
-                        setExpandedSegmentId((currentExpandedId) =>
-                          currentExpandedId === segmentId ? null : segmentId
-                        )
-                      }
+                      expanded={false}
+                      onToggle={() => {}}
                       onPromptChange={setSegmentPrompt}
                       onAnalyze={analyzeSegmentById}
                       onOptimize={optimizeSegmentPrompt}
@@ -450,71 +428,60 @@ const MainPage = () => {
             </section>
           </div>
 
-          <div className="compact-studio-cell">
-            <div className="compact-cell-stack">
-              <VideoMerge
-                video={currentVideo}
-                segments={segments}
-                mergeProgress={mergeProgress}
-                onMerge={startMerge}
-                onDownload={downloadMergedVideo}
-                compactMode
-                className="compact-surface"
+        </div>
+
+        <div className="floating-export-dock">
+          <section className="floating-export-checklist">
+            <div className="floating-export-header">
+              <div>
+                <p className="floating-export-eyebrow">Export Checklist</p>
+                <h2 className="floating-export-title">导出前检查</h2>
+              </div>
+              <StatusBadge
+                status={mergeStageStatus}
+                label={mergeProgress.status === 'completed' ? '可下载' : '待导出'}
               />
-
-              <section className="panel-shell panel-shell-strong compact-brief-panel">
-                <div className="compact-brief-header">
-                  <div>
-                    <p className="compact-card-eyebrow">Export Checklist</p>
-                    <h2 className="compact-card-title">导出前检查</h2>
-                  </div>
-                  <StatusBadge
-                    status={mergeStageStatus}
-                    label={mergeProgress.status === 'completed' ? '可下载' : '待导出'}
-                  />
-                </div>
-
-                <div className="compact-checklist-grid compact-checklist-grid-tight">
-                  <div className="compact-checklist-item">
-                    <div>
-                      <p className="compact-checklist-label">片段覆盖率</p>
-                      <p className="compact-checklist-note">
-                        已生成 {generatedSegments} / {segments.length || 0} 个片段
-                      </p>
-                    </div>
-                    <StatusBadge status={generatedSegments ? 'completed' : 'idle'} />
-                  </div>
-                  <div className="compact-checklist-item">
-                    <div>
-                      <p className="compact-checklist-label">背景资产</p>
-                      <p className="compact-checklist-note">
-                        已完成 {readyBackgroundAssets} / {backgroundAssets.length || 0} 个
-                      </p>
-                    </div>
-                    <StatusBadge
-                      status={
-                        readyBackgroundAssets ? 'completed' : backgroundAssetsLoading ? 'processing' : 'idle'
-                      }
-                    />
-                  </div>
-                </div>
-
-                <div className="compact-issue-list">
-                  {issueMessages.length ? (
-                    issueMessages.slice(0, 3).map((message, index) => (
-                      <div key={`${message}-${index}`} className="compact-issue-item">
-                        {message}
-                      </div>
-                    ))
-                  ) : (
-                    <div className="compact-issue-item compact-issue-item-success">
-                      当前没有异常提醒，可以直接继续片段生成或成片导出。
-                    </div>
-                  )}
-                </div>
-              </section>
             </div>
-          </div>
+
+            <div className="floating-export-grid">
+              <div className="floating-export-metric">
+                <span className="floating-export-label">片段覆盖率</span>
+                <span className="floating-export-value">
+                  {generatedSegments} / {segments.length || 0}
+                </span>
+              </div>
+              <div className="floating-export-metric">
+                <span className="floating-export-label">背景资产</span>
+                <span className="floating-export-value">
+                  {readyBackgroundAssets} / {backgroundAssets.length || 0}
+                </span>
+              </div>
+            </div>
+
+            <div className="compact-issue-list">
+              {issueMessages.length ? (
+                issueMessages.slice(0, 2).map((message, index) => (
+                  <div key={`${message}-${index}`} className="compact-issue-item">
+                    {message}
+                  </div>
+                ))
+              ) : (
+                <div className="compact-issue-item compact-issue-item-success">
+                  当前没有异常提醒，可以继续片段生成或直接导出。
+                </div>
+              )}
+            </div>
+          </section>
+
+          <VideoMerge
+            video={currentVideo}
+            segments={segments}
+            mergeProgress={mergeProgress}
+            onMerge={startMerge}
+            onDownload={downloadMergedVideo}
+            compactMode
+            dockMode
+          />
         </div>
 
         <ModalSheet
@@ -538,6 +505,22 @@ const MainPage = () => {
                   <StatusBadge
                     status={realtimeStatus}
                     label={realtimeStatus === 'realtime' ? '实时推送' : '监控中'}
+                  />
+                  <StatusBadge
+                    status={providerStatuses.seedance.ready ? 'completed' : 'fallback'}
+                    label={
+                      providerStatuses.seedance.ready
+                        ? 'Seedance 已就绪'
+                        : 'Seedance 未就绪'
+                    }
+                  />
+                  <StatusBadge
+                    status={providerStatuses.geminiImage.ready ? 'completed' : 'fallback'}
+                    label={
+                      providerStatuses.geminiImage.ready
+                        ? 'Gemini 生图已就绪'
+                        : 'Gemini 生图未就绪'
+                    }
                   />
                   <span className="toolbar-pill">
                     最近检查 {lastCheckedAt ? formatDateTime(lastCheckedAt) : '暂无'}

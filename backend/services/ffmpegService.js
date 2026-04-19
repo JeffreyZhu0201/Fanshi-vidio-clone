@@ -139,6 +139,57 @@ const splitVideo = async (absoluteSourcePath, timeAnchors, { basename = 'segment
   return segments;
 };
 
+const extractVideoFrame = async (
+  absoluteSourcePath,
+  timeSeconds,
+  { basename = 'frame', extension = '.jpg' } = {}
+) => {
+  const ffmpegAvailable = await isBinaryAvailable('ffmpeg');
+
+  if (!ffmpegAvailable) {
+    return null;
+  }
+
+  const safeTimeSeconds = Number(timeSeconds);
+
+  if (!Number.isFinite(safeTimeSeconds) || safeTimeSeconds < 0) {
+    return null;
+  }
+
+  const relativePath = createOutputRelativePath('frames', basename, extension);
+  const absoluteTargetPath = resolveUploadPath(relativePath);
+  await ensureParentDirectory(absoluteTargetPath);
+
+  try {
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-ss',
+      String(Number(safeTimeSeconds.toFixed(2))),
+      '-i',
+      absoluteSourcePath,
+      '-frames:v',
+      '1',
+      '-q:v',
+      '2',
+      absoluteTargetPath
+    ]);
+
+    return {
+      filePath: relativePath,
+      fileUrl: toPublicUploadUrl(relativePath),
+      engine: 'ffmpeg-frame'
+    };
+  } catch (error) {
+    logger.warn('FFmpeg frame extraction failed.', {
+      message: error.message,
+      absoluteSourcePath,
+      timeSeconds: safeTimeSeconds
+    });
+
+    return null;
+  }
+};
+
 const mergeVideos = async (absoluteInputPaths, { basename = 'merged-video', onProgress } = {}) => {
   if (!absoluteInputPaths.length) {
     throw new Error('No input files available for merging.');
@@ -202,4 +253,4 @@ const mergeVideos = async (absoluteInputPaths, { basename = 'merged-video', onPr
   };
 };
 
-export { getVideoMetadata, splitVideo, mergeVideos };
+export { getVideoMetadata, splitVideo, mergeVideos, extractVideoFrame };

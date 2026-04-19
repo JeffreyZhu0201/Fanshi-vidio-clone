@@ -1,15 +1,18 @@
 import { checkDatabaseHealth } from '../config/database.js';
+import { getProviderStatuses } from '../services/providerHealthService.js';
 import { getMetricsContentType, getMetricsPayload } from '../services/metricsService.js';
 import { recordFrontendMonitoringEvent } from '../services/monitoringService.js';
 
 export const healthCheck = async (_request, response) => {
   const database = await checkDatabaseHealth();
+  const providers = getProviderStatuses();
 
   response.status(200).json({
     success: true,
     service: 'backend',
     status: database.connected ? 'ok' : 'degraded',
     database,
+    providers,
     timestamp: new Date().toISOString()
   });
 };

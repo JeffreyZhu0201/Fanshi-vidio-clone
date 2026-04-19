@@ -1,11 +1,14 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 jest.mock('../../services/api.js', () => ({
-  optimizePrompt: jest.fn()
+  optimizePrompt: jest.fn(),
+  getResourceImages: jest.fn().mockResolvedValue([]),
+  generateResourceImages: jest.fn(),
+  toAbsoluteAssetUrl: jest.fn((value) => value)
 }));
 
 import AnalysisDisplay from '../AnalysisDisplay.jsx';
-import { optimizePrompt } from '../../services/api.js';
+import { getResourceImages, optimizePrompt } from '../../services/api.js';
 
 const analysisFixture = {
   plot: '主角走进咖啡馆，观察周围环境后坐下。',
@@ -48,9 +51,11 @@ const analysisFixture = {
 describe('AnalysisDisplay', () => {
   beforeEach(() => {
     optimizePrompt.mockReset();
+    getResourceImages.mockClear();
+    getResourceImages.mockResolvedValue([]);
   });
 
-  it('renders analysis data and triggers actions', () => {
+  it('renders analysis data and triggers actions', async () => {
     const onAnalyze = jest.fn();
     const onSplit = jest.fn();
 
@@ -68,6 +73,10 @@ describe('AnalysisDisplay', () => {
         onSplit={onSplit}
       />
     );
+
+    await waitFor(() => {
+      expect(getResourceImages).toHaveBeenCalledWith(1);
+    });
 
     expect(screen.getByText('剧情摘要')).toBeInTheDocument();
     expect(screen.getByText('主角走进咖啡馆，观察周围环境后坐下。')).toBeInTheDocument();
@@ -149,7 +158,7 @@ describe('AnalysisDisplay', () => {
     );
   });
 
-  it('shows fallback warning when backend returns mock analysis', () => {
+  it('shows fallback warning when backend returns mock analysis', async () => {
     render(
       <AnalysisDisplay
         video={{ id: 1, filename: 'demo.mp4', duration: 15, file_url: '/uploads/videos/demo.mp4' }}
@@ -170,6 +179,10 @@ describe('AnalysisDisplay', () => {
         onSplit={jest.fn()}
       />
     );
+
+    await waitFor(() => {
+      expect(getResourceImages).toHaveBeenCalledWith(1);
+    });
 
     expect(screen.getAllByText('Gemini失败已回退').length).toBeGreaterThan(0);
     expect(screen.getByText(/Gemini 真实分析失败/)).toBeInTheDocument();

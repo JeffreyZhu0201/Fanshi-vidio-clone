@@ -4,24 +4,47 @@ import { checkHealth } from '../services/api.js';
 import { useAppStore } from '../store/appStore.js';
 import { websocketService } from '../services/websocket.js';
 
+const normalizeProviderStatuses = (payload = {}) => {
+  const providers = payload?.providers ?? {};
+
+  return {
+    seedance: {
+      ready: Boolean(providers?.seedance?.ready),
+      reason: String(providers?.seedance?.reason ?? '').trim(),
+      allowMockFallback: Boolean(providers?.seedance?.allow_mock_fallback),
+      model: String(providers?.seedance?.model ?? '').trim()
+    },
+    geminiImage: {
+      ready: Boolean(providers?.gemini_image?.ready),
+      reason: String(providers?.gemini_image?.reason ?? '').trim(),
+      model: String(providers?.gemini_image?.model ?? '').trim()
+    }
+  };
+};
+
 const resolveBackendHealthState = (payload = {}) => {
+  const providerStatuses = normalizeProviderStatuses(payload);
+
   if (payload?.status === 'degraded' || payload?.database?.connected === false) {
     return {
       status: 'degraded',
-      message: payload?.database?.errorMessage || '数据库连接不可用，后端当前处于降级状态。'
+      message: payload?.database?.errorMessage || '数据库连接不可用，后端当前处于降级状态。',
+      providerStatuses
     };
   }
 
   if (payload?.status === 'ok' || payload?.success) {
     return {
       status: 'online',
-      message: ''
+      message: '',
+      providerStatuses
     };
   }
 
   return {
     status: 'checking',
-    message: ''
+    message: '',
+    providerStatuses
   };
 };
 
@@ -30,6 +53,7 @@ const useAppHealth = () => {
   const errorMessage = useAppStore((state) => state.errorMessage);
   const lastCheckedAt = useAppStore((state) => state.lastCheckedAt);
   const realtimeStatus = useAppStore((state) => state.realtimeStatus);
+  const providerStatuses = useAppStore((state) => state.providerStatuses);
   const setBackendStatus = useAppStore((state) => state.setBackendStatus);
   const setBackendError = useAppStore((state) => state.setBackendError);
   const setRealtimeStatus = useAppStore((state) => state.setRealtimeStatus);
@@ -43,7 +67,11 @@ const useAppHealth = () => {
         const nextHealthState = resolveBackendHealthState(healthPayload);
 
         if (active) {
-          setBackendStatus(nextHealthState.status, nextHealthState.message);
+          setBackendStatus(
+            nextHealthState.status,
+            nextHealthState.message,
+            nextHealthState.providerStatuses
+          );
         }
       } catch (error) {
         if (active) {
@@ -85,7 +113,8 @@ const useAppHealth = () => {
     backendStatus,
     errorMessage,
     lastCheckedAt,
-    realtimeStatus
+    realtimeStatus,
+    providerStatuses
   };
 };
 

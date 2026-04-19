@@ -110,6 +110,27 @@ const generateSegmentBodySchema = Joi.object({
   prompt: Joi.string().trim().min(1).required()
 });
 
+const generateResourceImagesBodySchema = Joi.object({
+  video_id: Joi.number().integer().positive().required(),
+  resource_type: Joi.string().trim().valid('character', 'scene').required(),
+  resource_id: Joi.string().trim().min(1).max(191).required(),
+  resource_name: Joi.string().trim().min(1).max(255).required(),
+  source_prompt: Joi.string().trim().min(1).required(),
+  representative_frame_time: Joi.number().min(0).allow(null).default(null),
+  variants: Joi.array()
+    .items(
+      Joi.object({
+        id: Joi.string().trim().min(1).max(64).required(),
+        label: Joi.string().trim().min(1).max(64).required(),
+        prompt: Joi.string().trim().min(1).required(),
+        sortOrder: Joi.number().integer().min(0),
+        sort_order: Joi.number().integer().min(0)
+      })
+    )
+    .min(1)
+    .required()
+});
+
 const mergeStartBodySchema = Joi.object({
   video_id: Joi.number().integer().positive().required()
 });
@@ -132,6 +153,7 @@ export {
   optimizePromptBodySchema,
   splitVideoBodySchema,
   generateSegmentBodySchema,
+  generateResourceImagesBodySchema,
   mergeStartBodySchema,
   monitoringEventBodySchema
 };

@@ -1,7 +1,15 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import dotenv from 'dotenv';
 import Joi from 'joi';
 
-dotenv.config();
+const configDirectory = path.dirname(fileURLToPath(import.meta.url));
+const backendRoot = path.resolve(configDirectory, '..');
+
+dotenv.config({
+  path: path.join(backendRoot, '.env')
+});
 
 const schema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'test', 'production').default('development'),
@@ -32,10 +40,17 @@ const schema = Joi.object({
   GEMINI_SEGMENT_MODEL: Joi.string().default('gemini-2.5-flash'),
   GEMINI_API_COMPAT_MODE: Joi.string().valid('google', 'openai').default('google'),
   GEMINI_STRICT_REMOTE: Joi.boolean().truthy('true').falsy('false').default(false),
+  GEMINI_IMAGE_API_KEY: Joi.string().allow('').default(''),
+  GEMINI_IMAGE_API_BASE_URL: Joi.string().uri().allow('').default(''),
+  GEMINI_IMAGE_MODEL: Joi.string().default('gemini-3-pro-image-preview'),
+  GEMINI_IMAGE_STRICT_REMOTE: Joi.boolean().truthy('true').falsy('false').default(false),
+  GEMINI_IMAGE_REQUEST_TIMEOUT: Joi.number().integer().positive().default(120000),
+  GEMINI_IMAGE_ASPECT_RATIO: Joi.string().allow('').default(''),
   SEED_DANCE_API_KEY: Joi.string().allow('').default(''),
   SEED_DANCE_API_BASE_URL: Joi.string().uri().allow('').default(''),
   SEED_DANCE_MODEL: Joi.string().default('doubao-seedance-2-0-260128'),
   SEED_DANCE_STRICT_REMOTE: Joi.boolean().truthy('true').falsy('false').default(false),
+  SEED_DANCE_ALLOW_MOCK_FALLBACK: Joi.boolean().truthy('true').falsy('false').default(false),
   SEED_DANCE_POLL_INTERVAL_MS: Joi.number().integer().positive().default(10000),
   SEED_DANCE_MAX_WAIT_MS: Joi.number().integer().positive().default(900000),
   SEED_DANCE_RATIO: Joi.string().default('16:9'),

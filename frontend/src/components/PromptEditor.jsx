@@ -14,7 +14,7 @@ const PromptEditor = ({
   highlightedPrompt = '',
   title = '片段提示词编辑器',
   description = '支持片段理解、内联编辑、角色标签预览和优化回写',
-  placeholder = '在这里编辑片段提示词，使用 @角色名 来保持人物设定一致。',
+  placeholder = '在这里编辑片段提示词，使用 @角色名 和 #场景名 来保持资源一致。',
   analyzeLabel = '片段分析',
   optimizeLabel = '优化提示词',
   previewLabel = '标签高亮预览',
@@ -130,10 +130,14 @@ const PromptEditor = ({
         </div>
         <div className="min-h-[56px] text-sm leading-7 text-white/80">
           {tokenizePrompt(draft).map((token, index) =>
-            token.type === 'mention' ? (
+            token.type === 'character-mention' || token.type === 'scene-mention' ? (
               <span
                 key={`${token.value}-${index}`}
-                className="mx-0.5 inline-flex rounded-full border border-brand-500/20 bg-brand-500/10 px-2 py-0.5 font-semibold text-brand-100"
+                className={`mx-0.5 inline-flex rounded-full px-2 py-0.5 font-semibold ${
+                  token.type === 'scene-mention'
+                    ? 'border border-amber-500/25 bg-amber-500/10 text-amber-100'
+                    : 'border border-brand-500/20 bg-brand-500/10 text-brand-100'
+                }`}
               >
                 {token.value}
               </span>

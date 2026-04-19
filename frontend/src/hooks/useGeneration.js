@@ -23,6 +23,10 @@ const getGenerationErrorMessage = (error, phase = '片段生成') => {
     return `${phase}任务不存在或已失效，请刷新后重试。`;
   }
 
+  if (error?.statusCode === 503 && error?.message) {
+    return error.message;
+  }
+
   if (error?.isTimeout || error?.code === 'ECONNABORTED') {
     return `${phase}请求超时，请稍后重试。`;
   }
@@ -275,6 +279,11 @@ const useGeneration = () => {
           payload.optimized_prompt ?? currentSegment?.latestGenerationTask?.optimizedPrompt ?? '',
         result_url: toAbsoluteAssetUrl(payload.result_url),
         error_message: payload.error_message ?? payload.message ?? '',
+        engine: payload.engine ?? currentSegment?.latestGenerationTask?.engine ?? '',
+        is_mock: Boolean(payload.is_mock ?? currentSegment?.latestGenerationTask?.is_mock),
+        remote_task_id: payload.remote_task_id ?? currentSegment?.latestGenerationTask?.remote_task_id ?? '',
+        fallback_reason: payload.fallback_reason ?? currentSegment?.latestGenerationTask?.fallback_reason ?? '',
+        provider_error: payload.provider_error ?? currentSegment?.latestGenerationTask?.provider_error ?? '',
         created_at: payload.created_at,
         updated_at: payload.updated_at
       };
@@ -461,6 +470,11 @@ const useGeneration = () => {
               optimizedPrompt: analyzedSegment.latest_generation_task.optimized_prompt ?? '',
               result_url: toAbsoluteAssetUrl(analyzedSegment.latest_generation_task.result_url),
               error_message: analyzedSegment.latest_generation_task.error_message ?? '',
+              engine: analyzedSegment.latest_generation_task.engine ?? '',
+              is_mock: Boolean(analyzedSegment.latest_generation_task.is_mock),
+              remote_task_id: analyzedSegment.latest_generation_task.remote_task_id ?? '',
+              fallback_reason: analyzedSegment.latest_generation_task.fallback_reason ?? '',
+              provider_error: analyzedSegment.latest_generation_task.provider_error ?? '',
               created_at: analyzedSegment.latest_generation_task.created_at,
               updated_at: analyzedSegment.latest_generation_task.updated_at
             }
@@ -474,6 +488,11 @@ const useGeneration = () => {
               optimizedPrompt: analyzedSegment.latest_attempt_task.optimized_prompt ?? '',
               result_url: toAbsoluteAssetUrl(analyzedSegment.latest_attempt_task.result_url),
               error_message: analyzedSegment.latest_attempt_task.error_message ?? '',
+              engine: analyzedSegment.latest_attempt_task.engine ?? '',
+              is_mock: Boolean(analyzedSegment.latest_attempt_task.is_mock),
+              remote_task_id: analyzedSegment.latest_attempt_task.remote_task_id ?? '',
+              fallback_reason: analyzedSegment.latest_attempt_task.fallback_reason ?? '',
+              provider_error: analyzedSegment.latest_attempt_task.provider_error ?? '',
               created_at: analyzedSegment.latest_attempt_task.created_at,
               updated_at: analyzedSegment.latest_attempt_task.updated_at
             }

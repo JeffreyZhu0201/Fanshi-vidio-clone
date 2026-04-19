@@ -31,7 +31,8 @@ export const UPLOAD_DIRECTORIES = Object.freeze({
   root: uploadRoot,
   videos: path.join(uploadRoot, 'videos'),
   segments: path.join(uploadRoot, 'segments'),
-  outputs: path.join(uploadRoot, 'outputs')
+  outputs: path.join(uploadRoot, 'outputs'),
+  resourceImages: path.join(uploadRoot, 'resource-images')
 });
 
 export const ALLOWED_VIDEO_EXTENSIONS = Object.freeze(['.mp4', '.mov', '.avi']);
