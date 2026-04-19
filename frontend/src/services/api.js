@@ -11,6 +11,7 @@ const API_BASE_URL = getEnv('VITE_API_BASE_URL', 'http://localhost:5000/api');
 const API_TIMEOUT = normalizeTimeout(getEnv('VITE_API_TIMEOUT', '30000'), 30000);
 const ANALYSIS_TIMEOUT = normalizeTimeout(getEnv('VITE_ANALYSIS_TIMEOUT', '600000'), 600000);
 const UPLOAD_TIMEOUT = normalizeTimeout(getEnv('VITE_UPLOAD_TIMEOUT', '0'), 0);
+const RESOURCE_IMAGE_TIMEOUT = normalizeTimeout(getEnv('VITE_RESOURCE_IMAGE_TIMEOUT', '300000'), 300000);
 const MAX_RETRIES = 3;
 const RETRYABLE_METHODS = new Set(['get', 'head', 'options']);
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
@@ -178,6 +179,11 @@ const getBackgroundAssets = async (videoId) => {
   return response.data;
 };
 
+const getResourceImages = async (videoId) => {
+  const response = await api.get(`/resource-images/${videoId}`);
+  return response.data;
+};
+
 const getVideo = async (videoId) => {
   const response = await api.get(`/videos/${videoId}`);
   return response.data;
@@ -227,6 +233,14 @@ const generateSegment = async (segmentId, prompt) => {
   return response.data;
 };
 
+const generateResourceImages = async (payload) => {
+  const response = await api.post('/resource-images/generate', payload, {
+    timeout: Math.max(API_TIMEOUT, RESOURCE_IMAGE_TIMEOUT)
+  });
+
+  return response.data;
+};
+
 const getGenerationTask = async (taskId) => {
   const response = await api.get(`/generation/${taskId}`);
   return response.data;
@@ -261,10 +275,12 @@ export {
   checkHealth,
   downloadVideo,
   generateSegment,
+  generateResourceImages,
   getAnalysis,
   getBackgroundAssets,
   getGenerationTask,
   getMergeProgress,
+  getResourceImages,
   getSegments,
   getTaskStatus,
   getVideo,

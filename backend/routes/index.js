@@ -13,6 +13,7 @@ import analysisRouter from './analysis.js';
 import backgroundAssetsRouter from './backgroundAssets.js';
 import generationRouter from './generation.js';
 import mergeRouter from './merge.js';
+import resourceImagesRouter from './resourceImages.js';
 import segmentsRouter from './segments.js';
 import tasksRouter from './tasks.js';
 import videoRouter from './video.js';
@@ -30,6 +31,7 @@ router.post(
 router.use('/videos', videoRouter);
 router.use('/analysis', analysisRouter);
 router.use('/background-assets', backgroundAssetsRouter);
+router.use('/resource-images', resourceImagesRouter);
 router.use('/segments', segmentsRouter);
 router.use('/generation', generationRouter);
 router.use('/merge', mergeRouter);

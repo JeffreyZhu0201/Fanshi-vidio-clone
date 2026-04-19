@@ -32,7 +32,7 @@ describe('PromptEditor', () => {
     render(<ControlledPromptEditor />);
 
     const textarea = screen.getByPlaceholderText(
-      '在这里编辑片段提示词，使用 @角色名 来保持人物设定一致。'
+      '在这里编辑片段提示词，使用 @角色名 和 #场景名 来保持资源一致。'
     );
 
     fireEvent.change(textarea, {

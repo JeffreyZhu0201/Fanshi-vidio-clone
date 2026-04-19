@@ -13,6 +13,7 @@ const errorHandler = (error, request, response, _next) => {
   const normalizedError = normalizeError(error);
   const statusCode = normalizedError.statusCode || 500;
   const isServerError = statusCode >= 500;
+  const shouldExposeMessage = normalizedError instanceof AppError || !isServerError;
 
   logger.error('Request failed', {
     method: request.method,
@@ -25,7 +26,7 @@ const errorHandler = (error, request, response, _next) => {
 
   response.status(statusCode).json({
     success: false,
-    message: isServerError ? 'Internal server error' : normalizedError.message,
+    message: shouldExposeMessage ? normalizedError.message : 'Internal server error',
     details: normalizedError.details ?? null
   });
 };

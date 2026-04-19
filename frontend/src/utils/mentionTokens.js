@@ -1,4 +1,4 @@
-const mentionPattern = /@([\p{L}\p{N}_-]+)/gu;
+const mentionPattern = /([@#])([\p{L}\p{N}_-]+)/gu;
 
 const tokenizePrompt = (value = '') => {
   const tokens = [];
@@ -14,10 +14,13 @@ const tokenizePrompt = (value = '') => {
       });
     }
 
+    const marker = match[1];
+
     tokens.push({
-      type: 'mention',
+      type: marker === '#' ? 'scene-mention' : 'character-mention',
       value: match[0],
-      name: match[1]
+      marker,
+      name: match[2]
     });
 
     cursor = matchIndex + match[0].length;
@@ -44,7 +47,7 @@ const tokenizePrompt = (value = '') => {
 
 const extractMentionNames = (value = '') => {
   return tokenizePrompt(value)
-    .filter((token) => token.type === 'mention')
+    .filter((token) => token.type === 'character-mention' || token.type === 'scene-mention')
     .map((token) => token.name);
 };
 

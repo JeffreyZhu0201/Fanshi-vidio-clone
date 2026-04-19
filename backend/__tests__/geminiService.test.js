@@ -307,7 +307,7 @@ describe('geminiService', () => {
                       scenes: ['咖啡馆内景', '街道夜景'],
                       scene: '角色从咖啡馆转到街道',
                       action: '推门离开并走向街道',
-                      prompt: '@主角 从 @咖啡馆内景 走到 @街道夜景，镜头跟拍转场。'
+                      prompt: '@主角 从 #咖啡馆内景 走到 #街道夜景，镜头跟拍转场。'
                     })
                   }
                 ]
@@ -343,10 +343,10 @@ describe('geminiService', () => {
     const promptText = requestBody.contents[0].parts[1].text;
 
     expect(promptText).toContain('"scenes"');
-    expect(promptText).toContain('@场景名');
+    expect(promptText).toContain('#场景名');
     expect(promptText).toContain('如果片段中出现多个场景');
     expect(result.scenes).toEqual(['咖啡馆内景', '街道夜景']);
-    expect(result.prompt).toContain('@街道夜景');
+    expect(result.prompt).toContain('#街道夜景');
   });
 
   test('includes scene resources when optimizing prompts', async () => {
@@ -360,7 +360,7 @@ describe('geminiService', () => {
                 parts: [
                   {
                     text: JSON.stringify({
-                      optimizedPrompt: '@主角 在 @咖啡馆内景 中完成更稳定的表演调度。'
+                      optimizedPrompt: '@主角 在 #咖啡馆内景 中完成更稳定的表演调度。'
                     })
                   }
                 ]
@@ -380,8 +380,8 @@ describe('geminiService', () => {
     const promptText = requestBody.contents[0].parts[0].text;
 
     expect(promptText).toContain('场景资源库');
-    expect(promptText).toContain('@场景名');
-    expect(result.optimizedPrompt).toContain('@咖啡馆内景');
+    expect(promptText).toContain('#场景名');
+    expect(result.optimizedPrompt).toContain('#咖啡馆内景');
   });
 
   test('optimizes character resources without scene mentions and with white background constraints', async () => {
@@ -426,6 +426,6 @@ describe('geminiService', () => {
     expect(promptText).toContain('纯白无缝背景');
     expect(promptText).not.toContain('场景资源库');
     expect(result.optimizedPrompt).toContain('纯白无缝背景');
-    expect(result.optimizedPrompt).not.toContain('@咖啡馆内景');
+    expect(result.optimizedPrompt).not.toContain('#咖啡馆内景');
   });
 });

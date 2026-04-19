@@ -58,6 +58,10 @@ const defineGenerationTaskModel = (sequelize) => {
         field: 'error_message',
         type: DataTypes.TEXT,
         allowNull: true
+      },
+      meta: {
+        type: DataTypes.JSON,
+        allowNull: true
       }
     },
     {

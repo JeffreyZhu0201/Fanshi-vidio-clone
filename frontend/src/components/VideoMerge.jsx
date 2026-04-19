@@ -16,6 +16,7 @@ const VideoMerge = ({
   },
   className = '',
   compactMode = false,
+  dockMode = false,
   onMerge,
   onDownload
 }) => {
@@ -23,6 +24,84 @@ const VideoMerge = ({
   const canMerge = Boolean(video?.id) && segments.length > 0;
   const isMerging = mergeProgress.status === 'processing' || mergeProgress.status === 'pending';
   const isCompleted = mergeProgress.status === 'completed';
+
+  if (dockMode) {
+    return (
+      <section className={`floating-export-card ${className}`}>
+        <div className="floating-export-header">
+          <div>
+            <p className="floating-export-eyebrow">Export Dock</p>
+            <h2 className="floating-export-title">成片拼接</h2>
+          </div>
+          <StatusBadge status={mergeProgress.status} />
+        </div>
+
+        <p className="floating-export-copy">
+          优先使用已生成片段，缺失部分自动回退到原片，保持导出不断链。
+        </p>
+
+        <div className="floating-export-grid">
+          <div className="floating-export-metric">
+            <span className="floating-export-label">项目</span>
+            <span className="floating-export-value">{video?.filename || '未选择视频'}</span>
+          </div>
+          <div className="floating-export-metric">
+            <span className="floating-export-label">片段</span>
+            <span className="floating-export-value">{segments.length}</span>
+          </div>
+          <div className="floating-export-metric">
+            <span className="floating-export-label">已生成</span>
+            <span className="floating-export-value">{generatedSegments}</span>
+          </div>
+        </div>
+
+        {mergeProgress.status !== 'idle' ? (
+          <div className="mt-3 rounded-[16px] border border-white/10 bg-white/[0.04] px-3 py-2.5">
+            <ProgressBar
+              value={mergeProgress.progress}
+              status={mergeProgress.status}
+              label={mergeProgress.message || '正在拼接视频'}
+              startedAt={mergeProgress.updatedAt}
+            />
+          </div>
+        ) : null}
+
+        {mergeProgress.errorMessage ? (
+          <div
+            role="alert"
+            className="mt-3 rounded-[16px] border border-accent-500/20 bg-accent-500/10 px-3 py-2 text-[11px] leading-5 text-rose-200"
+          >
+            {mergeProgress.errorMessage}
+          </div>
+        ) : null}
+
+        {isCompleted ? (
+          <div className="mt-3 rounded-[16px] border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[11px] leading-5 text-emerald-200">
+            拼接完成，可以直接下载成片。
+          </div>
+        ) : null}
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="flex-1 rounded-full bg-gradient-to-r from-brand-500 to-accent-500 px-4 py-2 text-[11px] font-semibold text-white transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => void onMerge()}
+            disabled={!canMerge || isMerging}
+          >
+            {isMerging ? '拼接中...' : '开始拼接'}
+          </button>
+          <button
+            type="button"
+            className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[11px] font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={() => void onDownload()}
+            disabled={!isCompleted}
+          >
+            下载成片
+          </button>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <SectionPanel
@@ -134,6 +213,7 @@ VideoMerge.propTypes = {
   }),
   className: PropTypes.string,
   compactMode: PropTypes.bool,
+  dockMode: PropTypes.bool,
   onMerge: PropTypes.func.isRequired,
   onDownload: PropTypes.func.isRequired
 };

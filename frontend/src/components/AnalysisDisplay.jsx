@@ -9,15 +9,21 @@ import PromptPreview from './PromptPreview.jsx';
 import SectionPanel from './SectionPanel.jsx';
 import StatusBadge from './StatusBadge.jsx';
 import VideoFramePreview from './VideoFramePreview.jsx';
-import { optimizePrompt as optimizePromptRequest } from '../services/api.js';
+import { useAppStore } from '../store/appStore.js';
+import {
+  generateResourceImages as generateResourceImagesRequest,
+  getResourceImages,
+  optimizePrompt as optimizePromptRequest,
+  toAbsoluteAssetUrl
+} from '../services/api.js';
 import { formatDuration } from '../utils/formatDuration.js';
 import { buildVideoAnalysisPrompt } from '../utils/promptBlueprints.js';
 
 const TAB_ITEMS = [
-  { id: 'overview', label: '总览' },
-  { id: 'characters', label: '角色' },
-  { id: 'scenes', label: '场景' },
-  { id: 'segments', label: '片段分解' }
+  { id: 'overview', label: '总览', note: '剧情与整片情报' },
+  { id: 'characters', label: '角色', note: '角色资源与三视图' },
+  { id: 'scenes', label: '场景', note: '场景资源与背景资产' },
+  { id: 'segments', label: '片段分解', note: '切分预案与提示词' }
 ];
 
 const getBackgroundName = (background, index) => {
@@ -83,6 +89,110 @@ const getRepresentativeFrameNote = (item, fallback = '') => {
   );
 };
 
+const normalizeResourceImageAsset = (asset) => {
+  return {
+    id: Number(asset.id ?? 0),
+    videoId: Number(asset.video_id ?? 0),
+    resourceType: asset.resource_type ?? '',
+    resourceId: asset.resource_id ?? '',
+    name: asset.name ?? '',
+    variantId: asset.variant_id ?? '',
+    variantLabel: asset.variant_label ?? '',
+    sortOrder: Number(asset.sort_order ?? 0) || 0,
+    sourcePrompt: asset.source_prompt ?? '',
+    prompt: asset.prompt ?? '',
+    status: asset.status ?? 'pending',
+    assetPath: asset.asset_path ?? '',
+    assetUrl: toAbsoluteAssetUrl(asset.asset_url),
+    mimeType: asset.mime_type ?? '',
+    representativeFrameTime:
+      Number.isFinite(Number(asset.representative_frame_time)) &&
+      Number(asset.representative_frame_time) >= 0
+        ? Number(Number(asset.representative_frame_time).toFixed(2))
+        : null,
+    errorMessage: asset.error_message ?? '',
+    meta: asset.meta ?? {},
+    createdAt: asset.created_at,
+    updatedAt: asset.updated_at
+  };
+};
+
+const mergeResourceImageAssets = (currentAssets = [], nextAssets = []) => {
+  const assetMap = new Map();
+
+  [...currentAssets, ...nextAssets].forEach((asset) => {
+    const assetKey = asset?.id || `${asset?.resourceType}:${asset?.resourceId}:${asset?.variantId}`;
+
+    assetMap.set(assetKey, asset);
+  });
+
+  return Array.from(assetMap.values()).sort((left, right) => {
+    const leftKey = `${left.resourceType}:${left.resourceId}`;
+    const rightKey = `${right.resourceType}:${right.resourceId}`;
+
+    if (leftKey !== rightKey) {
+      return leftKey.localeCompare(rightKey, 'zh-CN');
+    }
+
+    return (left.sortOrder ?? 0) - (right.sortOrder ?? 0);
+  });
+};
+
+const buildPromptOverridesFromAssets = (assets = []) => {
+  const promptMap = new Map();
+
+  assets.forEach((asset) => {
+    const resourceKey = `${asset.resourceType}:${asset.resourceId}`;
+
+    if (!promptMap.has(resourceKey) && asset.sourcePrompt) {
+      promptMap.set(resourceKey, {
+        prompt: asset.sourcePrompt,
+        highlightedPrompt: ''
+      });
+    }
+  });
+
+  return Object.fromEntries(promptMap.entries());
+};
+
+const summarizeResourceAssetError = (message = '') => {
+  const normalizedMessage = String(message ?? '').trim();
+
+  if (!normalizedMessage) {
+    return '';
+  }
+
+  if (/status 503/iu.test(normalizedMessage) && /distributor|无可用渠道/iu.test(normalizedMessage)) {
+    return '当前 Gemini 生图渠道不可用，请稍后重试或切换可用渠道。';
+  }
+
+  if (/status 429|quota|resource has been exhausted|并发/iu.test(normalizedMessage)) {
+    return '当前 Gemini 生图额度或并发已耗尽，请稍后重试。';
+  }
+
+  if (/未配置远端密钥或地址/iu.test(normalizedMessage)) {
+    return 'Gemini 生图服务未配置完成，请先检查后端图片模型密钥和地址。';
+  }
+
+  return normalizedMessage;
+};
+
+const getResourceGenerationSummary = (assets = []) => {
+  const completedCount = assets.filter((asset) => asset.status === 'completed').length;
+  const failedAssets = assets.filter((asset) => asset.status === 'failed');
+  const failedCount = failedAssets.length;
+  const errorSummary = Array.from(
+    new Set(failedAssets.map((asset) => summarizeResourceAssetError(asset.errorMessage)).filter(Boolean))
+  ).join('；');
+
+  return {
+    completedCount,
+    failedCount,
+    partialSuccess: completedCount > 0 && failedCount > 0,
+    errorSummary
+  };
+};
+
 const getBackgroundActionLabel = (backgroundAction) => {
   return backgroundAction === 'reuse_existing' ? '复用背景' : '新建场景';
 };
@@ -133,6 +243,14 @@ const shortenText = (value = '', limit = 90) => {
   }
 
   return `${normalizedValue.slice(0, limit).trim()}…`;
+};
+
+const formatFrameIntel = (frameTime) => {
+  if (frameTime === null || frameTime === undefined) {
+    return '未记录典型帧';
+  }
+
+  return `整片 ${formatDuration(frameTime)}`;
 };
 
 const MetricCard = ({ label, value, detail }) => {
@@ -290,6 +408,11 @@ const AnalysisDisplay = ({
   const [resourcePromptOverrides, setResourcePromptOverrides] = useState({});
   const [resourceOptimizingKey, setResourceOptimizingKey] = useState('');
   const [resourceEditorError, setResourceEditorError] = useState('');
+  const [resourceImageAssets, setResourceImageAssets] = useState([]);
+  const [resourceImageAssetsLoading, setResourceImageAssetsLoading] = useState(false);
+  const [resourceImageAssetsError, setResourceImageAssetsError] = useState('');
+  const [resourceGeneratingKeys, setResourceGeneratingKeys] = useState([]);
+  const geminiImageProvider = useAppStore((state) => state.providerStatuses.geminiImage);
 
   const characters = analysis?.characters ?? [];
   const backgrounds = analysis?.backgrounds ?? [];
@@ -338,6 +461,24 @@ const AnalysisDisplay = ({
 
   const getResourceKey = (resource) => {
     return `${resource?.resourceType || ''}:${resource?.resourceId || ''}`;
+  };
+
+  const getResourceImageAssetsForResource = (resource) => {
+    if (!resource?.resourceType || !resource?.resourceId) {
+      return [];
+    }
+
+    return resourceImageAssets
+      .filter((asset) => asset.resourceType === resource.resourceType && asset.resourceId === resource.resourceId)
+      .sort((left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0));
+  };
+
+  const getFailedVariantIdsForResource = (resource) => {
+    return new Set(
+      getResourceImageAssetsForResource(resource)
+        .filter((asset) => asset.status === 'failed')
+        .map((asset) => asset.variantId)
+    );
   };
 
   const getResolvedResourcePrompt = (resource) => {
@@ -498,12 +639,136 @@ const AnalysisDisplay = ({
     }
   };
 
+  const refreshResourceImages = async (videoId = Number(video?.id ?? 0), options = {}) => {
+    if (!videoId) {
+      setResourceImageAssets([]);
+      return [];
+    }
+
+    if (!options.silent) {
+      setResourceImageAssetsLoading(true);
+      setResourceImageAssetsError('');
+    }
+
+    try {
+      const assetPayload = await getResourceImages(videoId);
+      const normalizedAssets = assetPayload.map(normalizeResourceImageAsset);
+
+      setResourceImageAssets(normalizedAssets);
+      setResourcePromptOverrides((currentState) => {
+        const persistedOverrides = buildPromptOverridesFromAssets(normalizedAssets);
+        return Object.keys(currentState).length ? currentState : persistedOverrides;
+      });
+
+      return normalizedAssets;
+    } catch (requestError) {
+      setResourceImageAssetsError(requestError?.message || '资源图片加载失败，请稍后重试。');
+      return [];
+    } finally {
+      if (!options.silent) {
+        setResourceImageAssetsLoading(false);
+      }
+    }
+  };
+
+  const generateResourceBundle = async (resource = null, options = {}) => {
+    const targetResource = resource || resourceEditor;
+
+    if (!video?.id || !targetResource?.resourceId) {
+      return null;
+    }
+
+    const resourceKey = getResourceKey(targetResource);
+    const basePrompt = String(
+      resource ? getResolvedResourcePrompt(targetResource) : resourceEditor.draftPrompt || getResolvedResourcePrompt(targetResource)
+    ).trim();
+
+    if (!basePrompt.trim()) {
+      setResourceEditorError('请先准备资源提示词，再执行资源生成。');
+      return null;
+    }
+
+    if (!geminiImageProvider?.ready) {
+      const providerMessage = `Gemini 生图未就绪：${geminiImageProvider?.reason || '缺少必要配置。'}`;
+      setResourceImageAssetsError(providerMessage);
+      setResourceEditorError(providerMessage);
+      return null;
+    }
+
+    const failedVariantIds = getFailedVariantIdsForResource(targetResource);
+    const variantPrompts = getResourceVariantPrompts(targetResource);
+    const requestVariants = options.failedOnly
+      ? variantPrompts.filter((variant) => failedVariantIds.has(variant.id))
+      : variantPrompts;
+
+    if (!requestVariants.length) {
+      const noRetryableMessage = options.failedOnly
+        ? '当前没有失败资源可重试。'
+        : '当前资源没有可生成的调用词。';
+      setResourceImageAssetsError(noRetryableMessage);
+      setResourceEditorError(noRetryableMessage);
+      return null;
+    }
+
+    setResourceImageAssetsError('');
+    setResourceGeneratingKeys((currentState) => [...new Set([...currentState, resourceKey])]);
+
+    try {
+      const payload = await generateResourceImagesRequest({
+        video_id: Number(video.id),
+        resource_type: targetResource.resourceType,
+        resource_id: targetResource.resourceId,
+        resource_name: targetResource.resourceName,
+        source_prompt: basePrompt,
+        representative_frame_time: targetResource.frameTime ?? null,
+        variants: requestVariants.map((variant, index) => ({
+          id: variant.id,
+          label: variant.label,
+          prompt: variant.prompt,
+          sortOrder: index
+        }))
+      });
+      const normalizedAssets = (payload.assets ?? []).map(normalizeResourceImageAsset);
+
+      setResourceImageAssets((currentState) => mergeResourceImageAssets(currentState, normalizedAssets));
+      setResourcePromptOverrides((currentState) => ({
+        ...currentState,
+        [resourceKey]: {
+          prompt: basePrompt,
+          highlightedPrompt: currentState[resourceKey]?.highlightedPrompt || ''
+        }
+      }));
+      setResourceEditorError(payload.error_summary || '');
+
+      return payload;
+    } catch (requestError) {
+      const message = requestError?.message || '资源生成失败，请稍后重试。';
+      setResourceImageAssetsError(message);
+      setResourceEditorError(message);
+      return null;
+    } finally {
+      setResourceGeneratingKeys((currentState) => currentState.filter((item) => item !== resourceKey));
+    }
+  };
+
   useEffect(() => {
     setResourceEditor(createResourceEditorState());
     setResourceEditorOpen(false);
     setResourcePromptOverrides({});
     setResourceOptimizingKey('');
     setResourceEditorError('');
+    setResourceImageAssets([]);
+    setResourceImageAssetsError('');
+    setResourceGeneratingKeys([]);
+  }, [video?.id]);
+
+  useEffect(() => {
+    if (!video?.id) {
+      setResourceImageAssets([]);
+      return;
+    }
+
+    void refreshResourceImages(Number(video.id));
   }, [video?.id]);
 
   useEffect(() => {
@@ -543,6 +808,17 @@ const AnalysisDisplay = ({
   const timeAnchorPromptCount = timeAnchors.filter((anchor) => {
     return Boolean(getScenePrompt(anchor, '').trim());
   }).length;
+  const optimizedCharacterCount = characters.filter((character, index) => {
+    return Boolean(resourcePromptOverrides[getResourceKey(buildCharacterResource(character, index))]?.prompt);
+  }).length;
+  const optimizedSceneCount = sceneCards.filter((scene, index) => {
+    return Boolean(resourcePromptOverrides[getResourceKey(buildSceneResource(scene, index))]?.prompt);
+  }).length;
+  const backgroundAssetReadyCount = backgroundAssets.filter((asset) => asset.status === 'completed').length;
+  const backgroundAssetFailedCount = backgroundAssets.filter((asset) => asset.status === 'failed').length;
+  const backgroundReuseCount = timeAnchors.filter((anchor) => {
+    return (anchor.backgroundAction ?? anchor.background_action) === 'reuse_existing';
+  }).length;
   const metrics = [
     {
       label: '角色卡片',
@@ -565,6 +841,34 @@ const AnalysisDisplay = ({
       detail: '人物与场景代表帧已记录'
     }
   ];
+  const tabCounts = {
+    overview: metrics.length,
+    characters: characters.length,
+    scenes: sceneCards.length,
+    segments: timeAnchors.length
+  };
+  const activeTabSummary = {
+    overview: [
+      `片段提示词 ${timeAnchorPromptCount}`,
+      `典型帧 ${keyFrameCount}`,
+      analysis?.is_mock ? '当前为回退结果' : 'Gemini 真实分析'
+    ],
+    characters: [
+      `典型帧 ${characters.filter((item) => getRepresentativeFrameTime(item) !== null).length}`,
+      `已优化 ${optimizedCharacterCount}`,
+      '可进入角色三视图'
+    ],
+    scenes: [
+      `背景资产 ${backgroundAssetReadyCount}/${sceneCards.length}`,
+      backgroundAssetFailedCount ? `失败 ${backgroundAssetFailedCount}` : '资产状态正常',
+      `已优化 ${optimizedSceneCount}`
+    ],
+    segments: [
+      `复用背景 ${backgroundReuseCount}`,
+      `片段提示词 ${timeAnchorPromptCount}`,
+      `待切分 ${timeAnchors.length}`
+    ]
+  };
 
   const renderPreviewModal = () => {
     if (!lightboxFrame) {
@@ -595,10 +899,10 @@ const AnalysisDisplay = ({
   const renderGeneratedResourceStrip = (resource) => {
     const variantPrompts = getResourceVariantPrompts(resource);
     const optimized = Boolean(resourcePromptOverrides[getResourceKey(resource)]?.prompt);
-    const stackClassName =
-      resource.resourceType === 'character'
-        ? 'resource-generated-stack resource-generated-stack-horizontal'
-        : 'resource-generated-stack';
+    const generatedAssets = getResourceImageAssetsForResource(resource);
+    const generatedAssetMap = new Map(generatedAssets.map((asset) => [asset.variantId, asset]));
+    const isGenerating = resourceGeneratingKeys.includes(getResourceKey(resource));
+    const stackClassName = 'resource-generated-stack';
 
     return (
       <div className={stackClassName}>
@@ -606,19 +910,106 @@ const AnalysisDisplay = ({
           <div key={`${getResourceKey(resource)}-${variant.id}`} className="resource-generated-tile">
             <div className="flex items-start justify-between gap-2">
               <span className="resource-generated-badge">{variant.shortLabel}</span>
-              <span className="resource-generated-status">{optimized ? '可生成' : '待优化'}</span>
+              <span className="resource-generated-status">
+                {generatedAssetMap.get(variant.id)?.status === 'completed'
+                  ? '已生成'
+                  : generatedAssetMap.get(variant.id)?.status === 'failed'
+                    ? '失败'
+                    : isGenerating
+                      ? '生成中'
+                      : optimized
+                        ? '可生成'
+                        : '待优化'}
+              </span>
             </div>
-            <p className="mt-3 text-xs font-semibold text-white">{variant.label}</p>
-            <p className="mt-1 text-[11px] leading-5 text-white/55">
-              {shortenText(
-                resource.resourceType === 'character'
-                  ? '角色三视图资源位，使用 Gemini Image 调用词生成。'
-                  : '场景多角度背景资源位，使用 Gemini Image 调用词生成。',
-                54
-              )}
-            </p>
+            {generatedAssetMap.get(variant.id)?.assetUrl ? (
+              <img
+                src={generatedAssetMap.get(variant.id).assetUrl}
+                alt={`${resource.resourceName} ${variant.label}`}
+                className="resource-generated-image"
+              />
+            ) : (
+              <>
+                <p className="mt-3 text-xs font-semibold text-white">{variant.label}</p>
+                <p className="mt-1 text-[11px] leading-5 text-white/55">
+                  {shortenText(
+                    summarizeResourceAssetError(generatedAssetMap.get(variant.id)?.errorMessage) ||
+                      (resource.resourceType === 'character'
+                        ? '角色三视图资源位，使用 Gemini Image 调用词生成。'
+                        : '场景多角度背景资源位，使用 Gemini Image 调用词生成。'),
+                    54
+                  )}
+                </p>
+              </>
+            )}
           </div>
         ))}
+      </div>
+    );
+  };
+
+  const renderConsoleTabs = () => {
+    return (
+      <div className="analysis-console-tab-grid" aria-label="整片资源分析视图">
+        {TAB_ITEMS.map((tab) => {
+          const isActive = activeTab === tab.id;
+          const summaryItems = activeTabSummary[tab.id] || [];
+
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              aria-label={tab.label}
+              aria-pressed={isActive}
+              className={`analysis-console-tab ${isActive ? 'analysis-console-tab-active' : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <div className="analysis-console-tab-topline">
+                <span className="analysis-console-tab-title">{tab.label}</span>
+                <span className="analysis-console-tab-count">{tabCounts[tab.id] ?? 0}</span>
+              </div>
+              <p className="analysis-console-tab-note">{tab.note}</p>
+              <div className="analysis-console-tab-meta">
+                {summaryItems.slice(0, 2).map((item) => (
+                  <span key={`${tab.id}-${item}`} className="resource-mini-chip resource-mini-chip-muted">
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderResourceMatrixHeader = (columns) => {
+    return (
+      <div className="resource-matrix-header" aria-hidden="true">
+        {columns.map((column) => (
+          <span key={column} className="resource-matrix-header-cell">
+            {column}
+          </span>
+        ))}
+      </div>
+    );
+  };
+
+  const renderResourcePanelHeader = ({ title, description, chips = [] }) => {
+    return (
+      <div className="analysis-panel-head">
+        <div className="min-w-0">
+          <p className="analysis-panel-kicker">Operations Console</p>
+          <h4 className="analysis-panel-title">{title}</h4>
+          <p className="analysis-panel-copy">{description}</p>
+        </div>
+        <div className="analysis-panel-chiprail">
+          {chips.map((item) => (
+            <span key={`${title}-${item}`} className="resource-mini-chip resource-mini-chip-muted">
+              {item}
+            </span>
+          ))}
+        </div>
       </div>
     );
   };
@@ -637,13 +1028,26 @@ const AnalysisDisplay = ({
     const frameNote = resource.frameNote ?? '';
     const displayPrompt = getResolvedResourcePrompt(resource);
     const isOptimizing = resourceOptimizingKey === resourceKey;
+    const isGenerating = resourceGeneratingKeys.includes(resourceKey);
     const promptStatus = resourcePromptOverrides[resourceKey]?.prompt ? '已优化' : '原始';
     const isCharacterResource = resource.resourceType === 'character';
     const promptPreviewTitle = isCharacterResource ? '角色提示词摘要' : '资源提示词';
+    const promptSummaryValue = resource.sourcePrompt || '暂无资源提示词。';
+    const generatedAssets = getResourceImageAssetsForResource(resource);
+    const generationSummary = getResourceGenerationSummary(generatedAssets);
+    const canGenerateResource = Boolean(geminiImageProvider?.ready);
+    const generateResourceTitle = canGenerateResource
+      ? isCharacterResource
+        ? '调用 Gemini 生图生成角色三视图。'
+        : '调用 Gemini 生图生成三张背景参考图。'
+      : `Gemini 生图未就绪：${geminiImageProvider?.reason || '缺少必要配置。'}`;
 
     const frameColumn = (
       <div className="resource-row-frame">
         <p className="resource-section-label">原始帧预览</p>
+        <div className="resource-inline-meta">
+          <span className="resource-mini-chip resource-mini-chip-muted">{formatFrameIntel(frameTime)}</span>
+        </div>
         <VideoFramePreview
           videoUrl={analysisFrameSource}
           timeSeconds={frameTime}
@@ -652,14 +1056,37 @@ const AnalysisDisplay = ({
           note={frameNote}
           requestedTimeLabel="整片时间"
         />
+
+        {isCharacterResource ? (
+          <div className="resource-prompt-box resource-prompt-box-summary">
+            <p className="resource-attribute-label">{promptPreviewTitle}</p>
+            <p className="resource-prompt-summary-text">{promptSummaryValue}</p>
+          </div>
+        ) : null}
       </div>
     );
 
     const promptColumn = (
       <div className="resource-row-prompt">
-        <p className="resource-section-label">{promptPreviewTitle}</p>
+        <p className="resource-section-label">{isCharacterResource ? '当前总提示词' : promptPreviewTitle}</p>
+        <div className="resource-inline-meta">
+          <span className="resource-mini-chip">{promptStatus}</span>
+          {isCharacterResource ? (
+            <span className="resource-mini-chip resource-mini-chip-muted">三视图建模</span>
+          ) : (
+            <span className="resource-mini-chip resource-mini-chip-muted">
+              {backgroundAssetMap.get(resource.resourceId)?.status === 'completed' ? '背景资产已就绪' : '待背景资产'}
+            </span>
+          )}
+        </div>
+        {generationSummary.errorSummary ? (
+          <div className="mt-3 rounded-[16px] border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] leading-5 text-amber-100">
+            {generationSummary.partialSuccess ? '部分成功：' : '生成提醒：'}
+            {generationSummary.errorSummary}
+          </div>
+        ) : null}
         {isCharacterResource ? (
-          <div className="resource-attribute-grid">
+          <div className="resource-attribute-stack">
             <div className="resource-attribute-card">
               <p className="resource-attribute-label">外表描述</p>
               <p className="resource-attribute-value">{resource.appearancePrompt || '待补充'}</p>
@@ -697,6 +1124,32 @@ const AnalysisDisplay = ({
 
           <button
             type="button"
+            className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-100 transition hover:border-emerald-500/35 hover:bg-emerald-500/15 disabled:opacity-50"
+            disabled={isGenerating || !displayPrompt.trim() || !canGenerateResource}
+            onClick={() => void generateResourceBundle(resource)}
+            title={generateResourceTitle}
+          >
+            {isGenerating
+              ? '生成中...'
+              : isCharacterResource
+                ? '生成三视图'
+                : '生成背景图'}
+          </button>
+
+          {generationSummary.failedCount ? (
+            <button
+              type="button"
+              className="rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:border-amber-500/35 hover:bg-amber-500/15 disabled:opacity-50"
+              disabled={isGenerating || !canGenerateResource}
+              onClick={() => void generateResourceBundle(resource, { failedOnly: true })}
+              title={generateResourceTitle}
+            >
+              重试失败项
+            </button>
+          ) : null}
+
+          <button
+            type="button"
             className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-semibold text-white/78 transition hover:border-white/20 hover:bg-white/[0.08] disabled:opacity-50"
             disabled={frameTime === null}
             onClick={() =>
@@ -714,6 +1167,20 @@ const AnalysisDisplay = ({
           >
             放大原帧
           </button>
+
+          <HoverPopover
+            trigger="查看完整提示词"
+            triggerClassName="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] font-semibold text-white/75 transition hover:border-white/20 hover:bg-black/35"
+          >
+            <div className="space-y-2">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/45">
+                完整资源提示词
+              </p>
+              <p className="whitespace-pre-wrap text-sm leading-6 text-white/82">
+                {displayPrompt || '暂无资源提示词。'}
+              </p>
+            </div>
+          </HoverPopover>
         </div>
       </div>
     );
@@ -739,14 +1206,13 @@ const AnalysisDisplay = ({
               >
                 编辑详情
               </button>
-              <span className="resource-mini-chip">{promptStatus}</span>
               {meta.map((item) => (
                 <span key={`${resourceKey}-${item}`} className="resource-mini-chip resource-mini-chip-muted">
                   {item}
                 </span>
               ))}
             </div>
-            {description ? <p className="mt-2 text-[11px] leading-5 text-white/55">{description}</p> : null}
+            {description ? <p className="resource-row-description">{description}</p> : null}
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
@@ -873,6 +1339,27 @@ const AnalysisDisplay = ({
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <button
                   type="button"
+                  className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 transition hover:border-emerald-500/35 hover:bg-emerald-500/15 disabled:opacity-50"
+                  disabled={
+                    resourceGeneratingKeys.includes(currentResourceKey) ||
+                    !resourceEditor.draftPrompt.trim() ||
+                    !geminiImageProvider?.ready
+                  }
+                  onClick={() => void generateResourceBundle(resourceEditor)}
+                  title={
+                    geminiImageProvider?.ready
+                      ? '调用 Gemini 生图生成当前资源。'
+                      : `Gemini 生图未就绪：${geminiImageProvider?.reason || '缺少必要配置。'}`
+                  }
+                >
+                  {resourceGeneratingKeys.includes(currentResourceKey)
+                    ? '资源生成中...'
+                    : resourceEditor.resourceType === 'character'
+                      ? '生成整组三视图'
+                      : '生成整组背景图'}
+                </button>
+                <button
+                  type="button"
                   className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/75 transition hover:border-white/20 hover:bg-white/[0.08]"
                   onClick={() =>
                     setResourceEditor((currentState) => ({
@@ -934,17 +1421,29 @@ const AnalysisDisplay = ({
     }
 
     return (
-      <div className="space-y-3">
+      <div className="space-y-2.5">
         {characters.map((character, index) => {
           const resource = buildCharacterResource(character, index);
+          const generationSummary = getResourceGenerationSummary(getResourceImageAssetsForResource(resource));
+          const generatedCount = generationSummary.completedCount;
 
           return renderResourceCard(resource, {
             eyebrow: 'Character Resource',
             title: resource.resourceName,
             description: '人物资源同时记录外表描述、性格气质和三视图调用词，用于角色一致性与后续 Gemini 白底三视图生成。',
-            status: resource.frameTime !== null ? 'completed' : 'idle',
-            statusLabel: resource.frameTime !== null ? '已记录原始帧' : '待补原始帧',
-            meta: [resource.resourceId]
+            status:
+              generatedCount === 3 ? 'completed' : resourceGeneratingKeys.includes(getResourceKey(resource)) ? 'processing' : resource.frameTime !== null ? 'completed' : 'idle',
+            statusLabel:
+              generatedCount === 3
+                ? '三视图已落库'
+                : generationSummary.failedCount && !resourceGeneratingKeys.includes(getResourceKey(resource))
+                  ? '三视图待重试'
+                : resourceGeneratingKeys.includes(getResourceKey(resource))
+                  ? '三视图生成中'
+                  : resource.frameTime !== null
+                    ? '已记录原始帧'
+                    : '待补原始帧',
+            meta: [resource.resourceId, `${generatedCount}/3`]
           });
         })}
       </div>
@@ -961,18 +1460,29 @@ const AnalysisDisplay = ({
     }
 
     return (
-      <div className="space-y-3">
+      <div className="space-y-2.5">
         {sceneCards.map((background, index) => {
           const resource = buildSceneResource(background, index);
           const backgroundAsset = backgroundAssetMap.get(resource.resourceId) || null;
+          const generationSummary = getResourceGenerationSummary(getResourceImageAssetsForResource(resource));
+          const generatedCount = generationSummary.completedCount;
 
           return renderResourceCard(resource, {
             eyebrow: 'Scene Resource',
             title: resource.resourceName,
             description: getBackgroundDescription(background),
-            status: backgroundAsset?.status || (resource.frameTime !== null ? 'completed' : 'idle'),
-            statusLabel: getBackgroundAssetStatusLabel(backgroundAsset),
-            meta: [resource.resourceId, backgroundAssetsLoading ? '同步中' : '背景资产']
+            status:
+              backgroundAsset?.status ||
+              (generationSummary.failedCount ? 'failed' : resource.frameTime !== null ? 'completed' : 'idle'),
+            statusLabel:
+              generationSummary.failedCount && !backgroundAsset
+                ? '背景图待重试'
+                : getBackgroundAssetStatusLabel(backgroundAsset),
+            meta: [
+              resource.resourceId,
+              backgroundAssetsLoading ? '同步中' : '背景资产',
+              `${generatedCount}/3`
+            ]
           });
         })}
       </div>
@@ -1128,13 +1638,13 @@ const AnalysisDisplay = ({
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="rounded-[26px] border border-white/10 bg-[linear-gradient(135deg,rgba(15,15,35,0.96),rgba(4,6,14,0.96)),radial-gradient(circle_at_top_right,rgba(225,29,72,0.18),transparent_28%)] px-5 py-5 text-white">
+            <div className="rounded-[24px] border border-white/10 bg-[linear-gradient(135deg,rgba(15,15,35,0.96),rgba(4,6,14,0.96)),radial-gradient(circle_at_top_right,rgba(225,29,72,0.18),transparent_28%)] px-4 py-4 text-white">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.3em] text-white/40">Current Asset</p>
-                  <h3 className="mt-3 text-2xl font-bold">{video.filename}</h3>
-                  <p className="mt-3 max-w-3xl text-sm leading-7 text-white/70">
-                    当前视频会先做整片理解，再给出片段级切分预案、角色信息、场景提示词和代表帧，供后续片段重生成使用。
+                  <p className="text-[10px] uppercase tracking-[0.28em] text-white/40">Current Asset</p>
+                  <h3 className="mt-2 text-lg font-bold">{video.filename}</h3>
+                  <p className="mt-2 max-w-3xl text-[12px] leading-6 text-white/68">
+                    当前视频会先做整片理解，再输出角色、场景、代表帧和片段级切分预案，供后续重生成使用。
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -1210,106 +1720,202 @@ const AnalysisDisplay = ({
               </div>
             ) : null}
 
+            {resourceImageAssetsError ? (
+              <div
+                role="alert"
+                className="rounded-[26px] border border-amber-500/20 bg-amber-500/10 px-5 py-4 text-sm text-amber-100"
+              >
+                {resourceImageAssetsError}
+              </div>
+            ) : null}
+
             {analysis ? (
               <>
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1.12fr)_320px]">
-                  <div className="rounded-[26px] border border-white/10 bg-white/[0.04] px-5 py-5">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.26em] text-white/50">Plot</p>
-                        <h3 className="mt-2 text-xl font-bold text-white">剧情摘要</h3>
+                <div className="analysis-intel-grid">
+                  <div className="analysis-intel-card">
+                    <div className="analysis-panel-head">
+                      <div className="min-w-0">
+                        <p className="analysis-panel-kicker">Intelligence Summary</p>
+                        <h3 className="analysis-intel-title">剧情摘要</h3>
+                        <p className="analysis-panel-copy">
+                          当前左列保留整片理解的核心情报，角色、场景和片段预案会在下方切换成控制台工位视图。
+                        </p>
                       </div>
-                      <StatusBadge status={analysisStatusTone} label={analysisStatusLabel} />
+                      <div className="analysis-panel-chiprail">
+                        <StatusBadge status={analysisStatusTone} label={analysisStatusLabel} />
+                        <span className="resource-mini-chip resource-mini-chip-muted">
+                          {analysis.provider || 'remote-gemini'}
+                        </span>
+                        {analysis.model ? (
+                          <span className="resource-mini-chip resource-mini-chip-muted">{analysis.model}</span>
+                        ) : null}
+                        {analysis.auth_variant ? (
+                          <span className="resource-mini-chip resource-mini-chip-muted">
+                            鉴权 {analysis.auth_variant}
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
-                    {(analysis?.provider || analysis?.model || analysis?.auth_variant) ? (
-                      <p className="mt-3 text-xs uppercase tracking-[0.18em] text-white/40">
-                        {analysis.provider || 'remote-gemini'}
-                        {analysis.model ? ` · ${analysis.model}` : ''}
-                        {analysis.auth_variant ? ` · ${analysis.auth_variant}` : ''}
-                      </p>
-                    ) : null}
-                    <p className="mt-4 text-sm leading-7 text-white/80">{analysis.plot || '暂无剧情内容。'}</p>
+
+                    <p className="analysis-intel-plot">{analysis.plot || '暂无剧情内容。'}</p>
+
+                    <div className="analysis-intel-stat-grid">
+                      {metrics.map((metric) => (
+                        <div key={metric.label} className="analysis-intel-stat">
+                          <p className="analysis-intel-stat-label">{metric.label}</p>
+                          <p className="analysis-intel-stat-value">{metric.value}</p>
+                          <p className="analysis-intel-stat-note">{metric.detail}</p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
 
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                    {metrics.map((metric) => (
-                      <MetricCard
-                        key={metric.label}
-                        label={metric.label}
-                        value={metric.value}
-                        detail={metric.detail}
-                      />
-                    ))}
+                  <div className="analysis-intel-sidebar">
+                    <MetricCard
+                      label="当前来源"
+                      value={analysis?.is_mock ? 'Mock' : 'Gemini'}
+                      detail="可结合系统状态弹窗确认真实调用情况"
+                    />
+                    <MetricCard
+                      label="鉴权方式"
+                      value={analysis?.auth_variant || '等待调用'}
+                      detail="前端展示当前一次整片分析的鉴权模式"
+                    />
+                    <MetricCard
+                      label="代表帧覆盖"
+                      value={keyFrameCount}
+                      detail="有合法时间点时可直接抽帧预览"
+                    />
+                    <MetricCard
+                      label="片段提示词"
+                      value={timeAnchorPromptCount}
+                      detail="适合直接进入后续片段生成流程"
+                    />
                   </div>
                 </div>
 
-                <div className="rounded-[26px] border border-white/10 bg-white/[0.04] px-4 py-4">
-                  <div className="flex flex-wrap gap-2">
-                    {TAB_ITEMS.map((tab) => (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                          activeTab === tab.id
-                            ? 'bg-white text-slate-950'
-                            : 'border border-white/10 bg-black/20 text-white/70 hover:border-white/20 hover:bg-black/30'
-                        }`}
-                        onClick={() => setActiveTab(tab.id)}
-                      >
-                        {tab.label}
-                      </button>
-                    ))}
-                  </div>
+                <div className="analysis-console-shell">
+                  {renderConsoleTabs()}
 
-                  <div className="mt-4">
+                  <div className="analysis-console-stage">
                     {activeTab === 'overview' ? (
                       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)]">
-                        <div className="rounded-[24px] border border-white/10 bg-black/20 px-4 py-4">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-white/45">
-                            结果总览
-                          </p>
-                          <p className="mt-3 text-sm leading-7 text-white/75">
-                            本次整片理解已经抽取了 {characters.length} 个角色、{sceneCards.length} 个场景和{' '}
-                            {timeAnchors.length} 个待切分片段。
-                            如果你准备进入片段工作台，优先检查角色设定、场景提示词和片段边界是否满足后续生成需求。
-                          </p>
+                        <div className="analysis-console-card">
+                          {renderResourcePanelHeader({
+                            title: '整片情报总览',
+                            description:
+                              '本次整片理解已经抽取了角色、场景和待切分片段。进入片段工作台前，优先检查角色设定、场景提示词和片段边界是否适合后续生成。',
+                            chips: [
+                              `角色 ${characters.length}`,
+                              `场景 ${sceneCards.length}`,
+                              `片段 ${timeAnchors.length}`,
+                              `模型 ${analysis.model || '待分析'}`
+                            ]
+                          })}
 
-                          <div className="mt-4 flex flex-wrap gap-2">
-                            <span className="toolbar-pill">角色 {characters.length}</span>
-                            <span className="toolbar-pill">场景 {sceneCards.length}</span>
-                            <span className="toolbar-pill">片段 {timeAnchors.length}</span>
-                            <span className="toolbar-pill">模型 {analysis.model || '等待分析'}</span>
+                          <div className="analysis-console-list">
+                            <div className="analysis-console-list-item">
+                              <span className="analysis-console-list-label">场景资产复用</span>
+                              <span className="analysis-console-list-value">
+                                已就绪 {backgroundAssetReadyCount} / {sceneCards.length}
+                              </span>
+                            </div>
+                            <div className="analysis-console-list-item">
+                              <span className="analysis-console-list-label">角色资源优化</span>
+                              <span className="analysis-console-list-value">
+                                已优化 {optimizedCharacterCount} / {characters.length}
+                              </span>
+                            </div>
+                            <div className="analysis-console-list-item">
+                              <span className="analysis-console-list-label">场景资源优化</span>
+                              <span className="analysis-console-list-value">
+                                已优化 {optimizedSceneCount} / {sceneCards.length}
+                              </span>
+                            </div>
+                            <div className="analysis-console-list-item">
+                              <span className="analysis-console-list-label">片段提示词覆盖</span>
+                              <span className="analysis-console-list-value">
+                                {timeAnchorPromptCount} / {timeAnchors.length}
+                              </span>
+                            </div>
                           </div>
                         </div>
 
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <MetricCard
-                            label="当前来源"
-                            value={analysis?.is_mock ? 'Mock' : 'Gemini'}
-                            detail="可结合系统状态弹窗确认真实调用情况"
-                          />
-                          <MetricCard
-                            label="鉴权方式"
-                            value={analysis?.auth_variant || '等待调用'}
-                            detail="前端展示当前一次整片分析的鉴权模式"
-                          />
-                          <MetricCard
-                            label="代表帧覆盖"
-                            value={keyFrameCount}
-                            detail="有合法时间点时可直接抽帧预览"
-                          />
-                          <MetricCard
-                            label="片段提示词"
-                            value={timeAnchorPromptCount}
-                            detail="适合直接进入后续片段生成流程"
-                          />
+                        <div className="analysis-console-card">
+                          {renderResourcePanelHeader({
+                            title: '操作提示',
+                            description:
+                              '建议先优化角色和场景资源提示词，再进入片段工作区，以减少后续逐段修 prompt 的成本。',
+                            chips: activeTabSummary.overview
+                          })}
+
+                          <div className="analysis-console-brick-grid">
+                            <div className="analysis-console-brick">
+                              <p className="analysis-console-brick-title">角色资源</p>
+                              <p className="analysis-console-brick-copy">
+                                保留外表描述与性格气质，优化后可直接进入 Gemini 纯白背景三视图。
+                              </p>
+                            </div>
+                            <div className="analysis-console-brick">
+                              <p className="analysis-console-brick-title">场景资源</p>
+                              <p className="analysis-console-brick-copy">
+                                场景卡片会同步显示背景资产状态，便于判断是否可复用。
+                              </p>
+                            </div>
+                            <div className="analysis-console-brick">
+                              <p className="analysis-console-brick-title">片段预案</p>
+                              <p className="analysis-console-brick-copy">
+                                片段分解里可先核对背景复用与代表帧，再决定是否立即切分。
+                              </p>
+                            </div>
+                            <div className="analysis-console-brick">
+                              <p className="analysis-console-brick-title">提示词查看</p>
+                              <p className="analysis-console-brick-copy">
+                                长提示词放进了弹窗和悬浮卡，常驻区优先展示操作与状态。
+                              </p>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     ) : null}
 
-                    {activeTab === 'characters' ? renderCharacterCards() : null}
-                    {activeTab === 'scenes' ? renderSceneCards() : null}
-                    {activeTab === 'segments' ? renderSegmentBreakdown() : null}
+                    {activeTab === 'characters' ? (
+                      <div className="analysis-console-card">
+                        {renderResourcePanelHeader({
+                          title: '角色资源库',
+                          description:
+                            '角色资源区按原始帧、角色提示词和三视图资源位排布，更像运营控制台中的角色建模工位。',
+                          chips: activeTabSummary.characters
+                        })}
+                        {renderResourceMatrixHeader(['原始帧与摘要', '当前总提示词', '生成的新资源'])}
+                        {renderCharacterCards()}
+                      </div>
+                    ) : null}
+
+                    {activeTab === 'scenes' ? (
+                      <div className="analysis-console-card">
+                        {renderResourcePanelHeader({
+                          title: '场景资源库',
+                          description:
+                            '场景资源区会同步展示原始帧、资源提示词和多角度背景资源位，并附带背景资产状态。',
+                          chips: activeTabSummary.scenes
+                        })}
+                        {renderResourceMatrixHeader(['新资源', '原始帧', '场景提示词'])}
+                        {renderSceneCards()}
+                      </div>
+                    ) : null}
+
+                    {activeTab === 'segments' ? (
+                      <div className="analysis-console-card">
+                        {renderResourcePanelHeader({
+                          title: '片段分解',
+                          description:
+                            '这里按片段显示切分预案、背景复用决策和片段提示词，用于进入片段工作台前的最终核对。',
+                          chips: activeTabSummary.segments
+                        })}
+                        {renderSegmentBreakdown()}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </>

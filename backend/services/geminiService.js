@@ -44,10 +44,15 @@ const parseJsonPayload = (value, fallbackLabel) => {
 };
 
 const renderHighlightedPrompt = (prompt = '') => {
-  return prompt.replace(
-    /@([\p{L}\p{N}_-]+)/gu,
-    '<span class="mention text-blue-500">$&</span>'
-  );
+  return prompt
+    .replace(
+      /@([\p{L}\p{N}_-]+)/gu,
+      '<span class="mention text-blue-500">$&</span>'
+    )
+    .replace(
+      /#([\p{L}\p{N}_-]+)/gu,
+      '<span class="mention text-amber-400">$&</span>'
+    );
 };
 
 const normalizeOptionalNumber = (value) => {
@@ -221,7 +226,7 @@ const createMockSegmentAnalysis = ({ segment, overallAnalysis }) => {
     scenes: [fallbackSceneName],
     scene: `片段 ${segment.segmentIndex + 1} 的场景延续整体剧情，强调环境氛围和镜头层次。`,
     action: `${primaryCharacter} 在当前片段中推进主要动作，镜头聚焦人物状态变化。`,
-    prompt: `@${primaryCharacter} 在 @${fallbackSceneName} 中推进剧情，保持人物一致性、镜头连贯和环境细节。`
+    prompt: `@${primaryCharacter} 在 #${fallbackSceneName} 中推进剧情，保持人物一致性、镜头连贯和环境细节。`
   };
 };
 
@@ -306,15 +311,26 @@ const createMockOptimizedPrompt = ({ prompt, characters, backgrounds, mode = 'ge
     };
   }
 
-  [...normalizedCharacters, ...normalizedBackgrounds]
+  normalizedCharacters
     .sort((left, right) => String(right.name).length - String(left.name).length)
     .forEach((resource) => {
       if (!resource.name) {
         return;
       }
 
-      const namePattern = new RegExp(`(?<!@)${escapeRegExp(resource.name)}`, 'gu');
+      const namePattern = new RegExp(`(?<![@#])${escapeRegExp(resource.name)}`, 'gu');
       optimizedPrompt = optimizedPrompt.replace(namePattern, `@${resource.name}`);
+    });
+
+  normalizedBackgrounds
+    .sort((left, right) => String(right.name).length - String(left.name).length)
+    .forEach((resource) => {
+      if (!resource.name) {
+        return;
+      }
+
+      const namePattern = new RegExp(`(?<![@#])${escapeRegExp(resource.name)}`, 'gu');
+      optimizedPrompt = optimizedPrompt.replace(namePattern, `#${resource.name}`);
     });
 
   return {
@@ -945,7 +961,7 @@ const buildSegmentAnalysisPrompt = ({ segment, overallAnalysis }) => {
         scenes: ['场景名称'],
         scene: '片段场景描述',
         action: '片段主要动作描述',
-        prompt: '@角色名 + @场景名 + 动作 + 镜头语言 的可编辑中文提示词'
+        prompt: '@角色名 + #场景名 + 动作 + 镜头语言 的可编辑中文提示词'
       },
       null,
       2
@@ -961,8 +977,8 @@ const buildSegmentAnalysisPrompt = ({ segment, overallAnalysis }) => {
     '2. scenes 返回当前片段涉及到的场景资源名称，必须优先复用整片场景资源库里的原始名称，并按叙事出现顺序返回。',
     '3. prompt 必须为后续视频生成可直接编辑的中文提示词。',
     '4. prompt 中涉及角色时，用 @角色名 标记，而不是展开成长描述。',
-    '5. prompt 中涉及场景时，用 @场景名 标记，而不是直接展开真实场景资源提示词。',
-    '6. 如果片段中出现多个场景，请在 scenes 中列全，并在 prompt 里按顺序引用对应的 @场景名。',
+    '5. prompt 中涉及场景时，用 #场景名 标记，而不是直接展开真实场景资源提示词。',
+    '6. 如果片段中出现多个场景，请在 scenes 中列全，并在 prompt 里按顺序引用对应的 #场景名。',
     '7. 当前片段必须服从已绑定的 backgroundId/backgroundAction/backgroundName，不要重新发明新的场景决策。',
     '8. 如果当前片段标记为 reuse_existing，需要在 scene 和 prompt 中强调延续同一场景资源，只变化动作、表演或镜头阶段。',
     '9. 输出必须是有效 JSON。'
@@ -991,7 +1007,7 @@ const buildPromptOptimizationPrompt = ({ prompt, characters, backgrounds, mode =
       '1. 只围绕角色本身优化，不要引入任何场景、环境、道具或镜头叙事。',
       '2. 必须综合角色的外貌描述和性格气质，整理为单人角色三视图资源提示词。',
       '3. 明确纯白无缝背景、全身完整入镜、中性站姿、正面/侧面/背面都可复用。',
-      '4. 不要使用 @场景名，也不要引入任何场景资源。',
+      '4. 不要使用 #场景名，也不要引入任何场景资源。',
       '5. 不必使用 @角色名，直接输出纯角色资源提示词正文。',
       '6. 只返回 JSON。'
     ].join('\n');
@@ -1016,7 +1032,7 @@ const buildPromptOptimizationPrompt = ({ prompt, characters, backgrounds, mode =
       '1. 只优化场景本身，不要引入人物或角色动作。',
       '2. 强调空间结构、材质、光线、景深和镜头角度兼容性。',
       '3. 输出适合作为多角度背景参考图的纯场景提示词。',
-      '4. 不要使用 @角色名 或 @场景名。',
+      '4. 不要使用 @角色名 或 #场景名。',
       '5. 只返回 JSON。'
     ].join('\n');
   }
@@ -1027,7 +1043,7 @@ const buildPromptOptimizationPrompt = ({ prompt, characters, backgrounds, mode =
     '返回结构必须完全符合：',
     JSON.stringify(
       {
-        optimizedPrompt: '@角色名 在 @场景名 中完成更清晰的镜头描述'
+        optimizedPrompt: '@角色名 在 #场景名 中完成更清晰的镜头描述'
       },
       null,
       2
@@ -1038,8 +1054,8 @@ const buildPromptOptimizationPrompt = ({ prompt, characters, backgrounds, mode =
     '要求：',
     '1. 保持中文输出。',
     '2. 所有角色名称统一替换成 @角色名。',
-    '3. 如果提示词中出现了场景资源库中的场景名称，也统一替换成 @场景名。',
-    '4. 如果原始提示词已经包含 @角色名 或 @场景名，继续保留这种引用形式，不要把资源提示词正文直接展开。',
+    '3. 如果提示词中出现了场景资源库中的场景名称，也统一替换成 #场景名。',
+    '4. 如果原始提示词已经包含 @角色名 或 #场景名，继续保留这种引用形式，不要把资源提示词正文直接展开。',
     '5. 提示词要更适合视频生成或资源设计，补足镜头、场景、动作、氛围，但不要改变核心语义。',
     '6. 只返回 JSON。'
   ].join('\n');

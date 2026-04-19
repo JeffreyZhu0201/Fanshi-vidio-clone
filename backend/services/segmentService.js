@@ -13,6 +13,8 @@ const serializeGenerationTask = (task) => {
     return null;
   }
 
+  const taskMeta = task.meta ?? {};
+
   return {
     id: task.id,
     status: task.status,
@@ -21,6 +23,11 @@ const serializeGenerationTask = (task) => {
     optimized_prompt: task.optimizedPrompt,
     result_url: task.resultUrl,
     error_message: task.errorMessage,
+    engine: String(taskMeta.engine ?? '').trim(),
+    is_mock: Boolean(taskMeta.isMock),
+    remote_task_id: String(taskMeta.remoteTaskId ?? '').trim(),
+    fallback_reason: String(taskMeta.fallbackReason ?? '').trim(),
+    provider_error: String(taskMeta.providerError ?? '').trim(),
     created_at: task.createdAt,
     updated_at: task.updatedAt
   };

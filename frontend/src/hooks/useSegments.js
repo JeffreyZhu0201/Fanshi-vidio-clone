@@ -36,32 +36,31 @@ const getTaskErrorMessage = (taskPayload, fallback = '') => {
 };
 
 const normalizeSegment = (segment) => {
-  const latestCompletedGenerationTask = segment.latest_generation_task
-    ? {
-        task_id: segment.latest_generation_task.id,
-        status: segment.latest_generation_task.status,
-        progress: segment.latest_generation_task.progress,
-        prompt: segment.latest_generation_task.prompt ?? '',
-        optimizedPrompt: segment.latest_generation_task.optimized_prompt ?? '',
-        result_url: toAbsoluteAssetUrl(segment.latest_generation_task.result_url),
-        error_message: segment.latest_generation_task.error_message ?? '',
-        created_at: segment.latest_generation_task.created_at,
-        updated_at: segment.latest_generation_task.updated_at
-      }
-    : null;
-  const latestAttemptTask = segment.latest_attempt_task
-    ? {
-        task_id: segment.latest_attempt_task.id,
-        status: segment.latest_attempt_task.status,
-        progress: segment.latest_attempt_task.progress,
-        prompt: segment.latest_attempt_task.prompt ?? '',
-        optimizedPrompt: segment.latest_attempt_task.optimized_prompt ?? '',
-        result_url: toAbsoluteAssetUrl(segment.latest_attempt_task.result_url),
-        error_message: segment.latest_attempt_task.error_message ?? '',
-        created_at: segment.latest_attempt_task.created_at,
-        updated_at: segment.latest_attempt_task.updated_at
-      }
-    : latestCompletedGenerationTask;
+  const normalizeGenerationTask = (taskPayload) => {
+    if (!taskPayload) {
+      return null;
+    }
+
+    return {
+      task_id: taskPayload.id,
+      status: taskPayload.status,
+      progress: taskPayload.progress,
+      prompt: taskPayload.prompt ?? '',
+      optimizedPrompt: taskPayload.optimized_prompt ?? '',
+      result_url: toAbsoluteAssetUrl(taskPayload.result_url),
+      error_message: taskPayload.error_message ?? '',
+      engine: taskPayload.engine ?? '',
+      is_mock: Boolean(taskPayload.is_mock),
+      remote_task_id: taskPayload.remote_task_id ?? '',
+      fallback_reason: taskPayload.fallback_reason ?? '',
+      provider_error: taskPayload.provider_error ?? '',
+      created_at: taskPayload.created_at,
+      updated_at: taskPayload.updated_at
+    };
+  };
+
+  const latestCompletedGenerationTask = normalizeGenerationTask(segment.latest_generation_task);
+  const latestAttemptTask = normalizeGenerationTask(segment.latest_attempt_task) ?? latestCompletedGenerationTask;
 
   return {
     id: segment.id,
