@@ -1,4 +1,9 @@
 import { getGenerationTaskStatus, startGeneration } from '../services/generationService.js';
+import {
+  getShotGenerationTaskStatus,
+  startShotBatchGeneration,
+  startShotGeneration
+} from '../services/shotGenerationService.js';
 
 const generateSegment = async (request, response) => {
   const result = await startGeneration({
@@ -14,4 +19,28 @@ const fetchGenerationTask = async (request, response) => {
   response.status(200).json(result);
 };
 
-export { generateSegment, fetchGenerationTask };
+const generateShot = async (request, response) => {
+  const result = await startShotGeneration({
+    segmentId: request.body.segment_id,
+    shotId: request.body.shot_id,
+    prompt: request.body.prompt
+  });
+
+  response.status(202).json(result);
+};
+
+const generateShotBatch = async (request, response) => {
+  const result = await startShotBatchGeneration({
+    segmentId: request.body.segment_id,
+    shots: request.body.shots ?? []
+  });
+
+  response.status(202).json(result);
+};
+
+const fetchShotGenerationTask = async (request, response) => {
+  const result = await getShotGenerationTaskStatus(request.params.taskId);
+  response.status(200).json(result);
+};
+
+export { generateSegment, fetchGenerationTask, generateShot, generateShotBatch, fetchShotGenerationTask };

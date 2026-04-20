@@ -97,3 +97,32 @@ CREATE TABLE IF NOT EXISTS `generation_tasks` (
   CONSTRAINT `generation_tasks_progress_check`
     CHECK (`progress` >= 0 AND `progress` <= 100)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `shot_generation_tasks` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `segment_id` INT UNSIGNED NOT NULL,
+  `shot_id` VARCHAR(191) NOT NULL,
+  `shot_index` INT UNSIGNED NOT NULL DEFAULT 0,
+  `prompt` LONGTEXT NOT NULL,
+  `optimized_prompt` LONGTEXT NULL,
+  `start_time` DECIMAL(10, 2) NULL,
+  `end_time` DECIMAL(10, 2) NULL,
+  `duration_seconds` DECIMAL(10, 2) NULL,
+  `status` ENUM('pending', 'processing', 'completed', 'failed') NOT NULL DEFAULT 'pending',
+  `result_url` VARCHAR(500) NULL,
+  `progress` INT UNSIGNED NOT NULL DEFAULT 0,
+  `error_message` TEXT NULL,
+  `meta` JSON NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `shot_generation_tasks_segment_id_idx` (`segment_id`),
+  KEY `shot_generation_tasks_status_idx` (`status`),
+  KEY `shot_generation_tasks_segment_shot_idx` (`segment_id`, `shot_id`),
+  CONSTRAINT `shot_generation_tasks_segment_id_fkey`
+    FOREIGN KEY (`segment_id`) REFERENCES `segments` (`id`)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE,
+  CONSTRAINT `shot_generation_tasks_progress_check`
+    CHECK (`progress` >= 0 AND `progress` <= 100)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

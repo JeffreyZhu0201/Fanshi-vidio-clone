@@ -67,10 +67,19 @@ const MainPage = () => {
     analyzingSegmentId,
     optimizingSegmentId,
     generatingSegmentIds,
+    generatingShotKeys,
+    batchGeneratingSegmentIds,
+    optimizingShotKeys,
+    savingShotSegmentIds,
     setSegmentPrompt,
+    setShotPrompt,
     analyzeSegmentById,
     optimizeSegmentPrompt,
+    optimizeShotPrompt,
+    saveSegmentShotDefinitions,
     generateSegmentVideo,
+    generateShotVideo,
+    generateAllShotsForSegment,
     startMerge,
     downloadMergedVideo
   } = useGeneration();
@@ -407,12 +416,21 @@ const MainPage = () => {
                       expanded={false}
                       onToggle={() => {}}
                       onPromptChange={setSegmentPrompt}
+                      onShotPromptChange={setShotPrompt}
                       onAnalyze={analyzeSegmentById}
                       onOptimize={optimizeSegmentPrompt}
+                      onOptimizeShot={optimizeShotPrompt}
                       onGenerate={generateSegmentVideo}
+                      onGenerateShot={generateShotVideo}
+                      onGenerateAllShots={generateAllShotsForSegment}
+                      onSaveShots={saveSegmentShotDefinitions}
                       isAnalyzing={analyzingSegmentId === segment.id}
                       isOptimizing={optimizingSegmentId === segment.id}
                       isGenerating={generatingSegmentIds.includes(segment.id)}
+                      generatingShotKeys={generatingShotKeys}
+                      isBatchGenerating={batchGeneratingSegmentIds.includes(segment.id)}
+                      optimizingShotKeys={optimizingShotKeys}
+                      isSavingShots={savingShotSegmentIds.includes(segment.id)}
                     />
                   ))
                 ) : (

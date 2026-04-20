@@ -1,11 +1,18 @@
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import { GenerationTask, Segment, Video } from '../models/index.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { analyzeSegmentContent, getAnalysisRecordByVideoId } from './analysisService.js';
 import { resolveUploadPath, toPublicUploadUrl } from './fileService.js';
+import {
+  buildShotGenerationSummary,
+  getLatestShotTaskMapsBySegmentIds,
+  hydrateAnalysisShotsWithTasks
+} from './shotGenerationService.js';
 import { completeTask, createTask, failTask, updateTask } from './taskService.js';
 import { splitVideo } from './ffmpegService.js';
+import { rebuildShotAssetsForSegment } from './shotAssetService.js';
 import { getVideoRecordById, resolveVideoAbsolutePath } from './videoService.js';
 
 const serializeGenerationTask = (task) => {
@@ -28,23 +35,187 @@ const serializeGenerationTask = (task) => {
     remote_task_id: String(taskMeta.remoteTaskId ?? '').trim(),
     fallback_reason: String(taskMeta.fallbackReason ?? '').trim(),
     provider_error: String(taskMeta.providerError ?? '').trim(),
+    source: String(taskMeta.source ?? '').trim(),
     created_at: task.createdAt,
     updated_at: task.updatedAt
   };
 };
 
-const serializeSegment = (segment, latestCompletedGenerationTask = null, latestAttemptTask = null) => ({
-  id: segment.id,
-  segment_index: segment.segmentIndex,
-  start_time: Number(segment.startTime),
-  end_time: Number(segment.endTime),
-  file_path: segment.filePath,
-  file_url: toPublicUploadUrl(segment.filePath),
-  analysis: segment.analysis,
-  // Keep the display source aligned with merge: both use the latest completed generation result.
-  latest_generation_task: serializeGenerationTask(latestCompletedGenerationTask),
-  latest_attempt_task: serializeGenerationTask(latestAttemptTask)
-});
+const normalizeOptionalFrameTime = (value) => {
+  const parsedValue = Number(value);
+
+  return Number.isFinite(parsedValue) && parsedValue >= 0 ? Number(parsedValue.toFixed(2)) : null;
+};
+
+const normalizeShotDefinitions = (shots, segmentStartTime, segmentEndTime) => {
+  if (!Array.isArray(shots)) {
+    return [];
+  }
+
+  return shots.map((shot, shotIndex) => {
+    const startTime = Number(shot.startTime ?? shot.start_time ?? segmentStartTime);
+    const endTime = Number(shot.endTime ?? shot.end_time ?? segmentEndTime);
+    const safeStartTime = Number.isFinite(startTime) ? Math.max(segmentStartTime, startTime) : segmentStartTime;
+    const safeEndTime = Number.isFinite(endTime) && endTime > safeStartTime ? endTime : safeStartTime + 0.3;
+
+    return {
+      id: String(shot.id ?? `shot_${shotIndex + 1}`),
+      startTime: Number(safeStartTime.toFixed(2)),
+      endTime: Number(Math.min(segmentEndTime, safeEndTime).toFixed(2)),
+      summary: String(shot.summary ?? shot.sceneSummary ?? shot.scene_summary ?? `镜头 ${shotIndex + 1}`).trim(),
+      prompt: String(
+        shot.prompt ??
+          shot.scenePrompt ??
+          shot.scene_prompt ??
+          shot.summary ??
+          shot.sceneSummary ??
+          shot.scene_summary ??
+          `镜头 ${shotIndex + 1}`
+      ).trim(),
+      sceneNames: normalizeSceneNameList(shot.sceneNames ?? shot.scene_names ?? shot.scenes),
+      characterNames: normalizeSceneNameList(shot.characterNames ?? shot.character_names ?? shot.characters),
+      representativeFrameTime: normalizeOptionalFrameTime(
+        shot.representativeFrameTime ?? shot.representative_frame_time
+      ),
+      representativeFrameNote: String(
+        shot.representativeFrameNote ??
+          shot.representative_frame_note ??
+          shot.representativeFrameReason ??
+          shot.representative_frame_reason ??
+          ''
+      ).trim()
+    };
+  });
+};
+
+const getShotDefinitionInvalidatedAt = (segment) => {
+  return String(segment?.analysis?.shotAssemblyInvalidatedAt ?? '').trim();
+};
+
+const isTaskStaleShotAssembly = (task, invalidatedAt = '') => {
+  if (!task || !invalidatedAt) {
+    return false;
+  }
+
+  const invalidatedAtMs = Date.parse(invalidatedAt);
+  const taskCreatedAtMs = task?.createdAt ? Date.parse(task.createdAt) : 0;
+  const source = String(task?.meta?.source ?? '').trim();
+
+  if (!invalidatedAtMs || !taskCreatedAtMs || source !== 'shot_assembly') {
+    return false;
+  }
+
+  return taskCreatedAtMs < invalidatedAtMs;
+};
+
+const buildPersistedShotDefinitions = (shots, segmentStartTime, segmentEndTime) => {
+  if (!Array.isArray(shots) || !shots.length) {
+    throw new AppError('至少需要保留一个小镜头。', 400);
+  }
+
+  const normalizedShots = shots.map((shot, shotIndex) => {
+    const startTime = Number(shot?.startTime);
+    const endTime = Number(shot?.endTime);
+    const summary = String(shot?.summary ?? '').trim();
+    const prompt = String(shot?.prompt ?? '').trim();
+    const representativeFrameTime = normalizeOptionalFrameTime(shot?.representativeFrameTime);
+    const sceneNames = normalizeSceneNameList(shot?.sceneNames);
+    const characterNames = normalizeSceneNameList(shot?.characterNames);
+    const rawId = String(shot?.id ?? '').trim();
+
+    if (!Number.isFinite(startTime) || startTime < segmentStartTime) {
+      throw new AppError(`镜头 ${shotIndex + 1} 的开始时间必须落在父片段范围内。`, 400);
+    }
+
+    if (!Number.isFinite(endTime) || endTime > segmentEndTime || endTime <= startTime) {
+      throw new AppError(`镜头 ${shotIndex + 1} 的结束时间必须大于开始时间，且落在父片段范围内。`, 400);
+    }
+
+    if (representativeFrameTime !== null && (representativeFrameTime < startTime || representativeFrameTime > endTime)) {
+      throw new AppError(`镜头 ${shotIndex + 1} 的典型帧时间必须落在镜头时间范围内。`, 400);
+    }
+
+    return {
+      id: !rawId || rawId.startsWith('temp-shot-') ? `shot_${randomUUID()}` : rawId,
+      startTime: Number(startTime.toFixed(2)),
+      endTime: Number(endTime.toFixed(2)),
+      summary: summary || `镜头 ${shotIndex + 1}`,
+      prompt: prompt || summary || `镜头 ${shotIndex + 1}`,
+      sceneNames,
+      characterNames,
+      representativeFrameTime:
+        representativeFrameTime !== null
+          ? representativeFrameTime
+          : Number(((startTime + endTime) / 2).toFixed(2)),
+      representativeFrameNote: String(shot?.representativeFrameNote ?? '').trim()
+    };
+  });
+
+  const sortedShots = normalizedShots.sort((left, right) => left.startTime - right.startTime);
+
+  sortedShots.forEach((shot, shotIndex) => {
+    const previousShot = sortedShots[shotIndex - 1];
+
+    if (previousShot && shot.startTime < previousShot.endTime) {
+      throw new AppError('小镜头时间不能重叠，请检查开始时间和结束时间。', 400);
+    }
+  });
+
+  return sortedShots;
+};
+
+const serializeSegment = (
+  segment,
+  latestCompletedGenerationTask = null,
+  latestAttemptTask = null,
+  latestCompletedShotTaskByShotId = new Map(),
+  latestAttemptShotTaskByShotId = new Map()
+) => {
+  const segmentStartTime = Number(segment.startTime);
+  const segmentEndTime = Number(segment.endTime);
+  const shotDefinitionInvalidatedAt = getShotDefinitionInvalidatedAt(segment);
+  const normalizedAnalysis = {
+    ...(segment.analysis ?? {})
+  };
+  const filteredLatestCompletedGenerationTask = isTaskStaleShotAssembly(
+    latestCompletedGenerationTask,
+    shotDefinitionInvalidatedAt
+  )
+    ? null
+    : latestCompletedGenerationTask;
+  const filteredLatestAttemptTask = isTaskStaleShotAssembly(latestAttemptTask, shotDefinitionInvalidatedAt)
+    ? null
+    : latestAttemptTask;
+  const hydratedShots = hydrateAnalysisShotsWithTasks({
+    segment,
+    latestAttemptTaskByShotId: latestAttemptShotTaskByShotId,
+    latestCompletedTaskByShotId: latestCompletedShotTaskByShotId
+  });
+  const shotGenerationSummary = buildShotGenerationSummary({
+    segmentId: segment.id,
+    shots: normalizeShotDefinitions(normalizedAnalysis.shots ?? [], segmentStartTime, segmentEndTime),
+    latestAttemptTaskByShotId: latestAttemptShotTaskByShotId,
+    latestCompletedTaskByShotId: latestCompletedShotTaskByShotId,
+    shotAssembly: normalizedAnalysis.shotAssembly ?? {}
+  });
+
+  normalizedAnalysis.shots = hydratedShots;
+
+  return {
+    id: segment.id,
+    segment_index: segment.segmentIndex,
+    start_time: segmentStartTime,
+    end_time: segmentEndTime,
+    file_path: segment.filePath,
+    file_url: toPublicUploadUrl(segment.filePath),
+    analysis: normalizedAnalysis,
+    shot_generation_summary: shotGenerationSummary,
+    latest_shot_assembly_task: shotGenerationSummary.total_shot_count ? shotGenerationSummary : null,
+    // Keep the display source aligned with merge: both use the latest completed generation result.
+    latest_generation_task: serializeGenerationTask(filteredLatestCompletedGenerationTask),
+    latest_attempt_task: serializeGenerationTask(filteredLatestAttemptTask)
+  };
+};
 
 const normalizeTimeAnchors = (timeAnchors) => {
   return (timeAnchors ?? [])
@@ -66,7 +237,12 @@ const normalizeTimeAnchors = (timeAnchors) => {
           item.representativeFrameNote ?? item.representative_frame_note ?? '',
         backgroundId: String(item.backgroundId ?? item.background_id ?? '').trim(),
         backgroundAction: String(item.backgroundAction ?? item.background_action ?? '').trim(),
-        backgroundName: String(item.backgroundName ?? item.background_name ?? '').trim()
+        backgroundName: String(item.backgroundName ?? item.background_name ?? '').trim(),
+        shots: normalizeShotDefinitions(
+          item.shots ?? [],
+          Number(item.startTime ?? item.start_time),
+          Number(item.endTime ?? item.end_time)
+        )
       };
     })
     .sort((left, right) => left.startTime - right.startTime);
@@ -136,6 +312,11 @@ const buildBaseSegmentAnalysis = ({ segment, timeAnchor = {}, overallAnalysis, p
         `场景 ${Number(segment.segmentIndex) + 1}`
     ).trim() || `场景 ${Number(segment.segmentIndex) + 1}`;
   const scenes = normalizeSceneNameList(previousAnalysis.scenes);
+  const shots = normalizeShotDefinitions(
+    timeAnchor.shots ?? previousAnalysis.shots ?? [],
+    Number(segment.startTime),
+    Number(segment.endTime)
+  );
 
   return {
     sceneSummary,
@@ -168,7 +349,31 @@ const buildBaseSegmentAnalysis = ({ segment, timeAnchor = {}, overallAnalysis, p
     characters: Array.isArray(previousAnalysis.characters) ? previousAnalysis.characters : [],
     scene: String(previousAnalysis.scene ?? sceneSummary).trim(),
     action: String(previousAnalysis.action ?? '').trim(),
-    prompt: String(previousAnalysis.prompt ?? scenePrompt).trim()
+    prompt: String(previousAnalysis.prompt ?? scenePrompt).trim(),
+    shots: shots.length
+      ? shots
+      : [
+          {
+            id: 'shot_1',
+            startTime: Number(segment.startTime),
+            endTime: Number(segment.endTime),
+            summary: sceneSummary || `片段 ${Number(segment.segmentIndex) + 1} 的主镜头`,
+            prompt: String(previousAnalysis.prompt ?? scenePrompt).trim(),
+            sceneNames: backgroundName ? [backgroundName] : [],
+            characterNames: Array.isArray(previousAnalysis.characters) ? previousAnalysis.characters : [],
+            representativeFrameTime:
+              Number.isFinite(representativeFrameTime) && representativeFrameTime >= 0
+                ? Number(representativeFrameTime.toFixed(2))
+                : null,
+            representativeFrameNote: String(
+              timeAnchor.representativeFrameNote ??
+                timeAnchor.representative_frame_note ??
+                previousAnalysis.representativeFrameNote ??
+                ''
+            ).trim()
+          }
+        ],
+    shotAssembly: previousAnalysis.shotAssembly ?? null
   };
 };
 
@@ -189,7 +394,9 @@ const mergeSegmentAnalysis = ({ baseAnalysis, nextSegmentAnalysis = {} }) => {
       String(nextSegmentAnalysis.prompt ?? '').trim() ||
       baseAnalysis.prompt ||
       baseAnalysis.scenePrompt ||
-      baseAnalysis.backgroundPrompt
+      baseAnalysis.backgroundPrompt,
+    shots: Array.isArray(baseAnalysis.shots) ? baseAnalysis.shots : [],
+    shotAssembly: baseAnalysis.shotAssembly ?? null
   };
 };
 
@@ -299,6 +506,10 @@ const processSplitTask = async (taskId, videoId, timeAnchors) => {
         baseAnalysis: baseSegmentAnalysis,
         nextSegmentAnalysis: analyzedSegment
       });
+      const nextShots = await rebuildShotAssetsForSegment({
+        segment: segmentInfo,
+        shots: segmentAnalysis.shots ?? []
+      });
 
       const segment = await Segment.create({
         videoId,
@@ -306,7 +517,10 @@ const processSplitTask = async (taskId, videoId, timeAnchors) => {
         startTime: segmentInfo.startTime,
         endTime: segmentInfo.endTime,
         filePath: segmentInfo.filePath,
-        analysis: segmentAnalysis
+        analysis: {
+          ...segmentAnalysis,
+          shots: nextShots
+        }
       });
 
       createdSegments.push(segment);
@@ -397,14 +611,19 @@ const analyzeSegmentById = async (segmentId) => {
     })
   });
 
-  const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestTasksBySegmentIds([
-    segment.id
-  ]);
+  const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestTasksBySegmentIds([segment.id]);
+  const shotDefinitionInvalidatedAt = getShotDefinitionInvalidatedAt(segment);
+  const { latestAttemptTaskBySegmentId: latestAttemptShotTaskBySegmentId, latestCompletedTaskBySegmentId: latestCompletedShotTaskBySegmentId } =
+    await getLatestShotTaskMapsBySegmentIds([segment.id], {
+      createdAfter: shotDefinitionInvalidatedAt
+    });
 
   return serializeSegment(
     segment,
     latestCompletedTaskBySegmentId.get(segment.id) ?? null,
-    latestAttemptTaskBySegmentId.get(segment.id) ?? null
+    latestAttemptTaskBySegmentId.get(segment.id) ?? null,
+    latestCompletedShotTaskBySegmentId.get(segment.id) ?? new Map(),
+    latestAttemptShotTaskBySegmentId.get(segment.id) ?? new Map()
   );
 };
 
@@ -426,13 +645,65 @@ const listSegmentsByVideoId = async (videoId) => {
     segments.map((segment) => segment.id)
   );
 
-  return segments.map((segment) =>
-    serializeSegment(
-      segment,
-      latestCompletedTaskBySegmentId.get(segment.id) ?? null,
-      latestAttemptTaskBySegmentId.get(segment.id) ?? null
-    )
+  return Promise.all(
+    segments.map(async (segment) => {
+      const shotDefinitionInvalidatedAt = getShotDefinitionInvalidatedAt(segment);
+      const {
+        latestAttemptTaskBySegmentId: latestAttemptShotTaskBySegmentId,
+        latestCompletedTaskBySegmentId: latestCompletedShotTaskBySegmentId
+      } = await getLatestShotTaskMapsBySegmentIds([segment.id], {
+        createdAfter: shotDefinitionInvalidatedAt
+      });
+
+      return serializeSegment(
+        segment,
+        latestCompletedTaskBySegmentId.get(segment.id) ?? null,
+        latestAttemptTaskBySegmentId.get(segment.id) ?? null,
+        latestCompletedShotTaskBySegmentId.get(segment.id) ?? new Map(),
+        latestAttemptShotTaskBySegmentId.get(segment.id) ?? new Map()
+      );
+    })
   );
 };
 
-export { startSplitVideo, listSegmentsByVideoId, analyzeSegmentById, getSegmentRecordById };
+const updateSegmentShotsById = async (segmentId, shots) => {
+  const segment = await getSegmentRecordById(segmentId);
+  const segmentStartTime = Number(segment.startTime);
+  const segmentEndTime = Number(segment.endTime);
+  const persistedShots = buildPersistedShotDefinitions(shots, segmentStartTime, segmentEndTime);
+  const invalidatedAt = new Date().toISOString();
+  const rebuiltShots = await rebuildShotAssetsForSegment({
+    segment,
+    shots: persistedShots,
+    previousShots: segment.analysis?.shots ?? []
+  });
+  const nextAnalysis = {
+    ...(segment.analysis ?? {}),
+    shots: rebuiltShots,
+    shotAssembly: null,
+    shotAssemblyInvalidatedAt: invalidatedAt
+  };
+
+  await segment.update({
+    analysis: nextAnalysis
+  });
+  segment.analysis = nextAnalysis;
+
+  const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestTasksBySegmentIds([segment.id]);
+  const {
+    latestAttemptTaskBySegmentId: latestAttemptShotTaskBySegmentId,
+    latestCompletedTaskBySegmentId: latestCompletedShotTaskBySegmentId
+  } = await getLatestShotTaskMapsBySegmentIds([segment.id], {
+    createdAfter: invalidatedAt
+  });
+
+  return serializeSegment(
+    segment,
+    latestCompletedTaskBySegmentId.get(segment.id) ?? null,
+    latestAttemptTaskBySegmentId.get(segment.id) ?? null,
+    latestCompletedShotTaskBySegmentId.get(segment.id) ?? new Map(),
+    latestAttemptShotTaskBySegmentId.get(segment.id) ?? new Map()
+  );
+};
+
+export { startSplitVideo, listSegmentsByVideoId, analyzeSegmentById, getSegmentRecordById, updateSegmentShotsById };

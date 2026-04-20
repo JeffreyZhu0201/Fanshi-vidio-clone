@@ -18,7 +18,11 @@ const optimizePromptController = async (request, response) => {
   const optimizePayload = {
     prompt: request.body.prompt,
     characters: request.body.characters,
-    backgrounds: request.body.backgrounds
+    backgrounds: request.body.backgrounds,
+    segmentPrompt: request.body.segment_prompt,
+    shotPrompt: request.body.shot_prompt,
+    sceneNames: request.body.scene_names,
+    characterNames: request.body.character_names
   };
 
   if (request.body.mode) {

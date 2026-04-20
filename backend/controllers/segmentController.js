@@ -1,4 +1,9 @@
-import { analyzeSegmentById, listSegmentsByVideoId, startSplitVideo } from '../services/segmentService.js';
+import {
+  analyzeSegmentById,
+  listSegmentsByVideoId,
+  startSplitVideo,
+  updateSegmentShotsById
+} from '../services/segmentService.js';
 
 const splitVideoByAnchors = async (request, response) => {
   const result = await startSplitVideo({
@@ -19,4 +24,9 @@ const analyzeSegment = async (request, response) => {
   response.status(200).json(segment);
 };
 
-export { splitVideoByAnchors, fetchSegments, analyzeSegment };
+const updateSegmentShots = async (request, response) => {
+  const segment = await updateSegmentShotsById(request.params.id, request.body.shots);
+  response.status(200).json(segment);
+};
+
+export { splitVideoByAnchors, fetchSegments, analyzeSegment, updateSegmentShots };

@@ -25,12 +25,19 @@ const analysisServiceMock = {
 const segmentServiceMock = {
   analyzeSegmentById: jest.fn(),
   startSplitVideo: jest.fn(),
-  listSegmentsByVideoId: jest.fn()
+  listSegmentsByVideoId: jest.fn(),
+  updateSegmentShotsById: jest.fn()
 };
 
 const generationServiceMock = {
   startGeneration: jest.fn(),
   getGenerationTaskStatus: jest.fn()
+};
+
+const shotGenerationServiceMock = {
+  startShotGeneration: jest.fn(),
+  startShotBatchGeneration: jest.fn(),
+  getShotGenerationTaskStatus: jest.fn()
 };
 
 const backgroundAssetServiceMock = {
@@ -57,6 +64,7 @@ await jest.unstable_mockModule('../services/videoService.js', () => videoService
 await jest.unstable_mockModule('../services/analysisService.js', () => analysisServiceMock);
 await jest.unstable_mockModule('../services/segmentService.js', () => segmentServiceMock);
 await jest.unstable_mockModule('../services/generationService.js', () => generationServiceMock);
+await jest.unstable_mockModule('../services/shotGenerationService.js', () => shotGenerationServiceMock);
 await jest.unstable_mockModule('../services/backgroundAssetService.js', () => backgroundAssetServiceMock);
 await jest.unstable_mockModule('../services/resourceImageService.js', () => resourceImageServiceMock);
 await jest.unstable_mockModule('../services/mergeService.js', () => mergeServiceMock);
@@ -195,6 +203,51 @@ beforeEach(() => {
     latest_generation_task: null,
     latest_attempt_task: null
   });
+  segmentServiceMock.updateSegmentShotsById.mockResolvedValue({
+    id: 301,
+    segment_index: 0,
+    start_time: 0,
+    end_time: 4,
+    file_path: 'segments/demo-0.mp4',
+    file_url: '/uploads/segments/demo-0.mp4',
+    analysis: {
+      prompt: '@主角 重新分析后的提示词。',
+      shots: [
+        {
+          id: 'shot_saved_1',
+          shotIndex: 0,
+          startTime: 0,
+          endTime: 2,
+          localStartTime: 0,
+          localEndTime: 2,
+          durationSeconds: 2,
+          summary: '保存后的镜头',
+          prompt: '@主角 在 #测试场景 中完成保存后的镜头动作',
+          sceneNames: ['测试场景'],
+          characterNames: ['主角'],
+          representativeFrameTime: 1,
+          representativeFrameNote: '保存后的典型帧'
+        }
+      ]
+    },
+    shot_generation_summary: {
+      segment_id: 301,
+      status: 'idle',
+      progress: 0,
+      total_shot_count: 1,
+      completed_shot_count: 0,
+      failed_shot_count: 0,
+      processing_shot_count: 0,
+      pending_assembly: false,
+      result_url: '',
+      error_message: '',
+      assembly_generation_task_id: null,
+      source: 'shot_assembly'
+    },
+    latest_generation_task: null,
+    latest_attempt_task: null,
+    latest_shot_assembly_task: null
+  });
 
   generationServiceMock.startGeneration.mockResolvedValue({
     task_id: 401,
@@ -261,6 +314,30 @@ beforeEach(() => {
     prompt: '@主角 走进场景。',
     optimized_prompt: '电影化提示词',
     result_url: '/uploads/outputs/demo-generated.mp4',
+    error_message: null
+  });
+  shotGenerationServiceMock.startShotGeneration.mockResolvedValue({
+    task_id: 501,
+    segment_id: 301,
+    shot_id: 'shot_1',
+    status: 'pending',
+    progress: 0
+  });
+  shotGenerationServiceMock.startShotBatchGeneration.mockResolvedValue({
+    segment_id: 301,
+    shot_count: 2,
+    status: 'processing',
+    started_at: '2026-01-01T00:00:00.000Z'
+  });
+  shotGenerationServiceMock.getShotGenerationTaskStatus.mockResolvedValue({
+    task_id: 501,
+    segment_id: 301,
+    shot_id: 'shot_1',
+    status: 'completed',
+    progress: 100,
+    prompt: '@主角 完成镜头动作。',
+    optimized_prompt: '镜头级电影化提示词',
+    result_url: '/uploads/outputs/demo-shot-1.mp4',
     error_message: null
   });
 
@@ -354,7 +431,36 @@ describe('Backend API integration', () => {
       prompt: '主角 走进场景。',
       characters: [{ name: '主角', appearancePrompt: '电影感人物设定' }],
       backgrounds: [{ name: '测试场景', scenePrompt: '电影化测试场景提示词' }],
-      mode: 'generation'
+      mode: 'generation',
+      segmentPrompt: undefined,
+      shotPrompt: undefined,
+      sceneNames: [],
+      characterNames: []
+    });
+  });
+
+  test('supports shot-level prompt optimization payloads', async () => {
+    const promptResponse = await request(app).post('/api/analysis/optimize-prompt').send({
+      prompt: '@主角 在测试场景内转头观察',
+      mode: 'shot_generation',
+      segment_prompt: '@主角 在 #测试场景 中推进剧情',
+      shot_prompt: '@主角 在测试场景内转头观察',
+      scene_names: ['测试场景'],
+      character_names: ['主角'],
+      characters: [{ name: '主角', appearancePrompt: '电影感人物设定' }],
+      backgrounds: [{ name: '测试场景', scenePrompt: '电影化测试场景提示词' }]
+    });
+
+    expect(promptResponse.status).toBe(200);
+    expect(analysisServiceMock.optimizePrompt).toHaveBeenCalledWith({
+      prompt: '@主角 在测试场景内转头观察',
+      mode: 'shot_generation',
+      segmentPrompt: '@主角 在 #测试场景 中推进剧情',
+      shotPrompt: '@主角 在测试场景内转头观察',
+      sceneNames: ['测试场景'],
+      characterNames: ['主角'],
+      characters: [{ name: '主角', appearancePrompt: '电影感人物设定' }],
+      backgrounds: [{ name: '测试场景', scenePrompt: '电影化测试场景提示词' }]
     });
   });
 
@@ -432,7 +538,37 @@ describe('Backend API integration', () => {
     const videoResponse = await request(app).get('/api/videos/101');
     const segmentsResponse = await request(app).get('/api/segments/101');
     const segmentAnalyzeResponse = await request(app).post('/api/segments/301/analyze');
+    const saveShotsResponse = await request(app).put('/api/segments/301/shots').send({
+      shots: [
+        {
+          id: 'temp-shot-1',
+          startTime: 0,
+          endTime: 2,
+          summary: '保存后的镜头',
+          prompt: '@主角 在 #测试场景 中完成保存后的镜头动作',
+          sceneNames: ['测试场景'],
+          characterNames: ['主角'],
+          representativeFrameTime: 1,
+          representativeFrameNote: '保存后的典型帧'
+        }
+      ]
+    });
     const generationResponse = await request(app).get('/api/generation/401');
+    const shotStartResponse = await request(app).post('/api/generation/shots/generate').send({
+      segment_id: 301,
+      shot_id: 'shot_1',
+      prompt: '@主角 完成镜头动作。'
+    });
+    const shotBatchResponse = await request(app).post('/api/generation/shots/generate-batch').send({
+      segment_id: 301,
+      shots: [
+        {
+          shot_id: 'shot_1',
+          prompt: '@主角 完成镜头动作。'
+        }
+      ]
+    });
+    const shotTaskResponse = await request(app).get('/api/generation/shots/501');
     const mergeProgressResponse = await request(app).get('/api/merge/merge-task-001/progress');
     const downloadResponse = await request(app).get('/api/merge/merge-task-001/download');
     const deleteResponse = await request(app).delete('/api/videos/101');
@@ -443,14 +579,35 @@ describe('Backend API integration', () => {
     expect(segmentsResponse.body).toHaveLength(1);
     expect(segmentAnalyzeResponse.status).toBe(200);
     expect(segmentAnalyzeResponse.body.analysis.prompt).toContain('重新分析后');
+    expect(saveShotsResponse.status).toBe(200);
+    expect(saveShotsResponse.body.analysis.shots[0].id).toBe('shot_saved_1');
     expect(generationResponse.status).toBe(200);
     expect(generationResponse.body.status).toBe('completed');
+    expect(shotStartResponse.status).toBe(202);
+    expect(shotStartResponse.body.shot_id).toBe('shot_1');
+    expect(shotBatchResponse.status).toBe(202);
+    expect(shotBatchResponse.body.shot_count).toBe(2);
+    expect(shotTaskResponse.status).toBe(200);
+    expect(shotTaskResponse.body.status).toBe('completed');
     expect(mergeProgressResponse.status).toBe(200);
     expect(mergeProgressResponse.body.status).toBe('completed');
     expect(downloadResponse.status).toBe(200);
     expect(downloadResponse.headers['content-disposition']).toContain('merged-demo.mp4');
     expect(deleteResponse.status).toBe(200);
     expect(deleteResponse.body.success).toBe(true);
+    expect(segmentServiceMock.updateSegmentShotsById).toHaveBeenCalledWith(301, [
+      {
+        id: 'temp-shot-1',
+        startTime: 0,
+        endTime: 2,
+        summary: '保存后的镜头',
+        prompt: '@主角 在 #测试场景 中完成保存后的镜头动作',
+        sceneNames: ['测试场景'],
+        characterNames: ['主角'],
+        representativeFrameTime: 1,
+        representativeFrameNote: '保存后的典型帧'
+      }
+    ]);
   });
 
   test('returns normalized validation and server errors', async () => {

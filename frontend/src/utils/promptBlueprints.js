@@ -107,13 +107,26 @@ const buildVideoAnalysisPrompt = ({ video }) => {
         timeAnchors: [
           {
             startTime: 0,
-            endTime: 3.2,
+            endTime: 7,
             sceneSummary: '片段解释',
             scenePrompt: '该片段可直接复用的场景提示词',
             representativeFrameTime: 1.6,
             backgroundId: 'background_1',
             backgroundAction: 'create_new',
-            backgroundName: '场景名称'
+            backgroundName: '场景名称',
+            shots: [
+              {
+                id: 'shot_1',
+                startTime: 0,
+                endTime: 2,
+                summary: '镜头解释',
+                prompt: '@角色名 在 #场景名称 中完成该镜头动作的可编辑中文提示词',
+                sceneNames: ['场景名称'],
+                characterNames: ['角色名'],
+                representativeFrameTime: 1.1,
+                representativeFrameNote: '该镜头的典型帧说明'
+              }
+            ]
           }
         ]
       },
@@ -139,8 +152,16 @@ const buildVideoAnalysisPrompt = ({ video }) => {
     '14. 同一 backgroundId 首次出现的片段标记为 create_new，后续再次出现的同场景片段标记为 reuse_existing。',
     '15. 每个 timeAnchor 都要返回 representativeFrameTime，且该时间点必须落在 startTime 到 endTime 之间；优先选择最适合做预览、最能代表人物或场景的画面，而不是机械取中点。',
     '16. 如果同一场景在多个片段重复出现，允许每个片段返回更贴合该片段语境的 scenePrompt，但 backgroundId 必须保持一致。',
-    '17. 如果角色较少，也至少保证 characters 返回 1 个对象。',
-    '18. 输出必须是合法 JSON，字段名保持与示例完全一致。'
+    '17. 每个 timeAnchor 内都必须返回 shots 数组，用于描述该大片段下的小镜头；shots 是后续小镜头切片与生成的唯一真值来源。',
+    '18. shots 必须优先对齐真实剪辑边界、机位变化、构图变化、主体关系变化、场景切换和明显动作 beat，不要机械均分时间。',
+    '19. 每个 shot 尽量只承载一个清晰动作阶段，避免把两个以上关键动作或镜头语言变化混进同一个 shot。',
+    '20. shots 必须按整片绝对时间返回 startTime 和 endTime，严格落在所属 timeAnchor 范围内，按时间升序、无重叠，并尽量覆盖该大片段。',
+    '21. 每个 shot 都要返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote。',
+    '22. representativeFrameTime 必须选择该镜头最有代表性的画面，不允许机械取中点；优先选择最适合作为预览图和生成参考图的画面。',
+    '23. shot.prompt 必须直接服务镜头级视频生成，突出单镜头构图、动作、节奏、人物状态和涉及场景，并使用 @角色名 和 #场景名 引用，不要只重复大片段摘要。',
+    '24. 如果一个 shot 涉及多个场景，需要在 sceneNames 中全部列出，并在 prompt 中按顺序引用对应的 #场景名。',
+    '25. 如果角色较少，也至少保证 characters 返回 1 个对象。',
+    '26. 输出必须是合法 JSON，字段名保持与示例完全一致。'
   ].join('\n');
 };
 

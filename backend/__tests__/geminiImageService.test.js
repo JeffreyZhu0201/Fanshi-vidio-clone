@@ -10,7 +10,8 @@ await jest.unstable_mockModule('../config/env.js', () => ({
     GEMINI_API_KEY: '',
     GEMINI_API_BASE_URL: 'https://yunwu.ai',
     GEMINI_IMAGE_API_KEY: 'image-test-key',
-    GEMINI_IMAGE_API_BASE_URL: 'https://yunwu.ai',
+    GEMINI_IMAGE_API_BASE_URL:
+      'https://yunwu.ai/v1beta/models/gemini-3-pro-image-preview:generateContent',
     GEMINI_IMAGE_MODEL: 'gemini-3-pro-image-preview',
     GEMINI_IMAGE_STRICT_REMOTE: true,
     GEMINI_IMAGE_REQUEST_TIMEOUT: 30000,
@@ -64,7 +65,8 @@ describe('geminiImageService', () => {
         }
       ],
       generationConfig: {
-        responseModalities: ['IMAGE']
+        responseModalities: ['IMAGE'],
+        imageConfig: {}
       }
     });
   });
@@ -123,7 +125,7 @@ describe('geminiImageService', () => {
     });
 
     expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/v1beta/models/gemini-3-pro-image-preview:generateContent'),
+      'https://yunwu.ai/v1beta/models/gemini-3-pro-image-preview:generateContent?key=image-test-key',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
@@ -137,7 +139,8 @@ describe('geminiImageService', () => {
       fileUrl: '/uploads/resource-images/character-front.png',
       mimeType: 'image/png',
       provider: 'remote-gemini-image',
-      model: 'gemini-3-pro-image-preview'
+      model: 'gemini-3-pro-image-preview',
+      authVariant: 'bearer+query-key'
     });
   });
 });

@@ -62,13 +62,12 @@ const resolveGeminiImageEndpoint = () => {
 
 const buildGeminiImagePayload = (prompt) => {
   const generationConfig = {
-    responseModalities: ['IMAGE']
+    responseModalities: ['IMAGE'],
+    imageConfig: {}
   };
 
   if (env.GEMINI_IMAGE_ASPECT_RATIO) {
-    generationConfig.imageConfig = {
-      aspectRatio: env.GEMINI_IMAGE_ASPECT_RATIO
-    };
+    generationConfig.imageConfig.aspectRatio = env.GEMINI_IMAGE_ASPECT_RATIO;
   }
 
   return {
@@ -86,89 +85,50 @@ const buildGeminiImagePayload = (prompt) => {
   };
 };
 
-const isAuthLikeGeminiStatus = (statusCode) => {
-  return [400, 401, 403, 404].includes(Number(statusCode));
-};
-
 const isRetryableGeminiStatus = (statusCode) => {
   return [408, 429, 500, 502, 503, 504].includes(Number(statusCode));
 };
 
 const callRemoteGeminiImage = async ({ prompt }) => {
-  const endpoint = resolveGeminiImageEndpoint();
+  const endpoint = appendKeyQuery(resolveGeminiImageEndpoint(), imageApiKey);
   const requestBody = buildGeminiImagePayload(prompt);
-  const requestVariants = [
-    {
-      name: 'bearer+query-key',
-      url: appendKeyQuery(endpoint, imageApiKey),
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${imageApiKey}`
-      }
-    },
-    {
-      name: 'query-key',
-      url: appendKeyQuery(endpoint, imageApiKey),
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    },
-    {
-      name: 'bearer',
-      url: endpoint,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${imageApiKey}`
-      }
-    }
-  ];
-
   let lastError = null;
 
-  for (let variantIndex = 0; variantIndex < requestVariants.length; variantIndex += 1) {
-    const requestVariant = requestVariants[variantIndex];
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${imageApiKey}`
+        },
+        body: JSON.stringify(requestBody),
+        redirect: 'follow',
+        signal: AbortSignal.timeout(env.GEMINI_IMAGE_REQUEST_TIMEOUT)
+      });
+      const responseText = await response.text();
 
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        const response = await fetch(requestVariant.url, {
-          method: 'POST',
-          headers: requestVariant.headers,
-          body: JSON.stringify(requestBody),
-          redirect: 'follow',
-          signal: AbortSignal.timeout(env.GEMINI_IMAGE_REQUEST_TIMEOUT)
-        });
-        const responseText = await response.text();
-
-        if (!response.ok) {
-          const error = new Error(
-            `Gemini image request failed with status ${response.status}: ${responseText.slice(0, 240)}`
-          );
-          error.statusCode = response.status;
-          error.authVariant = requestVariant.name;
-          throw error;
-        }
-
-        return {
-          authVariant: requestVariant.name,
-          responsePayload: responseText ? JSON.parse(responseText) : {}
-        };
-      } catch (error) {
-        lastError = error;
-
-        if (isAuthLikeGeminiStatus(error.statusCode) && variantIndex < requestVariants.length - 1) {
-          break;
-        }
-
-        if (attempt >= 3 || !isRetryableGeminiStatus(error.statusCode)) {
-          break;
-        }
-
-        await sleep(attempt * 750);
+      if (!response.ok) {
+        const error = new Error(
+          `Gemini image request failed with status ${response.status}: ${responseText.slice(0, 240)}`
+        );
+        error.statusCode = response.status;
+        error.authVariant = 'bearer+query-key';
+        throw error;
       }
-    }
 
-    if (lastError && !isAuthLikeGeminiStatus(lastError.statusCode)) {
-      break;
+      return {
+        authVariant: 'bearer+query-key',
+        responsePayload: responseText ? JSON.parse(responseText) : {}
+      };
+    } catch (error) {
+      lastError = error;
+
+      if (attempt >= 3 || !isRetryableGeminiStatus(error.statusCode)) {
+        break;
+      }
+
+      await sleep(attempt * 750);
     }
   }
 

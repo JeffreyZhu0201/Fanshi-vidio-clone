@@ -5,6 +5,7 @@ import defineGenerationTaskModel from './GenerationTask.js';
 import defineProjectModel from './Project.js';
 import defineResourceImageAssetModel from './ResourceImageAsset.js';
 import defineSegmentModel from './Segment.js';
+import defineShotGenerationTaskModel from './ShotGenerationTask.js';
 import defineVideoModel from './Video.js';
 
 // This module is the single export entry for all Sequelize models.
@@ -16,7 +17,8 @@ const modelRegistry = {
   BackgroundAsset: defineBackgroundAssetModel(sequelize),
   ResourceImageAsset: defineResourceImageAssetModel(sequelize),
   Segment: defineSegmentModel(sequelize),
-  GenerationTask: defineGenerationTaskModel(sequelize)
+  GenerationTask: defineGenerationTaskModel(sequelize),
+  ShotGenerationTask: defineShotGenerationTaskModel(sequelize)
 };
 
 let isInitialized = false;
@@ -38,7 +40,8 @@ const initializeModels = () => {
 
 initializeModels();
 
-const { Project, Video, Analysis, BackgroundAsset, ResourceImageAsset, Segment, GenerationTask } = modelRegistry;
+const { Project, Video, Analysis, BackgroundAsset, ResourceImageAsset, Segment, GenerationTask, ShotGenerationTask } =
+  modelRegistry;
 
 export {
   modelRegistry,
@@ -49,7 +52,8 @@ export {
   BackgroundAsset,
   ResourceImageAsset,
   Segment,
-  GenerationTask
+  GenerationTask,
+  ShotGenerationTask
 };
 
 export default modelRegistry;

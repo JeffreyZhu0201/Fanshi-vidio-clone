@@ -16,6 +16,10 @@ const generationTaskIdParamSchema = Joi.object({
   taskId: Joi.number().integer().positive().required()
 });
 
+const shotGenerationTaskIdParamSchema = Joi.object({
+  taskId: Joi.number().integer().positive().required()
+});
+
 const uploadVideoBodySchema = Joi.object({
   project_id: Joi.number().integer().positive(),
   project_name: Joi.string().trim().max(255).allow('')
@@ -27,7 +31,14 @@ const analyzeVideoBodySchema = Joi.object({
 
 const optimizePromptBodySchema = Joi.object({
   prompt: Joi.string().trim().min(1).required(),
-  mode: Joi.string().trim().valid('generation', 'character_resource', 'scene_resource').default('generation'),
+  mode: Joi.string()
+    .trim()
+    .valid('generation', 'character_resource', 'scene_resource', 'shot_generation')
+    .default('generation'),
+  segment_prompt: Joi.string().trim().allow(''),
+  shot_prompt: Joi.string().trim().allow(''),
+  scene_names: Joi.array().items(Joi.string().trim().min(1)).default([]),
+  character_names: Joi.array().items(Joi.string().trim().min(1)).default([]),
   characters: Joi.array()
     .items(
       Joi.alternatives().try(
@@ -110,6 +121,40 @@ const generateSegmentBodySchema = Joi.object({
   prompt: Joi.string().trim().min(1).required()
 });
 
+const generateShotBodySchema = Joi.object({
+  segment_id: Joi.number().integer().positive().required(),
+  shot_id: Joi.string().trim().min(1).required(),
+  prompt: Joi.string().trim().min(1).required()
+});
+
+const generateShotBatchBodySchema = Joi.object({
+  segment_id: Joi.number().integer().positive().required(),
+  shots: Joi.array()
+    .items(
+      Joi.object({
+        shot_id: Joi.string().trim().min(1).required(),
+        prompt: Joi.string().trim().min(1).required()
+      })
+    )
+    .default([])
+});
+
+const segmentShotDefinitionSchema = Joi.object({
+  id: Joi.string().trim().allow(''),
+  startTime: Joi.number().min(0).required(),
+  endTime: Joi.number().greater(Joi.ref('startTime')).required(),
+  summary: Joi.string().trim().allow(''),
+  prompt: Joi.string().trim().allow(''),
+  sceneNames: Joi.array().items(Joi.string().trim().min(1)).default([]),
+  characterNames: Joi.array().items(Joi.string().trim().min(1)).default([]),
+  representativeFrameTime: Joi.number().min(0).allow(null),
+  representativeFrameNote: Joi.string().trim().allow('')
+});
+
+const updateSegmentShotsBodySchema = Joi.object({
+  shots: Joi.array().items(segmentShotDefinitionSchema).min(1).required()
+});
+
 const generateResourceImagesBodySchema = Joi.object({
   video_id: Joi.number().integer().positive().required(),
   resource_type: Joi.string().trim().valid('character', 'scene').required(),
@@ -148,11 +193,15 @@ export {
   videoIdParamSchema,
   taskIdParamSchema,
   generationTaskIdParamSchema,
+  shotGenerationTaskIdParamSchema,
   uploadVideoBodySchema,
   analyzeVideoBodySchema,
   optimizePromptBodySchema,
   splitVideoBodySchema,
   generateSegmentBodySchema,
+  generateShotBodySchema,
+  generateShotBatchBodySchema,
+  updateSegmentShotsBodySchema,
   generateResourceImagesBodySchema,
   mergeStartBodySchema,
   monitoringEventBodySchema
