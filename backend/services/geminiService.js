@@ -93,11 +93,89 @@ const normalizeSceneKey = (value) => {
     .toLowerCase();
 };
 
+const normalizeNameList = (value) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => String(item ?? '').trim()).filter(Boolean);
+};
+
 const getRepresentativeFrameTime = (startTime, endTime) => {
   const safeStartTime = Math.max(0, Number(startTime) || 0);
   const safeEndTime = Math.max(safeStartTime + 0.3, Number(endTime) || safeStartTime + 0.3);
 
   return Number((safeStartTime + (safeEndTime - safeStartTime) / 2).toFixed(2));
+};
+
+const normalizeShot = (item, index, anchor = null) => {
+  const anchorStartTime = Number(anchor?.startTime ?? anchor?.start_time ?? 0);
+  const anchorEndTime = Number(anchor?.endTime ?? anchor?.end_time ?? anchorStartTime + 1);
+  const fallbackStartTime = Number.isFinite(anchorStartTime) ? anchorStartTime : 0;
+  const fallbackEndTime =
+    Number.isFinite(anchorEndTime) && anchorEndTime > fallbackStartTime ? anchorEndTime : fallbackStartTime + 1;
+  const rawStartTime = Number(item?.startTime ?? item?.start_time ?? fallbackStartTime);
+  const safeStartTime = Number.isFinite(rawStartTime) ? Math.max(fallbackStartTime, rawStartTime) : fallbackStartTime;
+  const rawEndTime = Number(item?.endTime ?? item?.end_time ?? fallbackEndTime);
+  const boundedEndTime = Number.isFinite(rawEndTime) ? Math.min(fallbackEndTime, rawEndTime) : fallbackEndTime;
+  const safeEndTime = boundedEndTime > safeStartTime ? boundedEndTime : Math.min(fallbackEndTime, safeStartTime + 0.3);
+  const representativeFrameTime =
+    normalizeOptionalNumber(item?.representativeFrameTime ?? item?.representative_frame_time) ??
+    getRepresentativeFrameTime(safeStartTime, safeEndTime);
+
+  return {
+    id: String(item?.id ?? `shot_${index + 1}`),
+    startTime: Number(safeStartTime.toFixed(2)),
+    endTime: Number(safeEndTime.toFixed(2)),
+    summary: normalizeOptionalString(
+      item?.summary ?? item?.sceneSummary ?? item?.scene_summary,
+      `镜头 ${index + 1}`
+    ),
+    prompt: normalizeOptionalString(
+      item?.prompt ?? item?.scenePrompt ?? item?.scene_prompt,
+      normalizeOptionalString(item?.summary ?? item?.sceneSummary ?? item?.scene_summary, `镜头 ${index + 1}`)
+    ),
+    sceneNames: normalizeNameList(item?.sceneNames ?? item?.scene_names ?? item?.scenes),
+    characterNames: normalizeNameList(item?.characterNames ?? item?.character_names ?? item?.characters),
+    representativeFrameTime,
+    representativeFrameNote: normalizeOptionalString(
+      item?.representativeFrameNote ??
+        item?.representative_frame_note ??
+        item?.representativeFrameReason ??
+        item?.representative_frame_reason
+    )
+  };
+};
+
+const buildFallbackShotList = (anchor, anchorIndex) => {
+  const anchorStartTime = Number(anchor.startTime);
+  const anchorEndTime = Number(anchor.endTime);
+  const durationSeconds = Math.max(0.6, Number((anchorEndTime - anchorStartTime).toFixed(2)));
+  const shotCount = durationSeconds >= 6 ? 3 : durationSeconds >= 3 ? 2 : 1;
+  const shotDuration = durationSeconds / shotCount;
+
+  return Array.from({ length: shotCount }, (_, shotIndex) => {
+    const shotStartTime = Number((anchorStartTime + shotDuration * shotIndex).toFixed(2));
+    const shotEndTime = Number(
+      (shotIndex === shotCount - 1 ? anchorEndTime : anchorStartTime + shotDuration * (shotIndex + 1)).toFixed(2)
+    );
+
+    return normalizeShot(
+      {
+        id: `shot_${shotIndex + 1}`,
+        startTime: shotStartTime,
+        endTime: shotEndTime,
+        summary: `片段 ${anchorIndex + 1} 的第 ${shotIndex + 1} 个镜头，延续当前动作与场景节奏。`,
+        prompt: `@主角 在 #${anchor.backgroundName || '主场景'} 中完成第 ${shotIndex + 1} 个镜头的动作变化，保持画面连续、人物一致和镜头衔接。`,
+        sceneNames: anchor.backgroundName ? [anchor.backgroundName] : [],
+        characterNames: ['主角'],
+        representativeFrameTime: getRepresentativeFrameTime(shotStartTime, shotEndTime),
+        representativeFrameNote: '该帧用于表示当前镜头最典型的动作与构图。'
+      },
+      shotIndex,
+      anchor
+    );
+  });
 };
 
 const getMockScenePattern = (anchorCount) => {
@@ -130,7 +208,7 @@ const buildMockTimeAnchors = (durationSeconds = 12) => {
     const backgroundAction = seenBackgroundIds.has(backgroundId) ? 'reuse_existing' : 'create_new';
     seenBackgroundIds.add(backgroundId);
 
-    return {
+    const anchor = {
       startTime,
       endTime,
       sceneSummary: `第 ${index + 1} 个片段，围绕主角推进一段完整动作与场景变化。`,
@@ -139,6 +217,11 @@ const buildMockTimeAnchors = (durationSeconds = 12) => {
       backgroundId,
       backgroundAction,
       backgroundName
+    };
+
+    return {
+      ...anchor,
+      shots: buildFallbackShotList(anchor, index)
     };
   });
 };
@@ -233,14 +316,23 @@ const createMockSegmentAnalysis = ({ segment, overallAnalysis }) => {
 const normalizePromptOptimizationMode = (mode = '') => {
   const normalizedMode = String(mode ?? '').trim();
 
-  if (['character_resource', 'scene_resource', 'generation'].includes(normalizedMode)) {
+  if (['character_resource', 'scene_resource', 'generation', 'shot_generation'].includes(normalizedMode)) {
     return normalizedMode;
   }
 
   return 'generation';
 };
 
-const createMockOptimizedPrompt = ({ prompt, characters, backgrounds, mode = 'generation' }) => {
+const createMockOptimizedPrompt = ({
+  prompt,
+  characters,
+  backgrounds,
+  mode = 'generation',
+  segmentPrompt = '',
+  shotPrompt = '',
+  sceneNames = [],
+  characterNames = []
+}) => {
   const normalizedMode = normalizePromptOptimizationMode(mode);
   const normalizedCharacters = (characters ?? [])
     .map((item) =>
@@ -301,6 +393,52 @@ const createMockOptimizedPrompt = ({ prompt, characters, backgrounds, mode = 'ge
       prompt.trim(),
       primaryBackground?.name ? `场景名称：${primaryBackground.name}` : '',
       '纯场景背景参考图，不要人物，不要文字，突出空间结构、光线、材质与纵深关系。'
+    ]
+      .filter(Boolean)
+      .join('，');
+
+    return {
+      optimizedPrompt,
+      highlightedPrompt: renderHighlightedPrompt(optimizedPrompt)
+    };
+  }
+
+  if (normalizedMode === 'shot_generation') {
+    const sourceShotPrompt = String(shotPrompt ?? '').trim() || String(prompt ?? '').trim();
+    const sourceSegmentPrompt = String(segmentPrompt ?? '').trim();
+
+    optimizedPrompt = sourceShotPrompt || sourceSegmentPrompt || optimizedPrompt;
+
+    normalizedCharacters
+      .sort((left, right) => String(right.name).length - String(left.name).length)
+      .forEach((resource) => {
+        if (!resource.name) {
+          return;
+        }
+
+        const namePattern = new RegExp(`(?<![@#])${escapeRegExp(resource.name)}`, 'gu');
+        optimizedPrompt = optimizedPrompt.replace(namePattern, `@${resource.name}`);
+      });
+
+    normalizedBackgrounds
+      .sort((left, right) => String(right.name).length - String(left.name).length)
+      .forEach((resource) => {
+        if (!resource.name) {
+          return;
+        }
+
+        const namePattern = new RegExp(`(?<![@#])${escapeRegExp(resource.name)}`, 'gu');
+        optimizedPrompt = optimizedPrompt.replace(namePattern, `#${resource.name}`);
+      });
+
+    optimizedPrompt = [
+      optimizedPrompt,
+      sceneNames.length ? `涉及场景：${normalizeSceneNameList(sceneNames).map((item) => `#${item}`).join('、')}` : '',
+      characterNames.length
+        ? `涉及角色：${normalizeSceneNameList(characterNames).map((item) => `@${item}`).join('、')}`
+        : '',
+      sourceSegmentPrompt ? `与大片段衔接：${sourceSegmentPrompt}` : '',
+      '强化单镜头动作、节奏和镜头语言，保持与大片段叙事一致。'
     ]
       .filter(Boolean)
       .join('，');
@@ -518,10 +656,18 @@ const normalizeTimeAnchor = (item, index, fallbackDuration = 0) => {
   const representativeFrameTime =
     normalizeOptionalNumber(item.representativeFrameTime ?? item.representative_frame_time) ??
     getRepresentativeFrameTime(startTime, normalizedEndTime);
-
-  return {
+  const anchor = {
     startTime: Number(Math.max(0, startTime).toFixed(2)),
     endTime: normalizedEndTime,
+    backgroundName: normalizeOptionalString(item.backgroundName ?? item.background_name)
+  };
+  const normalizedShots = Array.isArray(item.shots)
+    ? item.shots.map((shotItem, shotIndex) => normalizeShot(shotItem, shotIndex, anchor)).filter(Boolean)
+    : [];
+
+  return {
+    startTime: anchor.startTime,
+    endTime: anchor.endTime,
     sceneSummary,
     scenePrompt: normalizeOptionalString(item.scenePrompt ?? item.scene_prompt, sceneSummary),
     representativeFrameTime,
@@ -533,7 +679,17 @@ const normalizeTimeAnchor = (item, index, fallbackDuration = 0) => {
     ),
     backgroundId: normalizeOptionalString(item.backgroundId ?? item.background_id),
     backgroundAction: normalizeBackgroundAction(item.backgroundAction ?? item.background_action),
-    backgroundName: normalizeOptionalString(item.backgroundName ?? item.background_name)
+    backgroundName: anchor.backgroundName,
+    shots: normalizedShots.length
+      ? normalizedShots
+      : buildFallbackShotList(
+          {
+            startTime: anchor.startTime,
+            endTime: anchor.endTime,
+            backgroundName: anchor.backgroundName
+          },
+          index
+        )
   };
 };
 
@@ -904,13 +1060,26 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
         timeAnchors: [
           {
             startTime: 0,
-            endTime: 3.2,
+            endTime: 7,
             sceneSummary: '片段解释',
             scenePrompt: '该片段可直接复用的场景提示词',
             representativeFrameTime: 1.6,
             backgroundId: 'background_1',
             backgroundAction: 'create_new',
-            backgroundName: '场景名称'
+            backgroundName: '场景名称',
+            shots: [
+              {
+                id: 'shot_1',
+                startTime: 0,
+                endTime: 2,
+                summary: '镜头解释',
+                prompt: '@角色名 在 #场景名称 中完成该镜头动作的可编辑中文提示词',
+                sceneNames: ['场景名称'],
+                characterNames: ['角色名'],
+                representativeFrameTime: 1.1,
+                representativeFrameNote: '该镜头的典型帧说明'
+              }
+            ]
           }
         ]
       },
@@ -929,15 +1098,23 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
     '7. 先识别整片有哪些可复用场景，并把它们沉淀到 backgrounds 这个场景资源库里。',
     '8. timeAnchors 必须覆盖完整视频，startTime 和 endTime 为数字秒，严格按时间升序，不要重叠，不要遗漏关键内容。',
     '9. 片段切分必须以场景切换为硬边界；只有在同一场景内动作阶段明显不同且确实需要独立生成时，才继续细分。',
-    '10. 每个 timeAnchor 代表一个后续可独立生成的片段，而不是纯观感镜头；片段边界要尽量保证动作完整、人物连续、场景切换清晰、前后文衔接稳定。',
+    '10. 每个 timeAnchor 代表一个后续可独立生成的大剧情片段，而不是纯观感镜头；片段边界要尽量保证动作完整、人物连续、场景切换清晰、前后文衔接稳定。',
     '11. 避免输出明显过短且没有独立生成价值的片段；如果视频较短，也要保证切分结果仍然覆盖全片。',
     '12. 每个 timeAnchor 都要给出 sceneSummary 和 scenePrompt；sceneSummary 用中文解释该片段发生了什么，scenePrompt 必须是可直接复用的片段场景提示词，包含场景、光线、主体关系、空间结构和镜头氛围，不要只写事件摘要。',
     '13. 每个 timeAnchor 都必须绑定 backgroundId、backgroundAction、backgroundName。',
     '14. 同一 backgroundId 首次出现的片段标记为 create_new，后续再次出现的同场景片段标记为 reuse_existing。',
     '15. 每个 timeAnchor 都要返回 representativeFrameTime，且该时间点必须落在 startTime 到 endTime 之间；优先选择最适合做预览、最能代表人物或场景的画面，而不是机械取中点。',
     '16. 如果同一场景在多个片段重复出现，允许每个片段返回更贴合该片段语境的 scenePrompt，但 backgroundId 必须保持一致。',
-    '17. 如果角色较少，也至少保证 characters 返回 1 个对象。',
-    '18. 输出必须是合法 JSON，字段名保持与示例完全一致。'
+    '17. 每个 timeAnchor 内都必须返回 shots 数组，用于描述该大片段下的小镜头；shots 是后续小镜头切片与生成的唯一真值来源。',
+    '18. shots 必须优先对齐真实剪辑边界、机位变化、构图变化、主体关系变化、场景切换和明显动作 beat，不要机械均分时间。',
+    '19. 每个 shot 尽量只承载一个清晰动作阶段，避免把两个以上关键动作或镜头语言变化混进同一个 shot。',
+    '20. shots 必须按整片绝对时间返回 startTime 和 endTime，严格落在所属 timeAnchor 范围内，按时间升序、无重叠，并尽量覆盖该大片段。',
+    '21. 每个 shot 都要返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote。',
+    '22. representativeFrameTime 必须选择该镜头最有代表性的画面，不允许机械取中点；优先选择最适合作为预览图和生成参考图的画面。',
+    '23. shot.prompt 必须直接服务镜头级视频生成，突出单镜头构图、动作、节奏、人物状态和涉及场景，并使用 @角色名 和 #场景名 引用，不要只重复大片段摘要。',
+    '24. 如果一个 shot 涉及多个场景，需要在 sceneNames 中全部列出，并在 prompt 中按顺序引用对应的 #场景名。',
+    '25. 如果角色较少，也至少保证 characters 返回 1 个对象。',
+    '26. 输出必须是合法 JSON，字段名保持与示例完全一致。'
   ].join('\n');
 };
 
@@ -985,7 +1162,16 @@ const buildSegmentAnalysisPrompt = ({ segment, overallAnalysis }) => {
   ].join('\n');
 };
 
-const buildPromptOptimizationPrompt = ({ prompt, characters, backgrounds, mode = 'generation' }) => {
+const buildPromptOptimizationPrompt = ({
+  prompt,
+  characters,
+  backgrounds,
+  mode = 'generation',
+  segmentPrompt = '',
+  shotPrompt = '',
+  sceneNames = [],
+  characterNames = []
+}) => {
   const normalizedMode = normalizePromptOptimizationMode(mode);
 
   if (normalizedMode === 'character_resource') {
@@ -1034,6 +1220,35 @@ const buildPromptOptimizationPrompt = ({ prompt, characters, backgrounds, mode =
       '3. 输出适合作为多角度背景参考图的纯场景提示词。',
       '4. 不要使用 @角色名 或 #场景名。',
       '5. 只返回 JSON。'
+    ].join('\n');
+  }
+
+  if (normalizedMode === 'shot_generation') {
+    return [
+      '你是一名镜头级视频生成提示词优化助手。',
+      '请在不改变当前镜头核心语义的前提下，结合大片段叙事目标优化当前小镜头提示词，并严格返回 JSON。',
+      '不要输出 Markdown，不要输出解释，不要输出额外文本。',
+      '返回结构必须完全符合：',
+      JSON.stringify(
+        {
+          optimizedPrompt: '@角色名 在 #场景名 中完成更清晰的单镜头描述'
+        },
+        null,
+        2
+      ),
+      `大片段最终提示词：${segmentPrompt}`,
+      `当前小镜头提示词：${shotPrompt || prompt}`,
+      `角色列表：${JSON.stringify(characters ?? [])}`,
+      `场景资源库：${JSON.stringify(backgrounds ?? [])}`,
+      `镜头涉及场景：${JSON.stringify(sceneNames ?? [])}`,
+      `镜头涉及角色：${JSON.stringify(characterNames ?? [])}`,
+      '要求：',
+      '1. 输出必须服务于单镜头生成，而不是复述大片段摘要。',
+      '2. 必须保留并优先使用 @角色名 和 #场景名，不要把资源正文直接展开。',
+      '3. 要补足动作、表演节奏、镜头语言、构图和氛围，但不要偏离当前镜头原意。',
+      '4. 需要与大片段最终提示词保持叙事和视觉连续性。',
+      '5. 如果给了镜头涉及场景和角色，优先围绕这些对象优化。',
+      '6. 只返回 JSON。'
     ].join('\n');
   }
 
@@ -1164,14 +1379,41 @@ const analyzeSegment = async ({ segment, overallAnalysis, segmentAbsolutePath = 
   }
 };
 
-const optimizePrompt = async ({ prompt, characters, backgrounds, mode = 'generation' }) => {
+const optimizePrompt = async ({
+  prompt,
+  characters,
+  backgrounds,
+  mode = 'generation',
+  segmentPrompt = '',
+  shotPrompt = '',
+  sceneNames = [],
+  characterNames = []
+}) => {
   if (!canUseRemoteGemini) {
-    return createMockOptimizedPrompt({ prompt, characters, backgrounds, mode });
+    return createMockOptimizedPrompt({
+      prompt,
+      characters,
+      backgrounds,
+      mode,
+      segmentPrompt,
+      shotPrompt,
+      sceneNames,
+      characterNames
+    });
   }
 
   try {
     const { responseText } = await callRemoteGemini({
-      prompt: buildPromptOptimizationPrompt({ prompt, characters, backgrounds, mode })
+      prompt: buildPromptOptimizationPrompt({
+        prompt,
+        characters,
+        backgrounds,
+        mode,
+        segmentPrompt,
+        shotPrompt,
+        sceneNames,
+        characterNames
+      })
     });
     const parsedPayload = parseJsonPayload(responseText, '提示词优化模型');
     const optimizedPrompt = String(parsedPayload.optimizedPrompt ?? prompt).trim() || prompt;
@@ -1188,7 +1430,16 @@ const optimizePrompt = async ({ prompt, characters, backgrounds, mode = 'generat
     logger.warn('Remote Gemini optimizePrompt failed, using mock prompt optimization instead.', {
       message: error.message
     });
-    return createMockOptimizedPrompt({ prompt, characters, backgrounds, mode });
+    return createMockOptimizedPrompt({
+      prompt,
+      characters,
+      backgrounds,
+      mode,
+      segmentPrompt,
+      shotPrompt,
+      sceneNames,
+      characterNames
+    });
   }
 };
 

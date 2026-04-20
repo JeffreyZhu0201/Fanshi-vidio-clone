@@ -16,7 +16,8 @@ const serializeGenerationMeta = (task) => {
     is_mock: Boolean(taskMeta.isMock),
     remote_task_id: String(taskMeta.remoteTaskId ?? '').trim(),
     fallback_reason: String(taskMeta.fallbackReason ?? '').trim(),
-    provider_error: String(taskMeta.providerError ?? '').trim()
+    provider_error: String(taskMeta.providerError ?? '').trim(),
+    source: String(taskMeta.source ?? '').trim()
   };
 };
 
@@ -554,6 +555,7 @@ const processGenerationTask = async (taskId) => {
       errorMessage: null,
       meta: {
         ...(task.meta ?? {}),
+        source: 'segment_generation',
         engine: result.engine || '',
         isMock: Boolean(result.isMock),
         remoteTaskId: result.remoteTaskId || '',
@@ -568,6 +570,7 @@ const processGenerationTask = async (taskId) => {
       errorMessage: error.message,
       meta: {
         ...(task.meta ?? {}),
+        source: 'segment_generation',
         providerError: error.message
       }
     });
@@ -592,6 +595,7 @@ const startGeneration = async ({ segmentId, prompt }) => {
     status: TASK_STATUS.pending,
     progress: 0,
     meta: {
+      source: 'segment_generation',
       engine: '',
       isMock: false,
       remoteTaskId: '',
@@ -624,4 +628,13 @@ const getGenerationTaskStatus = async (taskId) => {
   return serializeGenerationTask(task);
 };
 
-export { startGeneration, getGenerationTaskStatus, serializeGenerationTask };
+export {
+  broadcastGenerationTaskUpdate,
+  collectCharacterReferenceImages,
+  collectSceneReferenceImages,
+  expandPromptMentions,
+  getBackgroundBindingForSegment,
+  getGenerationTaskStatus,
+  serializeGenerationTask,
+  startGeneration
+};

@@ -194,7 +194,7 @@ const optimizePrompt = async (prompt, characters = [], backgrounds = [], options
     prompt,
     characters,
     backgrounds,
-    ...(options.mode ? { mode: options.mode } : {})
+    ...options
   });
 
   return response.data;
@@ -219,6 +219,14 @@ const analyzeSegment = async (segmentId) => {
   return response.data;
 };
 
+const updateSegmentShots = async (segmentId, shots) => {
+  const response = await api.put(`/segments/${segmentId}/shots`, {
+    shots
+  });
+
+  return response.data;
+};
+
 const getTaskStatus = async (taskId) => {
   const response = await api.get(`/tasks/${taskId}`);
   return response.data;
@@ -228,6 +236,25 @@ const generateSegment = async (segmentId, prompt) => {
   const response = await api.post('/generation/generate', {
     segment_id: segmentId,
     prompt
+  });
+
+  return response.data;
+};
+
+const generateShot = async (segmentId, shotId, prompt) => {
+  const response = await api.post('/generation/shots/generate', {
+    segment_id: segmentId,
+    shot_id: shotId,
+    prompt
+  });
+
+  return response.data;
+};
+
+const generateShotBatch = async (segmentId, shots = []) => {
+  const response = await api.post('/generation/shots/generate-batch', {
+    segment_id: segmentId,
+    shots
   });
 
   return response.data;
@@ -243,6 +270,11 @@ const generateResourceImages = async (payload) => {
 
 const getGenerationTask = async (taskId) => {
   const response = await api.get(`/generation/${taskId}`);
+  return response.data;
+};
+
+const getShotGenerationTask = async (taskId) => {
+  const response = await api.get(`/generation/shots/${taskId}`);
   return response.data;
 };
 
@@ -275,10 +307,13 @@ export {
   checkHealth,
   downloadVideo,
   generateSegment,
+  generateShot,
+  generateShotBatch,
   generateResourceImages,
   getAnalysis,
   getBackgroundAssets,
   getGenerationTask,
+  getShotGenerationTask,
   getMergeProgress,
   getResourceImages,
   getSegments,
@@ -288,6 +323,7 @@ export {
   mergeVideos,
   optimizePrompt,
   splitVideo,
+  updateSegmentShots,
   toAbsoluteAssetUrl,
   uploadVideo
 };

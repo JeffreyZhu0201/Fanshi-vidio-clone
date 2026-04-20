@@ -35,6 +35,68 @@ const getTaskErrorMessage = (taskPayload, fallback = '') => {
   );
 };
 
+const normalizeShotGenerationTask = (taskPayload) => {
+  if (!taskPayload) {
+    return null;
+  }
+
+  return {
+    task_id: taskPayload.task_id ?? taskPayload.id,
+    segment_id: Number(taskPayload.segment_id ?? 0) || null,
+    shot_id: taskPayload.shot_id ?? '',
+    shot_index: Number(taskPayload.shot_index ?? 0) || 0,
+    status: taskPayload.status ?? 'pending',
+    progress: taskPayload.progress ?? 0,
+    prompt: taskPayload.prompt ?? '',
+    optimizedPrompt: taskPayload.optimized_prompt ?? '',
+    start_time:
+      Number.isFinite(Number(taskPayload.start_time)) && Number(taskPayload.start_time) >= 0
+        ? Number(Number(taskPayload.start_time).toFixed(2))
+        : null,
+    end_time:
+      Number.isFinite(Number(taskPayload.end_time)) && Number(taskPayload.end_time) >= 0
+        ? Number(Number(taskPayload.end_time).toFixed(2))
+        : null,
+    duration_seconds:
+      Number.isFinite(Number(taskPayload.duration_seconds)) && Number(taskPayload.duration_seconds) >= 0
+        ? Number(Number(taskPayload.duration_seconds).toFixed(2))
+        : null,
+    result_url: toAbsoluteAssetUrl(taskPayload.result_url),
+    error_message: taskPayload.error_message ?? '',
+    engine: taskPayload.engine ?? '',
+    is_mock: Boolean(taskPayload.is_mock),
+    remote_task_id: taskPayload.remote_task_id ?? '',
+    fallback_reason: taskPayload.fallback_reason ?? '',
+    provider_error: taskPayload.provider_error ?? '',
+    source: taskPayload.source ?? '',
+    created_at: taskPayload.created_at,
+    updated_at: taskPayload.updated_at
+  };
+};
+
+const normalizeShotGenerationSummary = (summaryPayload) => {
+  if (!summaryPayload) {
+    return null;
+  }
+
+  return {
+    segment_id: Number(summaryPayload.segment_id ?? 0) || null,
+    status: summaryPayload.status ?? 'idle',
+    progress: Number(summaryPayload.progress ?? 0) || 0,
+    total_shot_count: Number(summaryPayload.total_shot_count ?? 0) || 0,
+    completed_shot_count: Number(summaryPayload.completed_shot_count ?? 0) || 0,
+    failed_shot_count: Number(summaryPayload.failed_shot_count ?? 0) || 0,
+    processing_shot_count: Number(summaryPayload.processing_shot_count ?? 0) || 0,
+    pending_assembly: Boolean(summaryPayload.pending_assembly),
+    result_url: toAbsoluteAssetUrl(summaryPayload.result_url),
+    error_message: summaryPayload.error_message ?? '',
+    assembly_generation_task_id: Number(summaryPayload.assembly_generation_task_id ?? 0) || null,
+    source: summaryPayload.source ?? '',
+    started_at: summaryPayload.started_at ?? '',
+    updated_at: summaryPayload.updated_at ?? ''
+  };
+};
+
 const normalizeSegment = (segment) => {
   const normalizeGenerationTask = (taskPayload) => {
     if (!taskPayload) {
@@ -54,6 +116,7 @@ const normalizeSegment = (segment) => {
       remote_task_id: taskPayload.remote_task_id ?? '',
       fallback_reason: taskPayload.fallback_reason ?? '',
       provider_error: taskPayload.provider_error ?? '',
+      source: taskPayload.source ?? '',
       created_at: taskPayload.created_at,
       updated_at: taskPayload.updated_at
     };
@@ -61,6 +124,73 @@ const normalizeSegment = (segment) => {
 
   const latestCompletedGenerationTask = normalizeGenerationTask(segment.latest_generation_task);
   const latestAttemptTask = normalizeGenerationTask(segment.latest_attempt_task) ?? latestCompletedGenerationTask;
+  const normalizedShots = Array.isArray(segment.analysis?.shots)
+    ? segment.analysis.shots.map((shot, shotIndex) => ({
+        id: shot.id ?? `shot_${shotIndex + 1}`,
+        shotIndex: Number(shot.shotIndex ?? shot.shot_index ?? shotIndex) || shotIndex,
+        startTime:
+          Number.isFinite(Number(shot.startTime ?? shot.start_time)) && Number(shot.startTime ?? shot.start_time) >= 0
+            ? Number(Number(shot.startTime ?? shot.start_time).toFixed(2))
+            : null,
+        endTime:
+          Number.isFinite(Number(shot.endTime ?? shot.end_time)) && Number(shot.endTime ?? shot.end_time) >= 0
+            ? Number(Number(shot.endTime ?? shot.end_time).toFixed(2))
+            : null,
+        localStartTime:
+          Number.isFinite(Number(shot.localStartTime ?? shot.local_start_time)) &&
+          Number(shot.localStartTime ?? shot.local_start_time) >= 0
+            ? Number(Number(shot.localStartTime ?? shot.local_start_time).toFixed(2))
+            : null,
+        localEndTime:
+          Number.isFinite(Number(shot.localEndTime ?? shot.local_end_time)) &&
+          Number(shot.localEndTime ?? shot.local_end_time) >= 0
+            ? Number(Number(shot.localEndTime ?? shot.local_end_time).toFixed(2))
+            : null,
+        durationSeconds:
+          Number.isFinite(Number(shot.durationSeconds ?? shot.duration_seconds)) &&
+          Number(shot.durationSeconds ?? shot.duration_seconds) >= 0
+            ? Number(Number(shot.durationSeconds ?? shot.duration_seconds).toFixed(2))
+            : null,
+        summary: shot.summary ?? '',
+        prompt: shot.prompt ?? '',
+        sceneNames: shot.sceneNames ?? shot.scene_names ?? [],
+        characterNames: shot.characterNames ?? shot.character_names ?? [],
+        representativeFrameTime:
+          Number.isFinite(Number(shot.representativeFrameTime ?? shot.representative_frame_time)) &&
+          Number(shot.representativeFrameTime ?? shot.representative_frame_time) >= 0
+            ? Number(Number(shot.representativeFrameTime ?? shot.representative_frame_time).toFixed(2))
+            : null,
+        representativeFrameNote: shot.representativeFrameNote ?? shot.representative_frame_note ?? '',
+        sourceFilePath: shot.sourceFilePath ?? shot.source_file_path ?? '',
+        sourceFileUrl: toAbsoluteAssetUrl(shot.sourceFileUrl ?? shot.source_file_url),
+        sourceLocalStartTime:
+          Number.isFinite(Number(shot.sourceLocalStartTime ?? shot.source_local_start_time)) &&
+          Number(shot.sourceLocalStartTime ?? shot.source_local_start_time) >= 0
+            ? Number(Number(shot.sourceLocalStartTime ?? shot.source_local_start_time).toFixed(2))
+            : null,
+        sourceLocalEndTime:
+          Number.isFinite(Number(shot.sourceLocalEndTime ?? shot.source_local_end_time)) &&
+          Number(shot.sourceLocalEndTime ?? shot.source_local_end_time) >= 0
+            ? Number(Number(shot.sourceLocalEndTime ?? shot.source_local_end_time).toFixed(2))
+            : null,
+        representativeFrameImagePath:
+          shot.representativeFrameImagePath ?? shot.representative_frame_image_path ?? '',
+        representativeFrameImageUrl: toAbsoluteAssetUrl(
+          shot.representativeFrameImageUrl ?? shot.representative_frame_image_url
+        ),
+        representativeFrameActualTime:
+          Number.isFinite(Number(shot.representativeFrameActualTime ?? shot.representative_frame_actual_time)) &&
+          Number(shot.representativeFrameActualTime ?? shot.representative_frame_actual_time) >= 0
+            ? Number(Number(shot.representativeFrameActualTime ?? shot.representative_frame_actual_time).toFixed(2))
+            : null,
+        latestGenerationTask: normalizeShotGenerationTask(shot.latestGenerationTask ?? shot.latest_generation_task),
+        latestCompletedGenerationTask: normalizeShotGenerationTask(
+          shot.latestCompletedGenerationTask ?? shot.latest_completed_generation_task
+        ),
+        generatedUrl: toAbsoluteAssetUrl(shot.generatedUrl ?? shot.generated_url)
+      }))
+    : [];
+  const normalizedShotSummary = normalizeShotGenerationSummary(segment.shot_generation_summary);
 
   return {
     id: segment.id,
@@ -76,6 +206,7 @@ const normalizeSegment = (segment) => {
     prompt: segment.analysis?.prompt ?? '',
     sceneSummary: segment.analysis?.sceneSummary ?? '',
     scenePrompt: segment.analysis?.scenePrompt ?? '',
+    shots: normalizedShots,
     backgroundId: segment.analysis?.backgroundId ?? '',
     backgroundAction: segment.analysis?.backgroundAction ?? '',
     backgroundName: segment.analysis?.backgroundName ?? '',
@@ -84,6 +215,8 @@ const normalizeSegment = (segment) => {
     representativeFrameNote: segment.analysis?.representativeFrameNote ?? '',
     characters: segment.analysis?.characters ?? [],
     highlightedPrompt: '',
+    shotGenerationSummary: normalizedShotSummary,
+    latestShotAssemblyTask: normalizeShotGenerationSummary(segment.latest_shot_assembly_task) ?? normalizedShotSummary,
     latestCompletedGenerationTask,
     latestGenerationTask: latestAttemptTask
   };

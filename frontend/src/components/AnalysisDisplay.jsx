@@ -1018,7 +1018,6 @@ const AnalysisDisplay = ({
     const {
       title,
       eyebrow,
-      description = '',
       status = 'idle',
       statusLabel = '待处理',
       meta = []
@@ -1031,8 +1030,7 @@ const AnalysisDisplay = ({
     const isGenerating = resourceGeneratingKeys.includes(resourceKey);
     const promptStatus = resourcePromptOverrides[resourceKey]?.prompt ? '已优化' : '原始';
     const isCharacterResource = resource.resourceType === 'character';
-    const promptPreviewTitle = isCharacterResource ? '角色提示词摘要' : '资源提示词';
-    const promptSummaryValue = resource.sourcePrompt || '暂无资源提示词。';
+    const promptPreviewTitle = '当前最终提示词';
     const generatedAssets = getResourceImageAssetsForResource(resource);
     const generationSummary = getResourceGenerationSummary(generatedAssets);
     const canGenerateResource = Boolean(geminiImageProvider?.ready);
@@ -1042,145 +1040,113 @@ const AnalysisDisplay = ({
         : '调用 Gemini 生图生成三张背景参考图。'
       : `Gemini 生图未就绪：${geminiImageProvider?.reason || '缺少必要配置。'}`;
 
-    const frameColumn = (
-      <div className="resource-row-frame">
-        <p className="resource-section-label">原始帧预览</p>
-        <div className="resource-inline-meta">
-          <span className="resource-mini-chip resource-mini-chip-muted">{formatFrameIntel(frameTime)}</span>
-        </div>
-        <VideoFramePreview
-          videoUrl={analysisFrameSource}
-          timeSeconds={frameTime}
-          originalTimeSeconds={frameTime}
-          label={resource.resourceName}
-          note={frameNote}
-          requestedTimeLabel="整片时间"
-        />
-
-        {isCharacterResource ? (
-          <div className="resource-prompt-box resource-prompt-box-summary">
-            <p className="resource-attribute-label">{promptPreviewTitle}</p>
-            <p className="resource-prompt-summary-text">{promptSummaryValue}</p>
+    const primaryColumn = (
+      <div className="resource-row-primary">
+        <div className="resource-row-frame">
+          <p className="resource-section-label">原始帧预览</p>
+          <div className="resource-inline-meta">
+            <span className="resource-mini-chip resource-mini-chip-muted">{formatFrameIntel(frameTime)}</span>
           </div>
-        ) : null}
-      </div>
-    );
+          <VideoFramePreview
+            videoUrl={analysisFrameSource}
+            timeSeconds={frameTime}
+            originalTimeSeconds={frameTime}
+            label={resource.resourceName}
+            note={frameNote}
+            requestedTimeLabel="整片时间"
+          />
+        </div>
 
-    const promptColumn = (
-      <div className="resource-row-prompt">
-        <p className="resource-section-label">{isCharacterResource ? '当前总提示词' : promptPreviewTitle}</p>
-        <div className="resource-inline-meta">
-          <span className="resource-mini-chip">{promptStatus}</span>
-          {isCharacterResource ? (
-            <span className="resource-mini-chip resource-mini-chip-muted">三视图建模</span>
-          ) : (
+        <div className="resource-row-prompt">
+          <p className="resource-section-label">{promptPreviewTitle}</p>
+          <div className="resource-inline-meta">
+            <span className="resource-mini-chip">{promptStatus}</span>
             <span className="resource-mini-chip resource-mini-chip-muted">
-              {backgroundAssetMap.get(resource.resourceId)?.status === 'completed' ? '背景资产已就绪' : '待背景资产'}
+              {isCharacterResource ? '三视图建模' : '背景图建模'}
             </span>
-          )}
-        </div>
-        {generationSummary.errorSummary ? (
-          <div className="mt-3 rounded-[16px] border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] leading-5 text-amber-100">
-            {generationSummary.partialSuccess ? '部分成功：' : '生成提醒：'}
-            {generationSummary.errorSummary}
           </div>
-        ) : null}
-        {isCharacterResource ? (
-          <div className="resource-attribute-stack">
-            <div className="resource-attribute-card">
-              <p className="resource-attribute-label">外表描述</p>
-              <p className="resource-attribute-value">{resource.appearancePrompt || '待补充'}</p>
+          {generationSummary.errorSummary ? (
+            <div className="mt-3 rounded-[16px] border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] leading-5 text-amber-100">
+              {generationSummary.partialSuccess ? '部分成功：' : '生成提醒：'}
+              {generationSummary.errorSummary}
             </div>
-            <div className="resource-attribute-card">
-              <p className="resource-attribute-label">性格气质</p>
-              <p className="resource-attribute-value">{resource.personalityPrompt || '待补充'}</p>
-            </div>
-          </div>
-        ) : null}
-
-        <div
-          className={`resource-prompt-box ${
-            isCharacterResource ? 'resource-prompt-box-clamped' : ''
-          }`}
-        >
-          <p
-            className={`whitespace-pre-wrap text-xs leading-6 text-white/82 ${
-              isCharacterResource ? 'resource-prompt-preview-text' : ''
-            }`}
-          >
-            {displayPrompt || '暂无资源提示词。'}
-          </p>
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="rounded-full border border-brand-500/20 bg-brand-500/10 px-3 py-1.5 text-[11px] font-semibold text-brand-100 transition hover:border-brand-500/35 hover:bg-brand-500/15 disabled:opacity-50"
-            disabled={isOptimizing}
-            onClick={() => void optimizeResourcePrompt(resource, displayPrompt)}
-          >
-            {isOptimizing ? '优化中...' : '优化提示词'}
-          </button>
-
-          <button
-            type="button"
-            className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-100 transition hover:border-emerald-500/35 hover:bg-emerald-500/15 disabled:opacity-50"
-            disabled={isGenerating || !displayPrompt.trim() || !canGenerateResource}
-            onClick={() => void generateResourceBundle(resource)}
-            title={generateResourceTitle}
-          >
-            {isGenerating
-              ? '生成中...'
-              : isCharacterResource
-                ? '生成三视图'
-                : '生成背景图'}
-          </button>
-
-          {generationSummary.failedCount ? (
-            <button
-              type="button"
-              className="rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:border-amber-500/35 hover:bg-amber-500/15 disabled:opacity-50"
-              disabled={isGenerating || !canGenerateResource}
-              onClick={() => void generateResourceBundle(resource, { failedOnly: true })}
-              title={generateResourceTitle}
-            >
-              重试失败项
-            </button>
           ) : null}
 
-          <button
-            type="button"
-            className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-semibold text-white/78 transition hover:border-white/20 hover:bg-white/[0.08] disabled:opacity-50"
-            disabled={frameTime === null}
-            onClick={() =>
-              setLightboxFrame({
-                title: `${resource.resourceName} · 原始帧`,
-                description: frameNote,
-                videoUrl: analysisFrameSource,
-                timeSeconds: frameTime,
-                originalTimeSeconds: frameTime,
-                requestedTimeLabel: '整片时间',
-                label: resource.resourceName,
-                note: frameNote
-              })
-            }
+          <div
+            className={`resource-prompt-box ${
+              isCharacterResource ? 'resource-prompt-box-clamped' : ''
+            }`}
           >
-            放大原帧
-          </button>
+            <p
+              className={`whitespace-pre-wrap text-xs leading-6 text-white/82 ${
+                isCharacterResource ? 'resource-prompt-preview-text' : ''
+              }`}
+            >
+              {displayPrompt || '暂无资源提示词。'}
+            </p>
+          </div>
 
-          <HoverPopover
-            trigger="查看完整提示词"
-            triggerClassName="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] font-semibold text-white/75 transition hover:border-white/20 hover:bg-black/35"
-          >
-            <div className="space-y-2">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/45">
-                完整资源提示词
-              </p>
-              <p className="whitespace-pre-wrap text-sm leading-6 text-white/82">
-                {displayPrompt || '暂无资源提示词。'}
-              </p>
-            </div>
-          </HoverPopover>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-100 transition hover:border-emerald-500/35 hover:bg-emerald-500/15 disabled:opacity-50"
+              disabled={isGenerating || !displayPrompt.trim() || !canGenerateResource}
+              onClick={() => void generateResourceBundle(resource)}
+              title={generateResourceTitle}
+            >
+              {isGenerating
+                ? '生成中...'
+                : isCharacterResource
+                  ? '生成三视图'
+                  : '生成背景图'}
+            </button>
+
+            {generationSummary.failedCount ? (
+              <button
+                type="button"
+                className="rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-[11px] font-semibold text-amber-100 transition hover:border-amber-500/35 hover:bg-amber-500/15 disabled:opacity-50"
+                disabled={isGenerating || !canGenerateResource}
+                onClick={() => void generateResourceBundle(resource, { failedOnly: true })}
+                title={generateResourceTitle}
+              >
+                重试失败项
+              </button>
+            ) : null}
+
+            <button
+              type="button"
+              className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-semibold text-white/78 transition hover:border-white/20 hover:bg-white/[0.08] disabled:opacity-50"
+              disabled={frameTime === null}
+              onClick={() =>
+                setLightboxFrame({
+                  title: `${resource.resourceName} · 原始帧`,
+                  description: frameNote,
+                  videoUrl: analysisFrameSource,
+                  timeSeconds: frameTime,
+                  originalTimeSeconds: frameTime,
+                  requestedTimeLabel: '整片时间',
+                  label: resource.resourceName,
+                  note: frameNote
+                })
+              }
+            >
+              放大原帧
+            </button>
+
+            <HoverPopover
+              trigger="查看完整提示词"
+              triggerClassName="rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[11px] font-semibold text-white/75 transition hover:border-white/20 hover:bg-black/35"
+            >
+              <div className="space-y-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/45">
+                  完整资源提示词
+                </p>
+                <p className="whitespace-pre-wrap text-sm leading-6 text-white/82">
+                  {displayPrompt || '暂无资源提示词。'}
+                </p>
+              </div>
+            </HoverPopover>
+          </div>
         </div>
       </div>
     );
@@ -1212,28 +1178,24 @@ const AnalysisDisplay = ({
                 </span>
               ))}
             </div>
-            {description ? <p className="resource-row-description">{description}</p> : null}
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
             <StatusBadge status={status} label={statusLabel} />
+            <button
+              type="button"
+              className="rounded-full border border-brand-500/20 bg-brand-500/10 px-3 py-1.5 text-[11px] font-semibold text-brand-100 transition hover:border-brand-500/35 hover:bg-brand-500/15 disabled:opacity-50"
+              disabled={isOptimizing}
+              onClick={() => void optimizeResourcePrompt(resource, displayPrompt)}
+            >
+              {isOptimizing ? '优化中...' : '优化提示词'}
+            </button>
           </div>
         </div>
 
         <div className={`resource-row-body ${isCharacterResource ? 'resource-row-body-character' : ''}`}>
-          {isCharacterResource ? (
-            <>
-              {frameColumn}
-              {promptColumn}
-              {generatedColumn}
-            </>
-          ) : (
-            <>
-              {generatedColumn}
-              {frameColumn}
-              {promptColumn}
-            </>
-          )}
+          {primaryColumn}
+          {generatedColumn}
         </div>
       </article>
     );
@@ -1295,7 +1257,12 @@ const AnalysisDisplay = ({
                     </p>
                   </div>
                 </div>
-              ) : null}
+              ) : (
+                <div className="resource-attribute-card">
+                  <p className="resource-attribute-label">场景描述</p>
+                  <p className="resource-attribute-value">{resourceEditor.description || '待补充'}</p>
+                </div>
+              )}
 
               <PromptPreview
                 title={`${resourceTypeLabel}原始提示词`}
@@ -1430,7 +1397,6 @@ const AnalysisDisplay = ({
           return renderResourceCard(resource, {
             eyebrow: 'Character Resource',
             title: resource.resourceName,
-            description: '人物资源同时记录外表描述、性格气质和三视图调用词，用于角色一致性与后续 Gemini 白底三视图生成。',
             status:
               generatedCount === 3 ? 'completed' : resourceGeneratingKeys.includes(getResourceKey(resource)) ? 'processing' : resource.frameTime !== null ? 'completed' : 'idle',
             statusLabel:
@@ -1470,7 +1436,6 @@ const AnalysisDisplay = ({
           return renderResourceCard(resource, {
             eyebrow: 'Scene Resource',
             title: resource.resourceName,
-            description: getBackgroundDescription(background),
             status:
               backgroundAsset?.status ||
               (generationSummary.failedCount ? 'failed' : resource.frameTime !== null ? 'completed' : 'idle'),
@@ -1884,10 +1849,10 @@ const AnalysisDisplay = ({
                         {renderResourcePanelHeader({
                           title: '角色资源库',
                           description:
-                            '角色资源区按原始帧、角色提示词和三视图资源位排布，更像运营控制台中的角色建模工位。',
+                            '主页只保留原始帧、当前最终提示词和三视图资源，详细属性统一进入编辑详情。',
                           chips: activeTabSummary.characters
                         })}
-                        {renderResourceMatrixHeader(['原始帧与摘要', '当前总提示词', '生成的新资源'])}
+                        {renderResourceMatrixHeader(['典型帧 + 当前最终提示词', '生成的新资源'])}
                         {renderCharacterCards()}
                       </div>
                     ) : null}
@@ -1897,10 +1862,10 @@ const AnalysisDisplay = ({
                         {renderResourcePanelHeader({
                           title: '场景资源库',
                           description:
-                            '场景资源区会同步展示原始帧、资源提示词和多角度背景资源位，并附带背景资产状态。',
+                            '主页只保留原始帧、当前最终提示词和背景资源预览，场景描述与调用词放进编辑详情。',
                           chips: activeTabSummary.scenes
                         })}
-                        {renderResourceMatrixHeader(['新资源', '原始帧', '场景提示词'])}
+                        {renderResourceMatrixHeader(['典型帧 + 当前最终提示词', '生成的新资源'])}
                         {renderSceneCards()}
                       </div>
                     ) : null}

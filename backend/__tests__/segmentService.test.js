@@ -4,6 +4,15 @@ const getVideoRecordById = jest.fn();
 const resolveVideoAbsolutePath = jest.fn();
 const analyzeSegmentContent = jest.fn();
 const getAnalysisRecordByVideoId = jest.fn();
+const extractVideoFrame = jest.fn();
+const sliceVideoClip = jest.fn(async (_sourcePath, startTime, endTime, options = {}) => ({
+  filePath: `shots/${options.basename || 'shot'}.mp4`,
+  fileUrl: `/uploads/shots/${options.basename || 'shot'}.mp4`,
+  startTime,
+  endTime,
+  duration: Number((Number(endTime) - Number(startTime)).toFixed(2)),
+  engine: 'ffmpeg-slice'
+}));
 
 const Segment = {
   findByPk: jest.fn(),
@@ -16,9 +25,39 @@ const GenerationTask = {
   findAll: jest.fn()
 };
 
+const Analysis = {
+  findOne: jest.fn()
+};
+
+const BackgroundAsset = {
+  findOne: jest.fn(),
+  create: jest.fn()
+};
+
+const Project = {
+  findByPk: jest.fn()
+};
+
+const ResourceImageAsset = {
+  findAll: jest.fn(),
+  findOne: jest.fn(),
+  create: jest.fn()
+};
+
+const ShotGenerationTask = {
+  findAll: jest.fn(),
+  findOne: jest.fn(),
+  create: jest.fn()
+};
+
 await jest.unstable_mockModule('../models/index.js', () => ({
+  Analysis,
+  BackgroundAsset,
   GenerationTask,
+  Project,
+  ResourceImageAsset,
   Segment,
+  ShotGenerationTask,
   Video: {}
 }));
 
@@ -40,19 +79,35 @@ await jest.unstable_mockModule('../services/taskService.js', () => ({
 }));
 
 await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
+  extractVideoFrame,
+  getVideoMetadata: jest.fn(),
+  mergeVideos: jest.fn(),
+  sliceVideoClip,
   splitVideo: jest.fn()
 }));
 
 await jest.unstable_mockModule('../services/fileService.js', () => ({
+  createOutputRelativePath: jest.fn((directory, basename, extension = '.mp4') =>
+    `${directory}/${basename}${extension}`
+  ),
+  duplicateToUploadPath: jest.fn(async (_sourceAbsolutePath, targetRelativePath) => `/tmp/${targetRelativePath}`),
+  ensureParentDirectory: jest.fn(),
+  publicUrlToRelativePath: jest.fn((assetPath) => assetPath),
+  removeFileIfExists: jest.fn(),
   resolveUploadPath: jest.fn((assetPath) => `/tmp/${assetPath}`),
-  toPublicUploadUrl: jest.fn((assetPath) => `/uploads/${assetPath}`)
+  toPublicUploadUrl: jest.fn((assetPath) => `/uploads/${assetPath}`),
+  toAbsolutePublicUploadUrl: jest.fn((assetPath) => `/uploads/${assetPath}`)
 }));
 
-const { analyzeSegmentById, listSegmentsByVideoId } = await import('../services/segmentService.js');
+const { analyzeSegmentById, listSegmentsByVideoId, updateSegmentShotsById } = await import('../services/segmentService.js');
 
 describe('segmentService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    extractVideoFrame.mockImplementation(async (_sourcePath, _timeSeconds, options = {}) => ({
+      filePath: `frames/${options.basename || 'generated-shot-frame'}.jpg`,
+      fileUrl: `/uploads/frames/${options.basename || 'generated-shot-frame'}.jpg`
+    }));
 
     getVideoRecordById.mockResolvedValue({
       id: 101
@@ -186,6 +241,62 @@ describe('segmentService', () => {
       scenePrompt: '咖啡馆靠窗座位，暖色灯光',
       scene: '咖啡馆里人物情绪平稳',
       action: '主角坐下并观察四周'
+    });
+  });
+
+  test('rebuilds shot source clip and representative frame when saving shot definitions', async () => {
+    const segmentUpdate = jest.fn().mockImplementation(function update(payload) {
+      this.analysis = payload.analysis;
+      return Promise.resolve(this);
+    });
+
+    Segment.findByPk.mockResolvedValue({
+      id: 201,
+      videoId: 101,
+      segmentIndex: 0,
+      startTime: 0,
+      endTime: 4,
+      filePath: 'segments/source/demo-0.mp4',
+      analysis: {
+        shots: [
+          {
+            id: 'shot_existing_1',
+            startTime: 0,
+            endTime: 1.5,
+            representativeFrameTime: 0.8,
+            sourceFilePath: 'shots/old-shot.mp4',
+            representativeFrameImagePath: 'frames/old-shot.jpg'
+          }
+        ]
+      },
+      update: segmentUpdate
+    });
+    GenerationTask.findAll.mockResolvedValue([]);
+
+    const segment = await updateSegmentShotsById(201, [
+      {
+        id: 'shot_saved_1',
+        startTime: 0,
+        endTime: 2,
+        summary: '主角推门进入咖啡馆',
+        prompt: '@主角 推门进入 #咖啡馆内景',
+        sceneNames: ['咖啡馆内景'],
+        characterNames: ['主角'],
+        representativeFrameTime: 1.1,
+        representativeFrameNote: '主角进门时的代表帧'
+      }
+    ]);
+
+    expect(segmentUpdate).toHaveBeenCalled();
+    expect(segment.analysis.shots[0]).toMatchObject({
+      id: 'shot_saved_1',
+      sourceFilePath: expect.stringContaining('shots/segment-201-shot_saved_1-source'),
+      sourceFileUrl: expect.stringContaining('/uploads/shots/segment-201-shot_saved_1-source'),
+      sourceLocalStartTime: 0,
+      sourceLocalEndTime: 2,
+      representativeFrameImagePath: expect.stringContaining('frames/segment-201-shot_saved_1-representative-frame'),
+      representativeFrameImageUrl: expect.stringContaining('/uploads/frames/segment-201-shot_saved_1-representative-frame'),
+      representativeFrameActualTime: 1.1
     });
   });
 });

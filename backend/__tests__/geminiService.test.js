@@ -123,9 +123,11 @@ describe('geminiService', () => {
     expect(parts[1].text).toContain('representativeFrameTime');
     expect(parts[1].text).toContain('personalityPrompt');
     expect(parts[1].text).toContain('scenePrompt');
-    expect(parts[1].text).toContain('可独立生成的片段');
+    expect(parts[1].text).toContain('后续可独立生成的大剧情片段');
     expect(parts[1].text).toContain('backgroundId');
     expect(parts[1].text).toContain('backgroundAction');
+    expect(parts[1].text).toContain('真实剪辑边界');
+    expect(parts[1].text).toContain('shots 是后续小镜头切片与生成的唯一真值来源');
     expect(requestBody.generationConfig).toMatchObject({
       temperature: 0.2,
       responseMimeType: 'application/json'

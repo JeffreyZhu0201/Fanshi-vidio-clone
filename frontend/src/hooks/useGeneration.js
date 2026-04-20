@@ -4,11 +4,15 @@ import {
   analyzeSegment,
   downloadVideo,
   generateSegment,
+  generateShot,
+  generateShotBatch,
   getBackgroundAssets,
   getGenerationTask,
+  getShotGenerationTask,
   getMergeProgress,
   mergeVideos,
   optimizePrompt,
+  updateSegmentShots,
   toAbsoluteAssetUrl
 } from '../services/api.js';
 import { websocketService } from '../services/websocket.js';
@@ -67,6 +71,108 @@ const normalizeBackgroundAsset = (backgroundAsset) => {
   };
 };
 
+const normalizeShotTask = (taskPayload) => {
+  if (!taskPayload) {
+    return null;
+  }
+
+  return {
+    task_id: taskPayload.task_id ?? taskPayload.id,
+    segment_id: Number(taskPayload.segment_id ?? 0) || null,
+    shot_id: taskPayload.shot_id ?? '',
+    shot_index: Number(taskPayload.shot_index ?? 0) || 0,
+    status: taskPayload.status ?? 'pending',
+    progress: Number(taskPayload.progress ?? 0) || 0,
+    prompt: taskPayload.prompt ?? '',
+    optimizedPrompt: taskPayload.optimized_prompt ?? '',
+    start_time:
+      Number.isFinite(Number(taskPayload.start_time)) && Number(taskPayload.start_time) >= 0
+        ? Number(Number(taskPayload.start_time).toFixed(2))
+        : null,
+    end_time:
+      Number.isFinite(Number(taskPayload.end_time)) && Number(taskPayload.end_time) >= 0
+        ? Number(Number(taskPayload.end_time).toFixed(2))
+        : null,
+    duration_seconds:
+      Number.isFinite(Number(taskPayload.duration_seconds)) && Number(taskPayload.duration_seconds) >= 0
+        ? Number(Number(taskPayload.duration_seconds).toFixed(2))
+        : null,
+    result_url: toAbsoluteAssetUrl(taskPayload.result_url),
+    error_message: taskPayload.error_message ?? '',
+    engine: taskPayload.engine ?? '',
+    is_mock: Boolean(taskPayload.is_mock),
+    remote_task_id: taskPayload.remote_task_id ?? '',
+    fallback_reason: taskPayload.fallback_reason ?? '',
+    provider_error: taskPayload.provider_error ?? '',
+    source: taskPayload.source ?? '',
+    created_at: taskPayload.created_at,
+    updated_at: taskPayload.updated_at
+  };
+};
+
+const normalizeShotAssemblyPayload = (payload) => {
+  if (!payload) {
+    return null;
+  }
+
+  return {
+    segment_id: Number(payload.segment_id ?? 0) || null,
+    status: payload.status ?? 'idle',
+    progress: Number(payload.progress ?? 0) || 0,
+    total_shot_count: Number(payload.total_shot_count ?? 0) || 0,
+    completed_shot_count: Number(payload.completed_shot_count ?? 0) || 0,
+    failed_shot_count: Number(payload.failed_shot_count ?? 0) || 0,
+    processing_shot_count: Number(payload.processing_shot_count ?? 0) || 0,
+    pending_assembly: Boolean(payload.pending_assembly),
+    result_url: toAbsoluteAssetUrl(payload.result_url),
+    error_message: payload.error_message ?? '',
+    assembly_generation_task_id: Number(payload.assembly_generation_task_id ?? 0) || null,
+    source: payload.source ?? '',
+    started_at: payload.started_at ?? '',
+    updated_at: payload.updated_at ?? ''
+  };
+};
+
+const getShotRuntimeKey = (segmentId, shotId) => `${segmentId}:${shotId}`;
+
+const buildClientShotSummary = (segment, shots, currentSummary = null) => {
+  const totalShotCount = shots.length;
+  const completedShotCount = shots.filter((shot) => Boolean(shot.latestCompletedGenerationTask?.task_id)).length;
+  const failedShotCount = shots.filter((shot) => shot.latestGenerationTask?.status === 'failed').length;
+  const processingShotCount = shots.filter((shot) =>
+    ['pending', 'processing'].includes(shot.latestGenerationTask?.status)
+  ).length;
+  const resultUrl = currentSummary?.result_url ?? '';
+  const baseStatus = currentSummary?.status ?? '';
+  const status = resultUrl
+    ? 'completed'
+    : baseStatus === 'processing' && currentSummary?.pending_assembly
+      ? 'processing'
+      : processingShotCount > 0
+        ? 'processing'
+        : failedShotCount > 0
+          ? 'failed'
+          : completedShotCount > 0
+            ? 'partial'
+            : 'idle';
+  const progress = resultUrl
+    ? 100
+    : totalShotCount
+      ? Math.min(95, Math.round(((completedShotCount + failedShotCount) / totalShotCount) * 100))
+      : 0;
+
+  return {
+    ...(currentSummary ?? {}),
+    segment_id: segment.id,
+    status,
+    progress,
+    total_shot_count: totalShotCount,
+    completed_shot_count: completedShotCount,
+    failed_shot_count: failedShotCount,
+    processing_shot_count: processingShotCount
+  };
+};
+
 const useGeneration = () => {
   const currentVideo = useVideoStore((state) => state.currentVideo);
   const analysis = useAnalysisStore((state) => state.analysis);
@@ -89,6 +195,10 @@ const useGeneration = () => {
   const [analyzingSegmentId, setAnalyzingSegmentId] = useState(0);
   const [optimizingSegmentId, setOptimizingSegmentId] = useState(0);
   const [generatingSegmentIds, setGeneratingSegmentIds] = useState([]);
+  const [generatingShotKeys, setGeneratingShotKeys] = useState([]);
+  const [batchGeneratingSegmentIds, setBatchGeneratingSegmentIds] = useState([]);
+  const [optimizingShotKeys, setOptimizingShotKeys] = useState([]);
+  const [savingShotSegmentIds, setSavingShotSegmentIds] = useState([]);
   const characters = analysis?.characters ?? [];
   const backgrounds = analysis?.backgrounds ?? [];
   const mountedRef = useRef(false);
@@ -97,6 +207,7 @@ const useGeneration = () => {
   const segmentAnalysisRequestTokenRef = useRef(0);
   const optimizeRequestTokenRef = useRef(0);
   const generationPollingTokenRef = useRef(new Map());
+  const shotGenerationPollingTokenRef = useRef(new Map());
   const mergePollingTokenRef = useRef(0);
 
   const isVideoScopedRequestCancelled = (requestToken, videoId, tokenRef) => {
@@ -138,10 +249,33 @@ const useGeneration = () => {
     );
   };
 
+  const beginShotGenerationPolling = (segmentId, shotId) => {
+    const shotRuntimeKey = getShotRuntimeKey(segmentId, shotId);
+    const currentToken = shotGenerationPollingTokenRef.current.get(shotRuntimeKey) ?? 0;
+    const nextToken = currentToken + 1;
+    shotGenerationPollingTokenRef.current.set(shotRuntimeKey, nextToken);
+    return nextToken;
+  };
+
+  const isShotGenerationPollingCancelled = (segmentId, shotId, requestToken, videoId) => {
+    const latestVideoId = useVideoStore.getState().currentVideo?.id ?? activeVideoIdRef.current ?? 0;
+    const shotRuntimeKey = getShotRuntimeKey(segmentId, shotId);
+
+    return (
+      !mountedRef.current ||
+      Number(latestVideoId) !== Number(videoId ?? 0) ||
+      shotGenerationPollingTokenRef.current.get(shotRuntimeKey) !== requestToken
+    );
+  };
+
   const beginMergePolling = () => {
     const nextToken = mergePollingTokenRef.current + 1;
     mergePollingTokenRef.current = nextToken;
     return nextToken;
+  };
+
+  const getCurrentSegmentById = (segmentId) => {
+    return useGenerationStore.getState().segments.find((item) => item.id === segmentId) ?? null;
   };
 
   const markSegmentGenerating = (segmentId, isGenerating) => {
@@ -151,6 +285,50 @@ const useGeneration = () => {
 
     setGeneratingSegmentIds((state) =>
       isGenerating ? [...new Set([...state, segmentId])] : state.filter((item) => item !== segmentId)
+    );
+  };
+
+  const markShotGenerating = (segmentId, shotId, isGenerating) => {
+    if (!mountedRef.current) {
+      return;
+    }
+
+    const shotRuntimeKey = getShotRuntimeKey(segmentId, shotId);
+
+    setGeneratingShotKeys((state) =>
+      isGenerating ? [...new Set([...state, shotRuntimeKey])] : state.filter((item) => item !== shotRuntimeKey)
+    );
+  };
+
+  const markShotBatchGenerating = (segmentId, isGenerating) => {
+    if (!mountedRef.current) {
+      return;
+    }
+
+    setBatchGeneratingSegmentIds((state) =>
+      isGenerating ? [...new Set([...state, segmentId])] : state.filter((item) => item !== segmentId)
+    );
+  };
+
+  const markShotOptimizing = (segmentId, shotId, isOptimizing) => {
+    if (!mountedRef.current) {
+      return;
+    }
+
+    const shotRuntimeKey = getShotRuntimeKey(segmentId, shotId);
+
+    setOptimizingShotKeys((state) =>
+      isOptimizing ? [...new Set([...state, shotRuntimeKey])] : state.filter((item) => item !== shotRuntimeKey)
+    );
+  };
+
+  const markShotDefinitionsSaving = (segmentId, isSaving) => {
+    if (!mountedRef.current) {
+      return;
+    }
+
+    setSavingShotSegmentIds((state) =>
+      isSaving ? [...new Set([...state, segmentId])] : state.filter((item) => item !== segmentId)
     );
   };
 
@@ -170,6 +348,7 @@ const useGeneration = () => {
       optimizedPrompt: currentSegment.latestGenerationTask?.optimizedPrompt ?? '',
       result_url: currentSegment.latestGenerationTask?.result_url ?? '',
       error_message: message,
+      source: currentSegment.latestGenerationTask?.source ?? '',
       created_at: currentSegment.latestGenerationTask?.created_at,
       updated_at: new Date().toISOString()
     };
@@ -186,6 +365,195 @@ const useGeneration = () => {
         segment_id: segmentId
       });
     }
+  };
+
+  const updateSegmentShot = (segmentId, shotId, partialShot) => {
+    const currentSegment = useGenerationStore.getState().segments.find((segment) => segment.id === segmentId);
+
+    if (!currentSegment) {
+      return;
+    }
+
+    updateSegment(segmentId, {
+      shots: (currentSegment.shots ?? []).map((shot) =>
+        shot.id === shotId
+          ? {
+              ...shot,
+              ...partialShot
+            }
+          : shot
+      )
+    });
+  };
+
+  const hydrateSegmentFromApiPayload = (segmentId, segmentPayload) => {
+    const currentSegment = useGenerationStore.getState().segments.find((segment) => segment.id === segmentId);
+
+    if (!currentSegment || !segmentPayload) {
+      return null;
+    }
+
+    const normalizedShots = Array.isArray(segmentPayload.analysis?.shots)
+      ? segmentPayload.analysis.shots.map((shot, shotIndex) => ({
+          id: shot.id ?? `shot_${shotIndex + 1}`,
+          shotIndex: Number(shot.shotIndex ?? shot.shot_index ?? shotIndex) || shotIndex,
+          startTime:
+            Number.isFinite(Number(shot.startTime ?? shot.start_time)) && Number(shot.startTime ?? shot.start_time) >= 0
+              ? Number(Number(shot.startTime ?? shot.start_time).toFixed(2))
+              : null,
+          endTime:
+            Number.isFinite(Number(shot.endTime ?? shot.end_time)) && Number(shot.endTime ?? shot.end_time) >= 0
+              ? Number(Number(shot.endTime ?? shot.end_time).toFixed(2))
+              : null,
+          localStartTime:
+            Number.isFinite(Number(shot.localStartTime ?? shot.local_start_time)) &&
+            Number(shot.localStartTime ?? shot.local_start_time) >= 0
+              ? Number(Number(shot.localStartTime ?? shot.local_start_time).toFixed(2))
+              : null,
+          localEndTime:
+            Number.isFinite(Number(shot.localEndTime ?? shot.local_end_time)) &&
+            Number(shot.localEndTime ?? shot.local_end_time) >= 0
+              ? Number(Number(shot.localEndTime ?? shot.local_end_time).toFixed(2))
+              : null,
+          durationSeconds:
+            Number.isFinite(Number(shot.durationSeconds ?? shot.duration_seconds)) &&
+            Number(shot.durationSeconds ?? shot.duration_seconds) >= 0
+              ? Number(Number(shot.durationSeconds ?? shot.duration_seconds).toFixed(2))
+              : null,
+          summary: shot.summary ?? '',
+          prompt: shot.prompt ?? '',
+          sceneNames: shot.sceneNames ?? shot.scene_names ?? [],
+          characterNames: shot.characterNames ?? shot.character_names ?? [],
+          representativeFrameTime:
+            Number.isFinite(Number(shot.representativeFrameTime ?? shot.representative_frame_time)) &&
+            Number(shot.representativeFrameTime ?? shot.representative_frame_time) >= 0
+              ? Number(Number(shot.representativeFrameTime ?? shot.representative_frame_time).toFixed(2))
+              : null,
+          representativeFrameNote: shot.representativeFrameNote ?? shot.representative_frame_note ?? '',
+          sourceFilePath: shot.sourceFilePath ?? shot.source_file_path ?? '',
+          sourceFileUrl: toAbsoluteAssetUrl(shot.sourceFileUrl ?? shot.source_file_url),
+          sourceLocalStartTime:
+            Number.isFinite(Number(shot.sourceLocalStartTime ?? shot.source_local_start_time)) &&
+            Number(shot.sourceLocalStartTime ?? shot.source_local_start_time) >= 0
+              ? Number(Number(shot.sourceLocalStartTime ?? shot.source_local_start_time).toFixed(2))
+              : null,
+          sourceLocalEndTime:
+            Number.isFinite(Number(shot.sourceLocalEndTime ?? shot.source_local_end_time)) &&
+            Number(shot.sourceLocalEndTime ?? shot.source_local_end_time) >= 0
+              ? Number(Number(shot.sourceLocalEndTime ?? shot.source_local_end_time).toFixed(2))
+              : null,
+          representativeFrameImagePath:
+            shot.representativeFrameImagePath ?? shot.representative_frame_image_path ?? '',
+          representativeFrameImageUrl: toAbsoluteAssetUrl(
+            shot.representativeFrameImageUrl ?? shot.representative_frame_image_url
+          ),
+          representativeFrameActualTime:
+            Number.isFinite(Number(shot.representativeFrameActualTime ?? shot.representative_frame_actual_time)) &&
+            Number(shot.representativeFrameActualTime ?? shot.representative_frame_actual_time) >= 0
+              ? Number(Number(shot.representativeFrameActualTime ?? shot.representative_frame_actual_time).toFixed(2))
+              : null,
+          latestGenerationTask: normalizeShotTask(shot.latestGenerationTask ?? shot.latest_generation_task),
+          latestCompletedGenerationTask: normalizeShotTask(
+            shot.latestCompletedGenerationTask ?? shot.latest_completed_generation_task
+          ),
+          generatedUrl: toAbsoluteAssetUrl(shot.generatedUrl ?? shot.generated_url)
+        }))
+      : currentSegment.shots ?? [];
+
+    updateSegment(segmentId, {
+      scene: segmentPayload.analysis?.scene ?? currentSegment.scene,
+      scenes: segmentPayload.analysis?.scenes ?? currentSegment.scenes ?? [],
+      action: segmentPayload.analysis?.action ?? currentSegment.action,
+      prompt: segmentPayload.analysis?.prompt ?? currentSegment.prompt,
+      shots: normalizedShots,
+      characters: segmentPayload.analysis?.characters ?? currentSegment.characters,
+      sceneSummary: segmentPayload.analysis?.sceneSummary ?? currentSegment.sceneSummary,
+      scenePrompt: segmentPayload.analysis?.scenePrompt ?? currentSegment.scenePrompt,
+      backgroundId: segmentPayload.analysis?.backgroundId ?? currentSegment.backgroundId,
+      backgroundAction: segmentPayload.analysis?.backgroundAction ?? currentSegment.backgroundAction,
+      backgroundName: segmentPayload.analysis?.backgroundName ?? currentSegment.backgroundName,
+      backgroundPrompt: segmentPayload.analysis?.backgroundPrompt ?? currentSegment.backgroundPrompt,
+      shotGenerationSummary:
+        normalizeShotAssemblyPayload(segmentPayload.shot_generation_summary) ?? currentSegment.shotGenerationSummary,
+      latestShotAssemblyTask:
+        normalizeShotAssemblyPayload(segmentPayload.latest_shot_assembly_task) ?? currentSegment.latestShotAssemblyTask,
+      representativeFrameTime:
+        segmentPayload.analysis?.representativeFrameTime ?? currentSegment.representativeFrameTime,
+      representativeFrameNote:
+        segmentPayload.analysis?.representativeFrameNote ?? currentSegment.representativeFrameNote,
+      highlightedPrompt: '',
+      latestCompletedGenerationTask: segmentPayload.latest_generation_task
+        ? {
+            task_id: segmentPayload.latest_generation_task.id,
+            status: segmentPayload.latest_generation_task.status,
+            progress: segmentPayload.latest_generation_task.progress,
+            prompt: segmentPayload.latest_generation_task.prompt ?? '',
+            optimizedPrompt: segmentPayload.latest_generation_task.optimized_prompt ?? '',
+            result_url: toAbsoluteAssetUrl(segmentPayload.latest_generation_task.result_url),
+            error_message: segmentPayload.latest_generation_task.error_message ?? '',
+            engine: segmentPayload.latest_generation_task.engine ?? '',
+            is_mock: Boolean(segmentPayload.latest_generation_task.is_mock),
+            remote_task_id: segmentPayload.latest_generation_task.remote_task_id ?? '',
+            fallback_reason: segmentPayload.latest_generation_task.fallback_reason ?? '',
+            provider_error: segmentPayload.latest_generation_task.provider_error ?? '',
+            source: segmentPayload.latest_generation_task.source ?? '',
+            created_at: segmentPayload.latest_generation_task.created_at,
+            updated_at: segmentPayload.latest_generation_task.updated_at
+          }
+        : null,
+      latestGenerationTask: segmentPayload.latest_attempt_task
+        ? {
+            task_id: segmentPayload.latest_attempt_task.id,
+            status: segmentPayload.latest_attempt_task.status,
+            progress: segmentPayload.latest_attempt_task.progress,
+            prompt: segmentPayload.latest_attempt_task.prompt ?? '',
+            optimizedPrompt: segmentPayload.latest_attempt_task.optimized_prompt ?? '',
+            result_url: toAbsoluteAssetUrl(segmentPayload.latest_attempt_task.result_url),
+            error_message: segmentPayload.latest_attempt_task.error_message ?? '',
+            engine: segmentPayload.latest_attempt_task.engine ?? '',
+            is_mock: Boolean(segmentPayload.latest_attempt_task.is_mock),
+            remote_task_id: segmentPayload.latest_attempt_task.remote_task_id ?? '',
+            fallback_reason: segmentPayload.latest_attempt_task.fallback_reason ?? '',
+            provider_error: segmentPayload.latest_attempt_task.provider_error ?? '',
+            source: segmentPayload.latest_attempt_task.source ?? '',
+            created_at: segmentPayload.latest_attempt_task.created_at,
+            updated_at: segmentPayload.latest_attempt_task.updated_at
+          }
+        : null,
+      generatedUrl:
+        toAbsoluteAssetUrl(segmentPayload.latest_shot_assembly_task?.result_url) ||
+        toAbsoluteAssetUrl(segmentPayload.shot_generation_summary?.result_url) ||
+        toAbsoluteAssetUrl(segmentPayload.latest_generation_task?.result_url) ||
+        ''
+    });
+
+    return segmentPayload;
+  };
+
+  const markShotGenerationFailure = (segmentId, shotId, message, taskId = '') => {
+    const currentSegment = useGenerationStore.getState().segments.find((segment) => segment.id === segmentId);
+    const currentShot = currentSegment?.shots?.find((shot) => shot.id === shotId);
+
+    if (!currentShot) {
+      return;
+    }
+
+    updateSegmentShot(segmentId, shotId, {
+      latestGenerationTask: {
+        task_id: taskId || currentShot.latestGenerationTask?.task_id || '',
+        segment_id: segmentId,
+        shot_id: shotId,
+        shot_index: currentShot.shotIndex ?? 0,
+        status: 'failed',
+        progress: currentShot.latestGenerationTask?.progress ?? 0,
+        prompt: currentShot.latestGenerationTask?.prompt ?? currentShot.prompt ?? '',
+        optimizedPrompt: currentShot.latestGenerationTask?.optimizedPrompt ?? '',
+        result_url: currentShot.latestGenerationTask?.result_url ?? '',
+        error_message: message,
+        created_at: currentShot.latestGenerationTask?.created_at,
+        updated_at: new Date().toISOString()
+      }
+    });
   };
 
   const markMergeFailure = ({ taskId = '', progress = 0, message, title }) => {
@@ -218,6 +586,7 @@ const useGeneration = () => {
       segmentAnalysisRequestTokenRef.current += 1;
       optimizeRequestTokenRef.current += 1;
       generationPollingTokenRef.current = new Map();
+      shotGenerationPollingTokenRef.current = new Map();
       mergePollingTokenRef.current += 1;
     };
   }, []);
@@ -228,6 +597,7 @@ const useGeneration = () => {
     segmentAnalysisRequestTokenRef.current += 1;
     optimizeRequestTokenRef.current += 1;
     generationPollingTokenRef.current = new Map();
+    shotGenerationPollingTokenRef.current = new Map();
     mergePollingTokenRef.current += 1;
 
     if (
@@ -245,6 +615,8 @@ const useGeneration = () => {
       setAnalyzingSegmentId(0);
       setOptimizingSegmentId(0);
       setGeneratingSegmentIds([]);
+      setGeneratingShotKeys([]);
+      setBatchGeneratingSegmentIds([]);
     }
 
     previousVideoIdRef.current = currentVideo?.id ?? null;
@@ -284,6 +656,7 @@ const useGeneration = () => {
         remote_task_id: payload.remote_task_id ?? currentSegment?.latestGenerationTask?.remote_task_id ?? '',
         fallback_reason: payload.fallback_reason ?? currentSegment?.latestGenerationTask?.fallback_reason ?? '',
         provider_error: payload.provider_error ?? currentSegment?.latestGenerationTask?.provider_error ?? '',
+        source: payload.source ?? currentSegment?.latestGenerationTask?.source ?? '',
         created_at: payload.created_at,
         updated_at: payload.updated_at
       };
@@ -301,6 +674,78 @@ const useGeneration = () => {
       });
     });
   }, [updateSegment, updateTask]);
+
+  useEffect(() => {
+    return websocketService.subscribe('shot:progress', (payload) => {
+      const payloadSegmentId = Number(payload.segment_id ?? 0);
+      const payloadShotId = String(payload.shot_id ?? '').trim();
+      const currentSegment = useGenerationStore.getState().segments.find((segment) => segment.id === payloadSegmentId);
+
+      if (!payloadSegmentId || !payloadShotId || !currentSegment) {
+        return;
+      }
+
+      const nextShotTask = normalizeShotTask(payload);
+      const nextShots = (currentSegment.shots ?? []).map((shot) =>
+        shot.id === payloadShotId
+          ? {
+              ...shot,
+              latestGenerationTask: nextShotTask,
+              latestCompletedGenerationTask:
+                nextShotTask?.status === 'completed'
+                  ? nextShotTask
+                  : shot.latestCompletedGenerationTask ?? null,
+              generatedUrl:
+                nextShotTask?.status === 'completed'
+                  ? nextShotTask.result_url
+                  : shot.generatedUrl ?? ''
+            }
+          : shot
+      );
+      const nextShotSummary = buildClientShotSummary(
+        currentSegment,
+        nextShots,
+        currentSegment.shotGenerationSummary ?? currentSegment.latestShotAssemblyTask ?? null
+      );
+
+      updateSegment(payloadSegmentId, {
+        shots: nextShots,
+        shotGenerationSummary: nextShotSummary,
+        latestShotAssemblyTask:
+          nextShotSummary.result_url || nextShotSummary.pending_assembly
+            ? currentSegment.latestShotAssemblyTask ?? nextShotSummary
+            : nextShotSummary
+      });
+
+      if (['completed', 'failed'].includes(nextShotTask?.status)) {
+        void refreshBackgroundAssets(Number(currentVideo?.id ?? 0), {
+          silent: true
+        });
+      }
+    });
+  }, [currentVideo?.id, updateSegment]);
+
+  useEffect(() => {
+    return websocketService.subscribe('shot-assembly:progress', (payload) => {
+      const payloadSegmentId = Number(payload.segment_id ?? 0);
+      const currentSegment = useGenerationStore.getState().segments.find((segment) => segment.id === payloadSegmentId);
+
+      if (!payloadSegmentId || !currentSegment) {
+        return;
+      }
+
+      const normalizedSummary = normalizeShotAssemblyPayload(payload);
+
+      updateSegment(payloadSegmentId, {
+        shotGenerationSummary: normalizedSummary,
+        latestShotAssemblyTask: normalizedSummary
+      });
+
+      if (['completed', 'failed'].includes(normalizedSummary?.status)) {
+        markShotBatchGenerating(payloadSegmentId, false);
+      }
+    });
+  }, [updateSegment]);
 
   useEffect(() => {
     return websocketService.subscribe('merge:progress', (payload) => {
@@ -424,6 +869,12 @@ const useGeneration = () => {
     });
   };
 
+  const setShotPrompt = (segmentId, shotId, prompt) => {
+    updateSegmentShot(segmentId, shotId, {
+      prompt
+    });
+  };
+
   const analyzeSegmentById = async (segmentId) => {
     const segment = segments.find((item) => item.id === segmentId);
 
@@ -444,62 +895,7 @@ const useGeneration = () => {
         return null;
       }
 
-      updateSegment(segmentId, {
-        scene: analyzedSegment.analysis?.scene ?? segment.scene,
-        scenes: analyzedSegment.analysis?.scenes ?? segment.scenes ?? [],
-        action: analyzedSegment.analysis?.action ?? segment.action,
-        prompt: analyzedSegment.analysis?.prompt ?? segment.prompt,
-        characters: analyzedSegment.analysis?.characters ?? segment.characters,
-        sceneSummary: analyzedSegment.analysis?.sceneSummary ?? segment.sceneSummary,
-        scenePrompt: analyzedSegment.analysis?.scenePrompt ?? segment.scenePrompt,
-        backgroundId: analyzedSegment.analysis?.backgroundId ?? segment.backgroundId,
-        backgroundAction: analyzedSegment.analysis?.backgroundAction ?? segment.backgroundAction,
-        backgroundName: analyzedSegment.analysis?.backgroundName ?? segment.backgroundName,
-        backgroundPrompt: analyzedSegment.analysis?.backgroundPrompt ?? segment.backgroundPrompt,
-        representativeFrameTime:
-          analyzedSegment.analysis?.representativeFrameTime ?? segment.representativeFrameTime,
-        representativeFrameNote:
-          analyzedSegment.analysis?.representativeFrameNote ?? segment.representativeFrameNote,
-        highlightedPrompt: '',
-        latestCompletedGenerationTask: analyzedSegment.latest_generation_task
-          ? {
-              task_id: analyzedSegment.latest_generation_task.id,
-              status: analyzedSegment.latest_generation_task.status,
-              progress: analyzedSegment.latest_generation_task.progress,
-              prompt: analyzedSegment.latest_generation_task.prompt ?? '',
-              optimizedPrompt: analyzedSegment.latest_generation_task.optimized_prompt ?? '',
-              result_url: toAbsoluteAssetUrl(analyzedSegment.latest_generation_task.result_url),
-              error_message: analyzedSegment.latest_generation_task.error_message ?? '',
-              engine: analyzedSegment.latest_generation_task.engine ?? '',
-              is_mock: Boolean(analyzedSegment.latest_generation_task.is_mock),
-              remote_task_id: analyzedSegment.latest_generation_task.remote_task_id ?? '',
-              fallback_reason: analyzedSegment.latest_generation_task.fallback_reason ?? '',
-              provider_error: analyzedSegment.latest_generation_task.provider_error ?? '',
-              created_at: analyzedSegment.latest_generation_task.created_at,
-              updated_at: analyzedSegment.latest_generation_task.updated_at
-            }
-          : segment.latestCompletedGenerationTask,
-        latestGenerationTask: analyzedSegment.latest_attempt_task
-          ? {
-              task_id: analyzedSegment.latest_attempt_task.id,
-              status: analyzedSegment.latest_attempt_task.status,
-              progress: analyzedSegment.latest_attempt_task.progress,
-              prompt: analyzedSegment.latest_attempt_task.prompt ?? '',
-              optimizedPrompt: analyzedSegment.latest_attempt_task.optimized_prompt ?? '',
-              result_url: toAbsoluteAssetUrl(analyzedSegment.latest_attempt_task.result_url),
-              error_message: analyzedSegment.latest_attempt_task.error_message ?? '',
-              engine: analyzedSegment.latest_attempt_task.engine ?? '',
-              is_mock: Boolean(analyzedSegment.latest_attempt_task.is_mock),
-              remote_task_id: analyzedSegment.latest_attempt_task.remote_task_id ?? '',
-              fallback_reason: analyzedSegment.latest_attempt_task.fallback_reason ?? '',
-              provider_error: analyzedSegment.latest_attempt_task.provider_error ?? '',
-              created_at: analyzedSegment.latest_attempt_task.created_at,
-              updated_at: analyzedSegment.latest_attempt_task.updated_at
-            }
-          : segment.latestGenerationTask,
-        generatedUrl:
-          toAbsoluteAssetUrl(analyzedSegment.latest_generation_task?.result_url) || segment.generatedUrl || ''
-      });
+      hydrateSegmentFromApiPayload(segmentId, analyzedSegment);
 
       return analyzedSegment;
     } catch (error) {
@@ -566,6 +962,90 @@ const useGeneration = () => {
       if (!isVideoScopedRequestCancelled(requestToken, requestVideoId, optimizeRequestTokenRef)) {
         setOptimizingSegmentId(0);
       }
+    }
+  };
+
+  const optimizeShotPrompt = async ({
+    segmentId,
+    shotId,
+    promptOverride = '',
+    segmentPromptOverride = '',
+    sceneNames = [],
+    characterNames = []
+  }) => {
+    const segment = segments.find((item) => item.id === segmentId);
+    const shot = segment?.shots?.find((item) => item.id === shotId);
+
+    if (!segment || !shot) {
+      return null;
+    }
+
+    const sourceShotPrompt = String(promptOverride ?? '').trim() || shot.prompt;
+    const sourceSegmentPrompt = String(segmentPromptOverride ?? '').trim() || segment.prompt || '';
+
+    if (!sourceShotPrompt?.trim()) {
+      setSegmentsError('请先输入镜头提示词，再执行优化。');
+      return null;
+    }
+
+    const requestVideoId = Number(currentVideo?.id ?? 0);
+    const requestToken = beginOptimizeRequest();
+
+    setSegmentsError('');
+    markShotOptimizing(segmentId, shotId, true);
+
+    try {
+      const optimizedPayload = await optimizePrompt(sourceShotPrompt, characters, backgrounds, {
+        mode: 'shot_generation',
+        segment_prompt: sourceSegmentPrompt,
+        shot_prompt: sourceShotPrompt,
+        scene_names: sceneNames,
+        character_names: characterNames
+      });
+
+      if (isVideoScopedRequestCancelled(requestToken, requestVideoId, optimizeRequestTokenRef)) {
+        return null;
+      }
+
+      return optimizedPayload;
+    } catch (error) {
+      if (isVideoScopedRequestCancelled(requestToken, requestVideoId, optimizeRequestTokenRef)) {
+        return null;
+      }
+
+      setSegmentsError(getGenerationErrorMessage(error, '镜头提示词优化'));
+      return null;
+    } finally {
+      if (!isVideoScopedRequestCancelled(requestToken, requestVideoId, optimizeRequestTokenRef)) {
+        markShotOptimizing(segmentId, shotId, false);
+      }
+    }
+  };
+
+  const saveSegmentShotDefinitions = async (segmentId, shots) => {
+    const segment = getCurrentSegmentById(segmentId);
+
+    if (!segment) {
+      return null;
+    }
+
+    if (!Array.isArray(shots) || !shots.length) {
+      setSegmentsError('请至少保留一个小镜头后再保存。');
+      return null;
+    }
+
+    setSegmentsError('');
+    markShotDefinitionsSaving(segmentId, true);
+
+    try {
+      const savedSegmentPayload = await updateSegmentShots(segmentId, shots);
+      hydrateSegmentFromApiPayload(segmentId, savedSegmentPayload);
+      return savedSegmentPayload;
+    } catch (error) {
+      setSegmentsError(getGenerationErrorMessage(error, '镜头保存'));
+      return null;
+    } finally {
+      markShotDefinitionsSaving(segmentId, false);
     }
   };
 
@@ -671,6 +1151,188 @@ const useGeneration = () => {
       if (!isGenerationPollingCancelled(segmentId, requestToken, requestVideoId)) {
         markSegmentGenerating(segmentId, false);
       }
+    }
+  };
+
+  const generateShotVideo = async (segmentId, shotId, promptOverride = '') => {
+    const segment = getCurrentSegmentById(segmentId);
+    const shot = segment?.shots?.find((item) => item.id === shotId);
+
+    if (!segment || !shot) {
+      return null;
+    }
+
+    if (!currentVideo?.id) {
+      setSegmentsError('请先上传并选择视频，再生成小镜头。');
+      return null;
+    }
+
+    const sourcePrompt = String(promptOverride ?? '').trim() || shot.prompt;
+
+    if (!sourcePrompt?.trim()) {
+      setSegmentsError('请先输入镜头提示词，再生成小镜头。');
+      return null;
+    }
+
+    const requestVideoId = Number(currentVideo.id);
+    const requestToken = beginShotGenerationPolling(segmentId, shotId);
+    let activeTaskId = '';
+
+    setSegmentsError('');
+    markShotGenerating(segmentId, shotId, true);
+
+    if (sourcePrompt !== shot.prompt) {
+      updateSegmentShot(segmentId, shotId, {
+        prompt: sourcePrompt
+      });
+    }
+
+    try {
+      const startPayload = await generateShot(segmentId, shotId, sourcePrompt);
+      activeTaskId = startPayload.task_id ?? '';
+
+      if (isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
+        return null;
+      }
+
+      websocketService.emitLocal('shot:progress', startPayload);
+      window.setTimeout(() => {
+        void refreshBackgroundAssets(requestVideoId, {
+          silent: true
+        });
+      }, 500);
+
+      while (!isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
+        let taskPayload;
+
+        try {
+          taskPayload = await getShotGenerationTask(startPayload.task_id);
+        } catch (error) {
+          if (isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
+            return null;
+          }
+
+          const errorMessage = getGenerationErrorMessage(error, '小镜头生成轮询');
+          setSegmentsError(errorMessage);
+          markShotGenerationFailure(segmentId, shotId, errorMessage, startPayload.task_id);
+          return null;
+        }
+
+        if (isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
+          return null;
+        }
+
+        websocketService.emitLocal('shot:progress', taskPayload);
+
+        if (taskPayload.status === 'completed' || taskPayload.status === 'failed') {
+          void refreshBackgroundAssets(requestVideoId, {
+            silent: true
+          });
+          return taskPayload;
+        }
+
+        await sleep(1200);
+      }
+
+      return null;
+    } catch (error) {
+      if (isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
+        return null;
+      }
+
+      const errorMessage = getGenerationErrorMessage(error, activeTaskId ? '小镜头生成' : '小镜头生成启动');
+      setSegmentsError(errorMessage);
+      markShotGenerationFailure(segmentId, shotId, errorMessage, activeTaskId);
+      return null;
+    } finally {
+      if (!isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
+        markShotGenerating(segmentId, shotId, false);
+      }
+    }
+  };
+
+  const generateAllShotsForSegment = async (segmentId, shotsOverride = null) => {
+    const segment = getCurrentSegmentById(segmentId);
+
+    if (!segment) {
+      return null;
+    }
+
+    if (!currentVideo?.id) {
+      setSegmentsError('请先上传并选择视频，再生成小镜头。');
+      return null;
+    }
+
+    const shotsForGeneration =
+      Array.isArray(shotsOverride) && shotsOverride.length ? shotsOverride : segment.shots ?? [];
+
+    if (!shotsForGeneration.length) {
+      setSegmentsError('当前片段还没有小镜头可生成。');
+      return null;
+    }
+
+    setSegmentsError('');
+    markShotBatchGenerating(segmentId, true);
+
+    try {
+      const batchPayload = await generateShotBatch(
+        segmentId,
+        shotsForGeneration.map((shot) => ({
+          shot_id: shot.id,
+          prompt: String(shot.prompt ?? '').trim() || String(shot.summary ?? '').trim()
+        }))
+      );
+      const nextSummary = {
+        segment_id: segmentId,
+        status: batchPayload.status ?? 'processing',
+        progress: 0,
+        total_shot_count: Number(batchPayload.shot_count ?? shotsForGeneration.length) || shotsForGeneration.length,
+        completed_shot_count: 0,
+        failed_shot_count: 0,
+        processing_shot_count:
+          Number(batchPayload.shot_count ?? shotsForGeneration.length) || shotsForGeneration.length,
+        pending_assembly: true,
+        result_url: '',
+        error_message: '',
+        assembly_generation_task_id: null,
+        source: 'shot_assembly',
+        started_at: batchPayload.started_at ?? '',
+        updated_at: new Date().toISOString()
+      };
+
+      updateSegment(segmentId, {
+        shotGenerationSummary: nextSummary,
+        latestShotAssemblyTask: nextSummary
+      });
+
+      return batchPayload;
+    } catch (error) {
+      markShotBatchGenerating(segmentId, false);
+      const errorMessage = getGenerationErrorMessage(error, '小镜头批量生成');
+      setSegmentsError(errorMessage);
+      const currentSegment = getCurrentSegmentById(segmentId);
+
+      updateSegment(segmentId, {
+        shotGenerationSummary: {
+          ...(currentSegment?.shotGenerationSummary ?? segment.shotGenerationSummary ?? {}),
+          segment_id: segmentId,
+          status: 'failed',
+          progress: currentSegment?.shotGenerationSummary?.progress ?? segment.shotGenerationSummary?.progress ?? 0,
+          error_message: errorMessage,
+          updated_at: new Date().toISOString()
+        },
+        latestShotAssemblyTask: {
+          ...(currentSegment?.latestShotAssemblyTask ?? segment.latestShotAssemblyTask ?? {}),
+          segment_id: segmentId,
+          status: 'failed',
+          progress:
+            currentSegment?.latestShotAssemblyTask?.progress ?? segment.latestShotAssemblyTask?.progress ?? 0,
+          error_message: errorMessage,
+          updated_at: new Date().toISOString()
+        }
+      });
+
+      return null;
     }
   };
 
@@ -796,10 +1458,19 @@ const useGeneration = () => {
     analyzingSegmentId,
     optimizingSegmentId,
     generatingSegmentIds,
+    generatingShotKeys,
+    batchGeneratingSegmentIds,
+    optimizingShotKeys,
+    savingShotSegmentIds,
     setSegmentPrompt,
+    setShotPrompt,
     analyzeSegmentById,
     optimizeSegmentPrompt,
+    optimizeShotPrompt,
+    saveSegmentShotDefinitions,
     generateSegmentVideo,
+    generateShotVideo,
+    generateAllShotsForSegment,
     refreshBackgroundAssets,
     startMerge,
     downloadMergedVideo

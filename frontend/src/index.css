@@ -621,7 +621,7 @@
   }
 
   .resource-matrix-header {
-    @apply mb-3 hidden gap-3 rounded-[16px] border border-white/10 bg-white/[0.035] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/40 xl:grid xl:grid-cols-3;
+    @apply mb-3 hidden gap-3 rounded-[16px] border border-white/10 bg-white/[0.035] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/40 xl:grid xl:grid-cols-[minmax(0,1fr)_320px];
   }
 
   .resource-matrix-header-cell {
@@ -649,17 +649,22 @@
   }
 
   .resource-row-body {
-    @apply mt-3 grid gap-3 xl:grid-cols-[230px_180px_minmax(0,1fr)];
+    @apply mt-3 grid gap-3 xl:grid-cols-[minmax(0,1fr)_320px];
   }
 
   .resource-row-body-character {
-    @apply xl:grid-cols-[220px_minmax(0,1fr)_250px];
+    @apply xl:grid-cols-[minmax(0,1fr)_320px];
   }
 
   .resource-row-generated,
+  .resource-row-primary,
   .resource-row-frame,
   .resource-row-prompt {
     @apply min-w-0;
+  }
+
+  .resource-row-primary {
+    @apply space-y-3;
   }
 
   .resource-inline-meta {

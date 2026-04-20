@@ -83,15 +83,23 @@ describe('AnalysisDisplay', () => {
     expect(screen.getAllByText('Gemini真实结果').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: '角色' }));
-    expect(screen.getAllByText('主角').length).toBeGreaterThan(0);
+    const characterCard = screen.getAllByText('主角')[0].closest('article');
+    expect(characterCard).not.toBeNull();
+    expect(screen.queryByText('性格气质')).not.toBeInTheDocument();
+    expect(within(characterCard).getByText(/外表描述：黑色短发，穿米色风衣，镜头感强/)).toBeInTheDocument();
+    fireEvent.click(within(characterCard).getByRole('button', { name: '编辑详情' }));
     expect(screen.getByText('性格气质')).toBeInTheDocument();
     expect(screen.getByText('冷静克制，观察力强，行动果断')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '关闭弹窗' }));
 
     fireEvent.click(screen.getByRole('button', { name: '场景' }));
-    expect(screen.getByText('暖黄色灯光的咖啡馆内部，木质桌椅与玻璃窗。')).toBeInTheDocument();
+    const sceneCard = screen.getAllByText('咖啡馆内景')[0].closest('article');
+    expect(sceneCard).not.toBeNull();
     expect(
-      screen.getByText('电影感咖啡馆内景，暖黄钨丝灯，木质桌椅，玻璃窗反光，景深柔和。')
+      within(sceneCard).getByText('电影感咖啡馆内景，暖黄钨丝灯，木质桌椅，玻璃窗反光，景深柔和。')
     ).toBeInTheDocument();
+    fireEvent.click(within(sceneCard).getByRole('button', { name: '编辑详情' }));
+    expect(screen.getByText('暖黄色灯光的咖啡馆内部，木质桌椅与玻璃窗。')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '片段分解' }));
     expect(screen.getByText('主角走入咖啡馆')).toBeInTheDocument();

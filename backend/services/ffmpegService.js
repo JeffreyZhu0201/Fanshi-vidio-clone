@@ -139,6 +139,69 @@ const splitVideo = async (absoluteSourcePath, timeAnchors, { basename = 'segment
   return segments;
 };
 
+const sliceVideoClip = async (
+  absoluteSourcePath,
+  startTimeSeconds,
+  endTimeSeconds,
+  { basename = 'shot', directory = 'shots' } = {}
+) => {
+  const ffmpegAvailable = await isBinaryAvailable('ffmpeg');
+  const extension = path.extname(absoluteSourcePath) || '.mp4';
+  const relativePath = createOutputRelativePath(directory, basename, extension);
+  const absoluteTargetPath = resolveUploadPath(relativePath);
+  await ensureParentDirectory(absoluteTargetPath);
+
+  const safeStartTime = Math.max(0, Number(startTimeSeconds) || 0);
+  const safeEndTime = Math.max(safeStartTime + 0.1, Number(endTimeSeconds) || safeStartTime + 0.1);
+  const duration = Number((safeEndTime - safeStartTime).toFixed(3));
+  let engine = 'mock-copy';
+
+  if (ffmpegAvailable) {
+    try {
+      await execFileAsync('ffmpeg', [
+        '-y',
+        '-i',
+        absoluteSourcePath,
+        '-ss',
+        String(Number(safeStartTime.toFixed(3))),
+        '-t',
+        String(duration),
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-pix_fmt',
+        'yuv420p',
+        '-c:a',
+        'aac',
+        '-movflags',
+        '+faststart',
+        absoluteTargetPath
+      ]);
+      engine = 'ffmpeg-slice';
+    } catch (error) {
+      logger.warn('FFmpeg clip slicing failed, falling back to file copy for development flow.', {
+        message: error.message,
+        absoluteSourcePath,
+        startTimeSeconds: safeStartTime,
+        endTimeSeconds: safeEndTime
+      });
+      await duplicateToUploadPath(absoluteSourcePath, relativePath);
+    }
+  } else {
+    await duplicateToUploadPath(absoluteSourcePath, relativePath);
+  }
+
+  return {
+    startTime: safeStartTime,
+    endTime: safeEndTime,
+    duration,
+    filePath: relativePath,
+    fileUrl: toPublicUploadUrl(relativePath),
+    engine
+  };
+};
+
 const extractVideoFrame = async (
   absoluteSourcePath,
   timeSeconds,
@@ -253,4 +316,4 @@ const mergeVideos = async (absoluteInputPaths, { basename = 'merged-video', onPr
   };
 };
 
-export { getVideoMetadata, splitVideo, mergeVideos, extractVideoFrame };
+export { getVideoMetadata, splitVideo, sliceVideoClip, mergeVideos, extractVideoFrame };
