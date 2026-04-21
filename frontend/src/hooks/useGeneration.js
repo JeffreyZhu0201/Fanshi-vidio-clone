@@ -102,6 +102,50 @@ const normalizeShotTask = (taskPayload) => {
     engine: taskPayload.engine ?? '',
     is_mock: Boolean(taskPayload.is_mock),
     remote_task_id: taskPayload.remote_task_id ?? '',
+    remote_status: taskPayload.remote_status ?? '',
+    remote_status_label: taskPayload.remote_status_label ?? '',
+    remote_created_at:
+      Number.isFinite(Number(taskPayload.remote_created_at)) && Number(taskPayload.remote_created_at) > 0
+        ? Number(taskPayload.remote_created_at)
+        : null,
+    remote_updated_at:
+      Number.isFinite(Number(taskPayload.remote_updated_at)) && Number(taskPayload.remote_updated_at) > 0
+        ? Number(taskPayload.remote_updated_at)
+        : null,
+    fallback_reason: taskPayload.fallback_reason ?? '',
+    provider_error: taskPayload.provider_error ?? '',
+    source: taskPayload.source ?? '',
+    created_at: taskPayload.created_at,
+    updated_at: taskPayload.updated_at
+  };
+};
+
+const normalizeGenerationTask = (taskPayload) => {
+  if (!taskPayload) {
+    return null;
+  }
+
+  return {
+    task_id: taskPayload.task_id ?? taskPayload.id,
+    status: taskPayload.status ?? 'pending',
+    progress: Number(taskPayload.progress ?? 0) || 0,
+    prompt: taskPayload.prompt ?? '',
+    optimizedPrompt: taskPayload.optimized_prompt ?? '',
+    result_url: toAbsoluteAssetUrl(taskPayload.result_url),
+    error_message: taskPayload.error_message ?? '',
+    engine: taskPayload.engine ?? '',
+    is_mock: Boolean(taskPayload.is_mock),
+    remote_task_id: taskPayload.remote_task_id ?? '',
+    remote_status: taskPayload.remote_status ?? '',
+    remote_status_label: taskPayload.remote_status_label ?? '',
+    remote_created_at:
+      Number.isFinite(Number(taskPayload.remote_created_at)) && Number(taskPayload.remote_created_at) > 0
+        ? Number(taskPayload.remote_created_at)
+        : null,
+    remote_updated_at:
+      Number.isFinite(Number(taskPayload.remote_updated_at)) && Number(taskPayload.remote_updated_at) > 0
+        ? Number(taskPayload.remote_updated_at)
+        : null,
     fallback_reason: taskPayload.fallback_reason ?? '',
     provider_error: taskPayload.provider_error ?? '',
     source: taskPayload.source ?? '',
@@ -350,18 +394,19 @@ const useGeneration = () => {
       return;
     }
 
-    const failedTask = {
+    const failedTask = normalizeGenerationTask({
+      ...currentSegment.latestGenerationTask,
       task_id: taskId || currentSegment.latestGenerationTask?.task_id || '',
       status: 'failed',
       progress: currentSegment.latestGenerationTask?.progress ?? 0,
       prompt: currentSegment.latestGenerationTask?.prompt ?? currentSegment.prompt ?? '',
-      optimizedPrompt: currentSegment.latestGenerationTask?.optimizedPrompt ?? '',
+      optimized_prompt: currentSegment.latestGenerationTask?.optimizedPrompt ?? '',
       result_url: currentSegment.latestGenerationTask?.result_url ?? '',
       error_message: message,
       source: currentSegment.latestGenerationTask?.source ?? '',
       created_at: currentSegment.latestGenerationTask?.created_at,
       updated_at: new Date().toISOString()
-    };
+    });
 
     updateSegment(segmentId, {
       latestGenerationTask: failedTask,
@@ -492,44 +537,8 @@ const useGeneration = () => {
       representativeFrameNote:
         segmentPayload.analysis?.representativeFrameNote ?? currentSegment.representativeFrameNote,
       highlightedPrompt: '',
-      latestCompletedGenerationTask: segmentPayload.latest_generation_task
-        ? {
-            task_id: segmentPayload.latest_generation_task.id,
-            status: segmentPayload.latest_generation_task.status,
-            progress: segmentPayload.latest_generation_task.progress,
-            prompt: segmentPayload.latest_generation_task.prompt ?? '',
-            optimizedPrompt: segmentPayload.latest_generation_task.optimized_prompt ?? '',
-            result_url: toAbsoluteAssetUrl(segmentPayload.latest_generation_task.result_url),
-            error_message: segmentPayload.latest_generation_task.error_message ?? '',
-            engine: segmentPayload.latest_generation_task.engine ?? '',
-            is_mock: Boolean(segmentPayload.latest_generation_task.is_mock),
-            remote_task_id: segmentPayload.latest_generation_task.remote_task_id ?? '',
-            fallback_reason: segmentPayload.latest_generation_task.fallback_reason ?? '',
-            provider_error: segmentPayload.latest_generation_task.provider_error ?? '',
-            source: segmentPayload.latest_generation_task.source ?? '',
-            created_at: segmentPayload.latest_generation_task.created_at,
-            updated_at: segmentPayload.latest_generation_task.updated_at
-          }
-        : null,
-      latestGenerationTask: segmentPayload.latest_attempt_task
-        ? {
-            task_id: segmentPayload.latest_attempt_task.id,
-            status: segmentPayload.latest_attempt_task.status,
-            progress: segmentPayload.latest_attempt_task.progress,
-            prompt: segmentPayload.latest_attempt_task.prompt ?? '',
-            optimizedPrompt: segmentPayload.latest_attempt_task.optimized_prompt ?? '',
-            result_url: toAbsoluteAssetUrl(segmentPayload.latest_attempt_task.result_url),
-            error_message: segmentPayload.latest_attempt_task.error_message ?? '',
-            engine: segmentPayload.latest_attempt_task.engine ?? '',
-            is_mock: Boolean(segmentPayload.latest_attempt_task.is_mock),
-            remote_task_id: segmentPayload.latest_attempt_task.remote_task_id ?? '',
-            fallback_reason: segmentPayload.latest_attempt_task.fallback_reason ?? '',
-            provider_error: segmentPayload.latest_attempt_task.provider_error ?? '',
-            source: segmentPayload.latest_attempt_task.source ?? '',
-            created_at: segmentPayload.latest_attempt_task.created_at,
-            updated_at: segmentPayload.latest_attempt_task.updated_at
-          }
-        : null,
+      latestCompletedGenerationTask: normalizeGenerationTask(segmentPayload.latest_generation_task),
+      latestGenerationTask: normalizeGenerationTask(segmentPayload.latest_attempt_task),
       generatedUrl:
         toAbsoluteAssetUrl(segmentPayload.latest_shot_assembly_task?.result_url) ||
         toAbsoluteAssetUrl(segmentPayload.shot_generation_summary?.result_url) ||
@@ -549,7 +558,8 @@ const useGeneration = () => {
     }
 
     updateSegmentShot(segmentId, shotId, {
-      latestGenerationTask: {
+      latestGenerationTask: normalizeShotTask({
+        ...currentShot.latestGenerationTask,
         task_id: taskId || currentShot.latestGenerationTask?.task_id || '',
         segment_id: segmentId,
         shot_id: shotId,
@@ -557,12 +567,12 @@ const useGeneration = () => {
         status: 'failed',
         progress: currentShot.latestGenerationTask?.progress ?? 0,
         prompt: currentShot.latestGenerationTask?.prompt ?? currentShot.prompt ?? '',
-        optimizedPrompt: currentShot.latestGenerationTask?.optimizedPrompt ?? '',
+        optimized_prompt: currentShot.latestGenerationTask?.optimizedPrompt ?? '',
         result_url: currentShot.latestGenerationTask?.result_url ?? '',
         error_message: message,
         created_at: currentShot.latestGenerationTask?.created_at,
         updated_at: new Date().toISOString()
-      }
+      })
     });
   };
 
@@ -652,24 +662,15 @@ const useGeneration = () => {
       });
 
       const currentSegment = state.segments.find((segment) => segment.id === resolvedSegmentId);
-      const nextGenerationTask = {
+      const nextGenerationTask = normalizeGenerationTask({
+        ...currentSegment?.latestGenerationTask,
+        ...payload,
         task_id: payloadTaskId,
-        status: payload.status,
-        progress: payload.progress,
         prompt: payload.prompt ?? currentSegment?.latestGenerationTask?.prompt ?? currentSegment?.prompt ?? '',
-        optimizedPrompt:
+        optimized_prompt:
           payload.optimized_prompt ?? currentSegment?.latestGenerationTask?.optimizedPrompt ?? '',
-        result_url: toAbsoluteAssetUrl(payload.result_url),
-        error_message: payload.error_message ?? payload.message ?? '',
-        engine: payload.engine ?? currentSegment?.latestGenerationTask?.engine ?? '',
-        is_mock: Boolean(payload.is_mock ?? currentSegment?.latestGenerationTask?.is_mock),
-        remote_task_id: payload.remote_task_id ?? currentSegment?.latestGenerationTask?.remote_task_id ?? '',
-        fallback_reason: payload.fallback_reason ?? currentSegment?.latestGenerationTask?.fallback_reason ?? '',
-        provider_error: payload.provider_error ?? currentSegment?.latestGenerationTask?.provider_error ?? '',
-        source: payload.source ?? currentSegment?.latestGenerationTask?.source ?? '',
-        created_at: payload.created_at,
-        updated_at: payload.updated_at
-      };
+        error_message: payload.error_message ?? payload.message ?? ''
+      });
 
       updateSegment(resolvedSegmentId, {
         latestGenerationTask: nextGenerationTask,

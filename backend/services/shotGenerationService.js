@@ -114,6 +114,10 @@ const serializeShotGenerationMeta = (task) => {
   return {
     engine: String(taskMeta.engine ?? '').trim(),
     ratio: String(taskMeta.ratio ?? '').trim(),
+    remote_status: String(taskMeta.remoteStatus ?? '').trim(),
+    remote_status_label: String(taskMeta.remoteStatusLabel ?? '').trim(),
+    remote_created_at: Number(taskMeta.remoteCreatedAt ?? 0) || null,
+    remote_updated_at: Number(taskMeta.remoteUpdatedAt ?? 0) || null,
     is_mock: Boolean(taskMeta.isMock),
     remote_task_id: String(taskMeta.remoteTaskId ?? '').trim(),
     fallback_reason: String(taskMeta.fallbackReason ?? '').trim(),
@@ -149,6 +153,49 @@ const serializeShotGenerationTask = (task) => {
 
 const broadcastShotGenerationTaskUpdate = (task) => {
   broadcastRealtimeEvent(SHOT_TASK_EVENT, serializeShotGenerationTask(task));
+};
+
+const applySeedDanceShotTaskProgress = async (task, progressPayload = {}) => {
+  if (!task) {
+    return;
+  }
+
+  const taskMeta = task.meta ?? {};
+  const nextProgress = Math.max(
+    Number(task.progress ?? 0) || 0,
+    Math.min(99, Math.max(0, Number(progressPayload.progress ?? 0) || 0))
+  );
+  const nextMeta = {
+    ...taskMeta,
+    remoteTaskId: String(progressPayload.taskId ?? taskMeta.remoteTaskId ?? '').trim(),
+    remoteStatus: String(progressPayload.status ?? taskMeta.remoteStatus ?? '').trim(),
+    remoteStatusLabel: String(progressPayload.statusLabel ?? taskMeta.remoteStatusLabel ?? '').trim(),
+    remoteCreatedAt:
+      Number.isFinite(Number(progressPayload.createdAt)) && Number(progressPayload.createdAt) > 0
+        ? Number(progressPayload.createdAt)
+        : taskMeta.remoteCreatedAt ?? null,
+    remoteUpdatedAt:
+      Number.isFinite(Number(progressPayload.updatedAt)) && Number(progressPayload.updatedAt) > 0
+        ? Number(progressPayload.updatedAt)
+        : taskMeta.remoteUpdatedAt ?? null
+  };
+
+  if (
+    nextProgress === Number(task.progress ?? 0) &&
+    nextMeta.remoteTaskId === String(taskMeta.remoteTaskId ?? '').trim() &&
+    nextMeta.remoteStatus === String(taskMeta.remoteStatus ?? '').trim() &&
+    nextMeta.remoteStatusLabel === String(taskMeta.remoteStatusLabel ?? '').trim() &&
+    Number(nextMeta.remoteCreatedAt ?? 0) === Number(taskMeta.remoteCreatedAt ?? 0) &&
+    Number(nextMeta.remoteUpdatedAt ?? 0) === Number(taskMeta.remoteUpdatedAt ?? 0)
+  ) {
+    return;
+  }
+
+  await task.update({
+    progress: nextProgress,
+    meta: nextMeta
+  });
+  broadcastShotGenerationTaskUpdate(task);
 };
 
 const serializeShotAssemblyState = (segmentId, shotAssembly = {}, fallbackSummary = {}) => {
@@ -743,6 +790,9 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
       basename: `segment-${segment.id}-${task.shotId}-task-${task.id}`,
       ratio: normalizeGenerationRatio(task.meta?.ratio),
       duration: getShotDurationForGeneration(shot),
+      onProgress: async (progressPayload) => {
+        await applySeedDanceShotTaskProgress(task, progressPayload);
+      },
       referenceImages,
       referenceVideos: [
         backgroundAsset?.assetPath || backgroundAsset?.assetUrl
@@ -766,6 +816,10 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
         engine: result.engine || '',
         isMock: Boolean(result.isMock),
         remoteTaskId: result.remoteTaskId || '',
+        remoteStatus: 'succeeded',
+        remoteStatusLabel: '远端已完成',
+        remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
+        remoteUpdatedAt: task.meta?.remoteUpdatedAt ?? null,
         fallbackReason: [generationWarnings.join('；'), result.fallbackReason || ''].filter(Boolean).join('；'),
         providerError: result.providerError || ''
       }
@@ -778,6 +832,10 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
       meta: {
         ...(task.meta ?? {}),
         source: 'shot_generation',
+        remoteStatus: String(task.meta?.remoteStatus ?? '').trim(),
+        remoteStatusLabel: String(task.meta?.remoteStatusLabel ?? '').trim(),
+        remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
+        remoteUpdatedAt: task.meta?.remoteUpdatedAt ?? null,
         providerError: error.message
       }
     });
@@ -834,6 +892,10 @@ const startShotGeneration = async ({ segmentId, shotId, prompt, ratio }) => {
       source: 'shot_generation',
       ratio: resolvedRatio,
       engine: '',
+      remoteStatus: '',
+      remoteStatusLabel: '',
+      remoteCreatedAt: null,
+      remoteUpdatedAt: null,
       isMock: false,
       remoteTaskId: '',
       fallbackReason: '',
@@ -873,6 +935,10 @@ const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, rat
         batchStartedAt: startedAt,
         ratio: resolvedRatio,
         engine: '',
+        remoteStatus: '',
+        remoteStatusLabel: '',
+        remoteCreatedAt: null,
+        remoteUpdatedAt: null,
         isMock: false,
         remoteTaskId: '',
         fallbackReason: '',

@@ -15,6 +15,10 @@ const serializeGenerationMeta = (task) => {
   return {
     engine: String(taskMeta.engine ?? '').trim(),
     ratio: String(taskMeta.ratio ?? '').trim(),
+    remote_status: String(taskMeta.remoteStatus ?? '').trim(),
+    remote_status_label: String(taskMeta.remoteStatusLabel ?? '').trim(),
+    remote_created_at: Number(taskMeta.remoteCreatedAt ?? 0) || null,
+    remote_updated_at: Number(taskMeta.remoteUpdatedAt ?? 0) || null,
     is_mock: Boolean(taskMeta.isMock),
     remote_task_id: String(taskMeta.remoteTaskId ?? '').trim(),
     fallback_reason: String(taskMeta.fallbackReason ?? '').trim(),
@@ -44,6 +48,49 @@ const broadcastGenerationTaskUpdate = (task) => {
 const normalizeGenerationRatio = (value) => {
   const trimmedValue = String(value ?? '').trim();
   return /^[1-9]\d{0,2}:[1-9]\d{0,2}$/u.test(trimmedValue) ? trimmedValue : env.SEED_DANCE_RATIO;
+};
+
+const applySeedDanceTaskProgress = async (task, progressPayload = {}) => {
+  if (!task) {
+    return;
+  }
+
+  const taskMeta = task.meta ?? {};
+  const nextProgress = Math.max(
+    Number(task.progress ?? 0) || 0,
+    Math.min(99, Math.max(0, Number(progressPayload.progress ?? 0) || 0))
+  );
+  const nextMeta = {
+    ...taskMeta,
+    remoteTaskId: String(progressPayload.taskId ?? taskMeta.remoteTaskId ?? '').trim(),
+    remoteStatus: String(progressPayload.status ?? taskMeta.remoteStatus ?? '').trim(),
+    remoteStatusLabel: String(progressPayload.statusLabel ?? taskMeta.remoteStatusLabel ?? '').trim(),
+    remoteCreatedAt:
+      Number.isFinite(Number(progressPayload.createdAt)) && Number(progressPayload.createdAt) > 0
+        ? Number(progressPayload.createdAt)
+        : taskMeta.remoteCreatedAt ?? null,
+    remoteUpdatedAt:
+      Number.isFinite(Number(progressPayload.updatedAt)) && Number(progressPayload.updatedAt) > 0
+        ? Number(progressPayload.updatedAt)
+        : taskMeta.remoteUpdatedAt ?? null
+  };
+
+  if (
+    nextProgress === Number(task.progress ?? 0) &&
+    nextMeta.remoteTaskId === String(taskMeta.remoteTaskId ?? '').trim() &&
+    nextMeta.remoteStatus === String(taskMeta.remoteStatus ?? '').trim() &&
+    nextMeta.remoteStatusLabel === String(taskMeta.remoteStatusLabel ?? '').trim() &&
+    Number(nextMeta.remoteCreatedAt ?? 0) === Number(taskMeta.remoteCreatedAt ?? 0) &&
+    Number(nextMeta.remoteUpdatedAt ?? 0) === Number(taskMeta.remoteUpdatedAt ?? 0)
+  ) {
+    return;
+  }
+
+  await task.update({
+    progress: nextProgress,
+    meta: nextMeta
+  });
+  broadcastGenerationTaskUpdate(task);
 };
 
 const CHARACTER_REFERENCE_IMAGE_FIELDS = [
@@ -843,6 +890,9 @@ const processGenerationTask = async (taskId) => {
       basename: `segment-${task.segmentId}-task-${task.id}`,
       ratio: normalizeGenerationRatio(task.meta?.ratio),
       duration: getSeedDanceDurationForSegment(task.segment),
+      onProgress: async (progressPayload) => {
+        await applySeedDanceTaskProgress(task, progressPayload);
+      },
       referenceImages,
       referenceVideos: [
         backgroundAsset?.assetPath || backgroundAsset?.assetUrl
@@ -866,6 +916,10 @@ const processGenerationTask = async (taskId) => {
         engine: result.engine || '',
         isMock: Boolean(result.isMock),
         remoteTaskId: result.remoteTaskId || '',
+        remoteStatus: 'succeeded',
+        remoteStatusLabel: '远端已完成',
+        remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
+        remoteUpdatedAt: task.meta?.remoteUpdatedAt ?? null,
         fallbackReason: result.fallbackReason || '',
         providerError: result.providerError || ''
       }
@@ -878,6 +932,10 @@ const processGenerationTask = async (taskId) => {
       meta: {
         ...(task.meta ?? {}),
         source: 'segment_generation',
+        remoteStatus: String(task.meta?.remoteStatus ?? '').trim(),
+        remoteStatusLabel: String(task.meta?.remoteStatusLabel ?? '').trim(),
+        remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
+        remoteUpdatedAt: task.meta?.remoteUpdatedAt ?? null,
         providerError: error.message
       }
     });
@@ -907,6 +965,10 @@ const startGeneration = async ({ segmentId, prompt, ratio }) => {
       source: 'segment_generation',
       ratio: resolvedRatio,
       engine: '',
+      remoteStatus: '',
+      remoteStatusLabel: '',
+      remoteCreatedAt: null,
+      remoteUpdatedAt: null,
       isMock: false,
       remoteTaskId: '',
       fallbackReason: '',

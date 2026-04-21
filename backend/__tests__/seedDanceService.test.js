@@ -43,7 +43,13 @@ await jest.unstable_mockModule('../services/fileService.js', () => ({
   toPublicUploadUrl: jest.fn((relativePath) => `/uploads/${String(relativePath).replace(/^\/+/, '')}`)
 }));
 
-const { buildSeedDanceContentItems, buildSeedDanceRequestBody, getSeedDanceProviderStatus } = await import(
+const {
+  buildSeedDanceContentItems,
+  buildSeedDanceRequestBody,
+  getSeedDanceProviderStatus,
+  estimateSeedDanceTaskProgress,
+  getSeedDanceRemoteStatusLabel
+} = await import(
   '../services/seedDanceService.js'
 );
 
@@ -163,6 +169,14 @@ describe('seedDanceService', () => {
         warning: expect.any(String)
       })
     );
+  });
+
+  test('maps remote task states to ui-friendly progress and labels', () => {
+    expect(getSeedDanceRemoteStatusLabel('queued')).toBe('远端排队中');
+    expect(getSeedDanceRemoteStatusLabel('running')).toBe('远端生成中');
+    expect(estimateSeedDanceTaskProgress({ status: 'queued', pollCount: 1, currentProgress: 45 })).toBe(55);
+    expect(estimateSeedDanceTaskProgress({ status: 'running', pollCount: 2, currentProgress: 55 })).toBe(78);
+    expect(estimateSeedDanceTaskProgress({ status: 'succeeded', pollCount: 3, currentProgress: 78 })).toBe(97);
   });
 
   test('skips local reference videos because Seedance requires web urls', async () => {

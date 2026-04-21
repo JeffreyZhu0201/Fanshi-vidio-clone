@@ -36,6 +36,16 @@ const AUDIO_MIME_TYPES = {
   '.aac': 'audio/aac',
   '.ogg': 'audio/ogg'
 };
+const SEED_DANCE_REMOTE_STATUS_LABELS = {
+  queued: '远端排队中',
+  running: '远端生成中',
+  succeeded: '远端已完成',
+  completed: '远端已完成',
+  success: '远端已完成',
+  failed: '远端失败',
+  expired: '远端超时',
+  cancelled: '远端已取消'
+};
 
 const shouldAllowSeedDanceMockFallback = () => {
   return Boolean(env.SEED_DANCE_ALLOW_MOCK_FALLBACK);
@@ -428,6 +438,79 @@ const extractRemoteVideoUrl = (responsePayload) => {
   );
 };
 
+const extractSeedDanceTaskStatus = (responsePayload) => {
+  const payload = unwrapSeedDancePayload(responsePayload);
+  return String(payload?.status ?? '').trim().toLowerCase();
+};
+
+const getSeedDanceRemoteStatusLabel = (status = '') => {
+  const normalizedStatus = String(status ?? '').trim().toLowerCase();
+  return SEED_DANCE_REMOTE_STATUS_LABELS[normalizedStatus] || '远端处理中';
+};
+
+const extractSeedDanceTaskTimestamps = (responsePayload) => {
+  const payload = unwrapSeedDancePayload(responsePayload);
+
+  return {
+    createdAt:
+      Number.isFinite(Number(payload?.created_at)) && Number(payload.created_at) > 0
+        ? Number(payload.created_at)
+        : null,
+    updatedAt:
+      Number.isFinite(Number(payload?.updated_at)) && Number(payload.updated_at) > 0
+        ? Number(payload.updated_at)
+        : null
+  };
+};
+
+// Volcengine's task query API exposes task states such as queued/running/succeeded,
+// but does not provide a numeric progress percentage. We estimate UI progress
+// from those official states so users can still see motion while polling.
+const estimateSeedDanceTaskProgress = ({ status = '', pollCount = 0, currentProgress = 0 }) => {
+  const normalizedStatus = String(status ?? '').trim().toLowerCase();
+  const safeCurrentProgress = Number.isFinite(Number(currentProgress)) ? Number(currentProgress) : 0;
+
+  if (['succeeded', 'completed', 'success'].includes(normalizedStatus)) {
+    return Math.max(safeCurrentProgress, 97);
+  }
+
+  if (normalizedStatus === 'queued') {
+    return Math.min(64, Math.max(safeCurrentProgress, 52 + pollCount * 3));
+  }
+
+  if (normalizedStatus === 'running') {
+    return Math.min(94, Math.max(safeCurrentProgress, 68 + pollCount * 5));
+  }
+
+  if (['failed', 'expired', 'cancelled'].includes(normalizedStatus)) {
+    return Math.max(safeCurrentProgress, 95);
+  }
+
+  return Math.max(safeCurrentProgress, 50);
+};
+
+const notifyRemoteProgress = async (onProgress, responsePayload, context = {}) => {
+  if (typeof onProgress !== 'function') {
+    return;
+  }
+
+  const status = extractSeedDanceTaskStatus(responsePayload);
+  const { createdAt, updatedAt } = extractSeedDanceTaskTimestamps(responsePayload);
+
+  await onProgress({
+    taskId: extractSeedDanceTaskId(responsePayload) || String(context.taskId ?? '').trim(),
+    status,
+    statusLabel: getSeedDanceRemoteStatusLabel(status),
+    progress: estimateSeedDanceTaskProgress({
+      status,
+      pollCount: Number(context.pollCount ?? 0) || 0,
+      currentProgress: Number(context.currentProgress ?? 0) || 0
+    }),
+    createdAt,
+    updatedAt
+  });
+};
+
 const downloadRemoteVideoToUploads = async (remoteUrl, basename) => {
   const resolvedUrl = String(remoteUrl ?? '').trim();
 
@@ -486,15 +569,22 @@ const createRemoteGenerationTask = async ({
   });
 };
 
-const waitForRemoteGeneration = async (taskId) => {
+const waitForRemoteGeneration = async (taskId, { onProgress } = {}) => {
   const startedAt = Date.now();
+  let pollCount = 0;
 
   while (Date.now() - startedAt <= env.SEED_DANCE_MAX_WAIT_MS) {
     const taskResponsePayload = await fetchSeedDanceJson(resolveSeedDanceTaskEndpoint(taskId), {
       method: 'GET'
     });
     const taskPayload = unwrapSeedDancePayload(taskResponsePayload);
-    const status = String(taskPayload.status ?? '').toLowerCase();
+    const status = extractSeedDanceTaskStatus(taskPayload);
+
+    await notifyRemoteProgress(onProgress, taskPayload, {
+      taskId,
+      pollCount,
+      currentProgress: 0
+    });
 
     if (['succeeded', 'completed', 'success'].includes(status)) {
       return taskPayload;
@@ -511,6 +601,7 @@ const waitForRemoteGeneration = async (taskId) => {
       throw new Error(String(providerError));
     }
 
+    pollCount += 1;
     await sleep(env.SEED_DANCE_POLL_INTERVAL_MS);
   }
 
@@ -526,7 +617,8 @@ const generateSegment = async ({
   referenceVideos = [],
   referenceAudios = [],
   ratio,
-  duration
+  duration,
+  onProgress
 }) => {
   const extension = path.extname(sourceAbsolutePath) || '.mp4';
   const allowMockFallback = shouldAllowSeedDanceMockFallback();
@@ -549,7 +641,22 @@ const generateSegment = async ({
         throw new Error('Seed Dance 未返回任务 ID。');
       }
 
-      const completedTask = await waitForRemoteGeneration(taskId);
+      await onProgress?.({
+        taskId,
+        status: 'queued',
+        statusLabel: getSeedDanceRemoteStatusLabel('queued'),
+        progress: estimateSeedDanceTaskProgress({
+          status: 'queued',
+          pollCount: 0,
+          currentProgress: 0
+        }),
+        createdAt: null,
+        updatedAt: null
+      });
+
+      const completedTask = await waitForRemoteGeneration(taskId, {
+        onProgress
+      });
       const downloadedAsset = await downloadRemoteVideoToUploads(
         extractRemoteVideoUrl(completedTask),
         basename
@@ -599,5 +706,8 @@ export {
   generateSegment,
   canUseRemoteSeedDance,
   getSeedDanceProviderStatus,
-  assertSeedDanceReady
+  assertSeedDanceReady,
+  estimateSeedDanceTaskProgress,
+  getSeedDanceRemoteStatusLabel,
+  extractSeedDanceTaskStatus
 };

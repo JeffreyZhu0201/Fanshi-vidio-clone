@@ -82,6 +82,42 @@ const getShotAssemblyStatusLabel = (summary) => {
   return '镜头待生成';
 };
 
+const getGenerationTaskStatusLabel = (task, fallbackLabel = '视频待生成') => {
+  if (!task) {
+    return fallbackLabel;
+  }
+
+  if (task.status === 'completed') {
+    return '视频生成完成';
+  }
+
+  if (task.status === 'failed') {
+    return '视频生成失败';
+  }
+
+  if (task.remote_status_label) {
+    return task.remote_status_label;
+  }
+
+  if (task.status === 'processing') {
+    return '视频生成中';
+  }
+
+  if (task.status === 'pending') {
+    return '视频排队中';
+  }
+
+  return fallbackLabel;
+};
+
+const shouldShowGenerationProgress = (task) => {
+  if (!task) {
+    return false;
+  }
+
+  return ['pending', 'processing', 'completed', 'failed'].includes(task.status);
+};
+
 const renderPromptTokenPreview = (value = '') => {
   return tokenizePrompt(value).map((token, index) => {
     if (token.type === 'character-mention' || token.type === 'scene-mention') {
@@ -741,6 +777,18 @@ const SegmentCard = ({
                           </button>
                         </div>
 
+                        {shouldShowGenerationProgress(shot.latestGenerationTask) ? (
+                          <div className="mt-3">
+                            <ProgressBar
+                              value={shot.latestGenerationTask?.progress ?? 0}
+                              status={shot.latestGenerationTask?.status ?? 'pending'}
+                              label={`镜头任务 · ${getGenerationTaskStatusLabel(shot.latestGenerationTask, '镜头待生成')}`}
+                              startedAt={shot.latestGenerationTask?.created_at || ''}
+                              compact
+                            />
+                          </div>
+                        ) : null}
+
                         <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">
                           当前最终提示词
                         </p>
@@ -778,6 +826,17 @@ const SegmentCard = ({
               <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">新片段预览</p>
               {assembledSegmentUrl ? <StatusBadge status="completed" label="已拼回" /> : <StatusBadge status="idle" label="待生成" />}
             </div>
+
+            {shouldShowGenerationProgress(segment.latestGenerationTask) ? (
+              <div className="mt-2">
+                <ProgressBar
+                  value={segment.latestGenerationTask?.progress ?? 0}
+                  status={segment.latestGenerationTask?.status ?? 'pending'}
+                  label={`大片段任务 · ${getGenerationTaskStatusLabel(segment.latestGenerationTask, '大片段待生成')}`}
+                  startedAt={segment.latestGenerationTask?.created_at || ''}
+                />
+              </div>
+            ) : null}
 
             {shotGenerationSummary ? (
               <div className="mt-2">
@@ -1008,6 +1067,21 @@ const SegmentCard = ({
                         </button>
                       </div>
                     </div>
+
+                    {shouldShowGenerationProgress(shotDraft.latestGenerationTask) ? (
+                      <div className="mt-3">
+                        <ProgressBar
+                          value={shotDraft.latestGenerationTask?.progress ?? 0}
+                          status={shotDraft.latestGenerationTask?.status ?? 'pending'}
+                          label={`镜头任务 · ${getGenerationTaskStatusLabel(
+                            shotDraft.latestGenerationTask,
+                            shotDraft.isNew ? '待保存后生成' : '镜头待生成'
+                          )}`}
+                          startedAt={shotDraft.latestGenerationTask?.created_at || ''}
+                          compact
+                        />
+                      </div>
+                    ) : null}
 
                     <div className="mt-3 grid gap-3 xl:grid-cols-[260px_minmax(0,1fr)_260px]">
                       <div className="space-y-3">
