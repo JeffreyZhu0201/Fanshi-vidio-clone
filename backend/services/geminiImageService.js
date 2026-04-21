@@ -11,10 +11,13 @@ import {
   toPublicUploadUrl
 } from './fileService.js';
 
-const imageApiKey = env.GEMINI_IMAGE_API_KEY || env.GEMINI_API_KEY || '';
+const imageApiKey = env.GEMINI_IMAGE_API_KEY || '';
+const fallbackGeminiApiKey = env.GEMINI_API_KEY || '';
 const imageApiBaseUrl = env.GEMINI_IMAGE_API_BASE_URL || env.GEMINI_API_BASE_URL || '';
 const imageModel = env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview';
-const canUseRemoteGeminiImage = Boolean(imageApiKey && imageApiBaseUrl);
+const canUseRemoteGeminiImage = Boolean((imageApiKey || fallbackGeminiApiKey) && imageApiBaseUrl);
+const unavailableGeminiImageCredentialSources = new Set();
+let preferredGeminiImageCredentialSource = '';
 
 const IMAGE_MIME_TO_EXTENSION = Object.freeze({
   'image/png': '.png',
@@ -30,7 +33,9 @@ const getGeminiImageProviderStatus = () => {
   const missingFields = [];
 
   if (!imageApiKey) {
-    missingFields.push('GEMINI_IMAGE_API_KEY');
+    if (!fallbackGeminiApiKey) {
+      missingFields.push('GEMINI_IMAGE_API_KEY / GEMINI_API_KEY');
+    }
   }
 
   if (!imageApiBaseUrl) {
@@ -48,6 +53,36 @@ const appendKeyQuery = (endpoint, token) => {
   const url = new URL(endpoint);
   url.searchParams.set('key', token);
   return url.toString();
+};
+
+const getGeminiImageCredentialCandidates = () => {
+  const candidates = [
+    {
+      token: imageApiKey,
+      source: 'GEMINI_IMAGE_API_KEY'
+    },
+    {
+      token: fallbackGeminiApiKey,
+      source: 'GEMINI_API_KEY'
+    }
+  ].filter((item) => item.token);
+  const seenTokens = new Set();
+
+  return candidates.filter((item) => {
+    if (seenTokens.has(item.token)) {
+      return false;
+    }
+
+    seenTokens.add(item.token);
+    return true;
+  }).sort((left, right) => {
+    const leftPreferred = left.source === preferredGeminiImageCredentialSource ? -2 : 0;
+    const rightPreferred = right.source === preferredGeminiImageCredentialSource ? -2 : 0;
+    const leftUnavailable = unavailableGeminiImageCredentialSources.has(left.source) ? 1 : 0;
+    const rightUnavailable = unavailableGeminiImageCredentialSources.has(right.source) ? 1 : 0;
+
+    return leftPreferred + leftUnavailable - (rightPreferred + rightUnavailable);
+  });
 };
 
 const resolveGeminiImageEndpoint = () => {
@@ -89,46 +124,76 @@ const isRetryableGeminiStatus = (statusCode) => {
   return [408, 429, 500, 502, 503, 504].includes(Number(statusCode));
 };
 
+const isCredentialFallbackWorthy = (error) => {
+  const message = String(error?.message ?? '').trim();
+  const statusCode = Number(error?.statusCode ?? 0);
+
+  if ([400, 401, 403, 404].includes(statusCode)) {
+    return true;
+  }
+
+  if (statusCode === 503 && /无可用渠道|distributor/iu.test(message)) {
+    return true;
+  }
+
+  return false;
+};
+
 const callRemoteGeminiImage = async ({ prompt }) => {
-  const endpoint = appendKeyQuery(resolveGeminiImageEndpoint(), imageApiKey);
   const requestBody = buildGeminiImagePayload(prompt);
   let lastError = null;
 
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${imageApiKey}`
-        },
-        body: JSON.stringify(requestBody),
-        redirect: 'follow',
-        signal: AbortSignal.timeout(env.GEMINI_IMAGE_REQUEST_TIMEOUT)
-      });
-      const responseText = await response.text();
+  for (const credentialCandidate of getGeminiImageCredentialCandidates()) {
+    const endpoint = appendKeyQuery(resolveGeminiImageEndpoint(), credentialCandidate.token);
 
-      if (!response.ok) {
-        const error = new Error(
-          `Gemini image request failed with status ${response.status}: ${responseText.slice(0, 240)}`
-        );
-        error.statusCode = response.status;
-        error.authVariant = 'bearer+query-key';
-        throw error;
-      }
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${credentialCandidate.token}`
+          },
+          body: JSON.stringify(requestBody),
+          redirect: 'follow',
+          signal: AbortSignal.timeout(env.GEMINI_IMAGE_REQUEST_TIMEOUT)
+        });
+        const responseText = await response.text();
 
-      return {
-        authVariant: 'bearer+query-key',
-        responsePayload: responseText ? JSON.parse(responseText) : {}
-      };
-    } catch (error) {
-      lastError = error;
+        if (!response.ok) {
+          const error = new Error(
+            `Gemini image request failed with status ${response.status}: ${responseText.slice(0, 240)}`
+          );
+          error.statusCode = response.status;
+          error.authVariant = 'bearer+query-key';
+          error.credentialSource = credentialCandidate.source;
+          throw error;
+        }
 
-      if (attempt >= 3 || !isRetryableGeminiStatus(error.statusCode)) {
+        return {
+          authVariant: 'bearer+query-key',
+          credentialSource: credentialCandidate.source,
+          responsePayload: responseText ? JSON.parse(responseText) : {}
+        };
+      } catch (error) {
+        lastError = error;
+        error.credentialSource = error.credentialSource || credentialCandidate.source;
+
+        if (isCredentialFallbackWorthy(error)) {
+          unavailableGeminiImageCredentialSources.add(credentialCandidate.source);
+        }
+
+        if (attempt < 3 && isRetryableGeminiStatus(error.statusCode) && !isCredentialFallbackWorthy(error)) {
+          await sleep(attempt * 750);
+          continue;
+        }
+
         break;
       }
+    }
 
-      await sleep(attempt * 750);
+    if (!lastError || !isCredentialFallbackWorthy(lastError)) {
+      break;
     }
   }
 
@@ -182,7 +247,8 @@ const generateImageAsset = async ({ prompt, basename }) => {
   }
 
   try {
-    const { authVariant, responsePayload } = await callRemoteGeminiImage({ prompt });
+    const { authVariant, credentialSource, responsePayload } = await callRemoteGeminiImage({ prompt });
+    preferredGeminiImageCredentialSource = credentialSource || preferredGeminiImageCredentialSource;
     const [firstImage] = extractGeneratedImages(responsePayload);
     const savedAsset = await saveGeneratedImageToUploads({
       mimeType: firstImage.mimeType,
@@ -195,6 +261,7 @@ const generateImageAsset = async ({ prompt, basename }) => {
       provider: 'remote-gemini-image',
       model: imageModel,
       authVariant,
+      credentialSource,
       rawResponse: responsePayload
     };
   } catch (error) {
