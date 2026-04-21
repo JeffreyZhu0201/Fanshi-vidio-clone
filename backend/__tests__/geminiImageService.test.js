@@ -7,7 +7,7 @@ const tempDir = path.join(backendRoot, '.tmp', 'gemini-image-service-test');
 
 await jest.unstable_mockModule('../config/env.js', () => ({
   default: Object.freeze({
-    GEMINI_API_KEY: '',
+    GEMINI_API_KEY: 'test-token',
     GEMINI_API_BASE_URL: 'https://yunwu.ai',
     GEMINI_IMAGE_API_KEY: 'image-test-key',
     GEMINI_IMAGE_API_BASE_URL:
@@ -140,6 +140,61 @@ describe('geminiImageService', () => {
       mimeType: 'image/png',
       provider: 'remote-gemini-image',
       model: 'gemini-3-pro-image-preview',
+      authVariant: 'bearer+query-key',
+      credentialSource: 'GEMINI_IMAGE_API_KEY'
+    });
+  });
+
+  test('falls back to GEMINI_API_KEY when the dedicated image key has no distributor channel', async () => {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        text: async () =>
+          JSON.stringify({
+            error: {
+              message: '分组 优质banana 下模型 gemini-3-pro-image-preview 无可用渠道（distributor）'
+            }
+          })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      inlineData: {
+                        mimeType: 'image/png',
+                        data: Buffer.from('fallback-image').toString('base64')
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          })
+      });
+
+    const result = await generateImageAsset({
+      prompt: '生成场景多角度背景图',
+      basename: 'scene-angle-a'
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(global.fetch.mock.calls[0][0]).toBe(
+      'https://yunwu.ai/v1beta/models/gemini-3-pro-image-preview:generateContent?key=image-test-key'
+    );
+    expect(global.fetch.mock.calls[1][0]).toBe(
+      'https://yunwu.ai/v1beta/models/gemini-3-pro-image-preview:generateContent?key=test-token'
+    );
+    expect(result).toMatchObject({
+      filePath: 'resource-images/scene-angle-a.png',
+      fileUrl: '/uploads/resource-images/scene-angle-a.png',
+      credentialSource: 'GEMINI_API_KEY',
       authVariant: 'bearer+query-key'
     });
   });
