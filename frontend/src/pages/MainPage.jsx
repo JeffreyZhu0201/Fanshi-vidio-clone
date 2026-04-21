@@ -45,6 +45,7 @@ const CompactStat = ({ label, value, note }) => {
 
 const MainPage = () => {
   const [systemModalOpen, setSystemModalOpen] = useState(false);
+  const [exportDockOpen, setExportDockOpen] = useState(false);
   const { backendStatus, errorMessage, lastCheckedAt, realtimeStatus, providerStatuses } = useAppHealth();
   const {
     currentVideo,
@@ -449,57 +450,94 @@ const MainPage = () => {
         </div>
 
         <div className="floating-export-dock">
-          <section className="floating-export-checklist">
-            <div className="floating-export-header">
-              <div>
-                <p className="floating-export-eyebrow">Export Checklist</p>
-                <h2 className="floating-export-title">导出前检查</h2>
-              </div>
+          {exportDockOpen ? (
+            <div id="floating-export-panel" className="floating-export-panel">
+              <section className="floating-export-checklist">
+                <div className="floating-export-header">
+                  <div>
+                    <p className="floating-export-eyebrow">Export Checklist</p>
+                    <h2 className="floating-export-title">导出前检查</h2>
+                  </div>
+                  <button
+                    type="button"
+                    className="floating-export-panel-close"
+                    onClick={() => setExportDockOpen(false)}
+                    aria-label="关闭导出面板"
+                  >
+                    关闭
+                  </button>
+                </div>
+
+                <div className="floating-export-grid">
+                  <div className="floating-export-metric">
+                    <span className="floating-export-label">片段覆盖率</span>
+                    <span className="floating-export-value">
+                      {generatedSegments} / {segments.length || 0}
+                    </span>
+                  </div>
+                  <div className="floating-export-metric">
+                    <span className="floating-export-label">背景资产</span>
+                    <span className="floating-export-value">
+                      {readyBackgroundAssets} / {backgroundAssets.length || 0}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="compact-issue-list">
+                  {issueMessages.length ? (
+                    issueMessages.slice(0, 2).map((message, index) => (
+                      <div key={`${message}-${index}`} className="compact-issue-item">
+                        {message}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="compact-issue-item compact-issue-item-success">
+                      当前没有异常提醒，可以继续片段生成或直接导出。
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <VideoMerge
+                video={currentVideo}
+                segments={segments}
+                mergeProgress={mergeProgress}
+                onMerge={startMerge}
+                onDownload={downloadMergedVideo}
+                compactMode
+                dockMode
+              />
+            </div>
+          ) : null}
+
+          <button
+            type="button"
+            className={`floating-export-launcher ${exportDockOpen ? 'floating-export-launcher-open' : ''}`}
+            onClick={() => setExportDockOpen((currentState) => !currentState)}
+            aria-expanded={exportDockOpen}
+            aria-controls="floating-export-panel"
+          >
+            <div className="floating-export-launcher-copy">
+              <p className="floating-export-eyebrow">Export Dock</p>
+              <h2 className="floating-export-launcher-title">导出与检查</h2>
+              <p className="floating-export-launcher-note">
+                {mergeProgress.status === 'completed'
+                  ? '成片已就绪，可直接下载'
+                  : mergeProgress.status === 'processing' || mergeProgress.status === 'pending'
+                    ? mergeProgress.message || '拼接进行中'
+                    : issueMessages[0] || '点击展开导出前检查与成片拼接'}
+              </p>
+            </div>
+            <div className="floating-export-launcher-side">
               <StatusBadge
                 status={mergeStageStatus}
                 label={mergeProgress.status === 'completed' ? '可下载' : '待导出'}
               />
+              <span className="floating-export-launcher-caret" aria-hidden="true">
+                {exportDockOpen ? '收起' : '展开'}
+              </span>
             </div>
-
-            <div className="floating-export-grid">
-              <div className="floating-export-metric">
-                <span className="floating-export-label">片段覆盖率</span>
-                <span className="floating-export-value">
-                  {generatedSegments} / {segments.length || 0}
-                </span>
-              </div>
-              <div className="floating-export-metric">
-                <span className="floating-export-label">背景资产</span>
-                <span className="floating-export-value">
-                  {readyBackgroundAssets} / {backgroundAssets.length || 0}
-                </span>
-              </div>
-            </div>
-
-            <div className="compact-issue-list">
-              {issueMessages.length ? (
-                issueMessages.slice(0, 2).map((message, index) => (
-                  <div key={`${message}-${index}`} className="compact-issue-item">
-                    {message}
-                  </div>
-                ))
-              ) : (
-                <div className="compact-issue-item compact-issue-item-success">
-                  当前没有异常提醒，可以继续片段生成或直接导出。
-                </div>
-              )}
-            </div>
-          </section>
-
-          <VideoMerge
-            video={currentVideo}
-            segments={segments}
-            mergeProgress={mergeProgress}
-            onMerge={startMerge}
-            onDownload={downloadMergedVideo}
-            compactMode
-            dockMode
-          />
+          </button>
         </div>
 
         <ModalSheet
