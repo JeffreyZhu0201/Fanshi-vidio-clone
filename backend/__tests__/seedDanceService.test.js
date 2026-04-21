@@ -63,10 +63,11 @@ describe('seedDanceService', () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  test('builds Seedance content with text, reference images, reference videos and reference audios', async () => {
+  test('builds Seedance content with text, reference images, remote reference videos and reference audios', async () => {
     const requestBody = await buildSeedDanceRequestBody({
       prompt: '请使用角色三视图与背景参考生成片段',
       sourceAbsolutePath: sampleVideoPath,
+      sourcePublicUrl: 'https://example.com/source-segment.mp4',
       referenceImages: [{ url: '/uploads/character-front.png' }],
       referenceVideos: [{ url: 'https://example.com/background-reference.mp4' }],
       referenceAudios: [{ absolutePath: sampleAudioPath }]
@@ -101,7 +102,7 @@ describe('seedDanceService', () => {
         expect.objectContaining({
           role: 'reference_video',
           video_url: {
-            url: expect.stringMatching(/^data:video\/mp4;base64,/u)
+            url: 'https://example.com/source-segment.mp4'
           }
         }),
         expect.objectContaining({
@@ -158,8 +159,27 @@ describe('seedDanceService', () => {
         ready: true,
         reason: '',
         model: 'doubao-seedance-2-0-260128',
-        allow_mock_fallback: false
+        allow_mock_fallback: false,
+        warning: expect.any(String)
       })
     );
+  });
+
+  test('skips local reference videos because Seedance requires web urls', async () => {
+    const content = await buildSeedDanceContentItems({
+      prompt: '只保留公网 reference_video',
+      sourceAbsolutePath: sampleVideoPath,
+      referenceVideos: [
+        { absolutePath: sampleVideoPath },
+        { url: '/uploads/local-segment.mp4' },
+        { url: 'https://example.com/reference-video.mp4' }
+      ]
+    });
+
+    const videoUrls = content
+      .filter((item) => item.type === 'video_url')
+      .map((item) => item.video_url.url);
+
+    expect(videoUrls).toEqual(['https://example.com/reference-video.mp4']);
   });
 });

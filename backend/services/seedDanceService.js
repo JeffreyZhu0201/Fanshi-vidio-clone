@@ -45,6 +45,8 @@ const shouldUseStrictRemoteSeedDance = () => {
   return canUseRemoteSeedDance && env.SEED_DANCE_STRICT_REMOTE;
 };
 
+const isWebUrl = (value = '') => /^https?:\/\//iu.test(String(value).trim());
+
 const getSeedDanceProviderStatus = () => {
   const missingFields = [];
 
@@ -60,7 +62,10 @@ const getSeedDanceProviderStatus = () => {
     ready: canUseRemoteSeedDance,
     reason: missingFields.length ? `缺少 ${missingFields.join('、')}` : '',
     model: env.SEED_DANCE_MODEL,
-    allow_mock_fallback: shouldAllowSeedDanceMockFallback()
+    allow_mock_fallback: shouldAllowSeedDanceMockFallback(),
+    warning: !env.PUBLIC_ASSET_BASE_URL
+      ? '未配置 PUBLIC_ASSET_BASE_URL，Seedance 将跳过本地 reference_video，仅使用公网视频 URL 或图像参考。'
+      : ''
   };
 };
 
@@ -87,7 +92,7 @@ const sleep = (durationMs) =>
     setTimeout(resolve, durationMs);
   });
 
-const isRemoteHttpUrl = (value = '') => /^https?:\/\//iu.test(String(value).trim());
+const isRemoteHttpUrl = (value = '') => isWebUrl(value);
 
 const isDataUrl = (value = '') => /^data:/iu.test(String(value).trim());
 
@@ -268,11 +273,10 @@ const buildSeedDanceContentItems = async ({
   ).slice(0, REFERENCE_IMAGE_LIMIT);
   const normalizedReferenceVideos = dedupeReferenceEntries(
     [
-      ...(sourcePublicUrl || sourceAbsolutePath
+      ...(isWebUrl(sourcePublicUrl)
         ? [
             {
               url: String(sourcePublicUrl || '').trim(),
-              absolutePath: String(sourceAbsolutePath || '').trim(),
               role: 'reference_video'
             }
           ]
@@ -301,9 +305,9 @@ const buildSeedDanceContentItems = async ({
   }
 
   for (const referenceVideo of normalizedReferenceVideos) {
-    const resolvedUrl = await resolveReferenceEntryUrl(referenceVideo, 'video');
+    const resolvedUrl = String(referenceVideo.url || '').trim();
 
-    if (!resolvedUrl) {
+    if (!isWebUrl(resolvedUrl)) {
       continue;
     }
 
@@ -554,7 +558,9 @@ const generateSegment = async ({
         remoteTaskId: taskId,
         engine: 'seed-dance-remote',
         isMock: false,
-        fallbackReason: '',
+        fallbackReason: !isWebUrl(sourcePublicUrl)
+          ? 'seedance_skipped_non_public_reference_video'
+          : '',
         providerError: ''
       };
     } catch (error) {
