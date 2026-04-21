@@ -1,0 +1,170 @@
+import { jest } from '@jest/globals';
+
+const listCompletedResourceImageAssetsByResourceKeysMock = jest.fn();
+
+await jest.unstable_mockModule('../models/index.js', () => ({
+  Analysis: class Analysis {},
+  GenerationTask: class GenerationTask {},
+  Segment: class Segment {},
+  Video: class Video {}
+}));
+
+await jest.unstable_mockModule('../middleware/errorHandler.js', () => ({
+  AppError: class AppError extends Error {
+    constructor(message, statusCode = 500, details = {}) {
+      super(message);
+      this.statusCode = statusCode;
+      this.details = details;
+    }
+  }
+}));
+
+await jest.unstable_mockModule('../config/constants.js', () => ({
+  TASK_STATUS: {
+    pending: 'pending',
+    processing: 'processing',
+    completed: 'completed',
+    failed: 'failed'
+  }
+}));
+
+await jest.unstable_mockModule('../services/backgroundAssetService.js', () => ({
+  ensureBackgroundAsset: jest.fn()
+}));
+
+await jest.unstable_mockModule('../services/resourceImageService.js', () => ({
+  listCompletedResourceImageAssetsByResourceKeys: listCompletedResourceImageAssetsByResourceKeysMock
+}));
+
+await jest.unstable_mockModule('../services/seedDanceService.js', () => ({
+  assertSeedDanceReady: jest.fn(),
+  generateSegment: jest.fn()
+}));
+
+await jest.unstable_mockModule('../services/fileService.js', () => ({
+  resolveUploadPath: jest.fn((value) => value),
+  toAbsolutePublicUploadUrl: jest.fn((value) => value)
+}));
+
+await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
+  extractVideoFrame: jest.fn()
+}));
+
+await jest.unstable_mockModule('../services/realtimeService.js', () => ({
+  broadcastRealtimeEvent: jest.fn()
+}));
+
+const {
+  buildSeedDanceReconstructionPrompt,
+  collectSceneReferenceImages,
+  resolveRelevantCharacters,
+  resolveRelevantScenes
+} = await import('../services/generationService.js');
+
+describe('generationService helpers', () => {
+  beforeEach(() => {
+    listCompletedResourceImageAssetsByResourceKeysMock.mockReset();
+  });
+
+  test('prefers explicit @角色 mentions over segment default character list', () => {
+    const segment = {
+      analysis: {
+        characters: ['配角']
+      }
+    };
+    const overallAnalysis = {
+      characters: [
+        { id: 'character_1', name: '主角' },
+        { id: 'character_2', name: '配角' }
+      ]
+    };
+
+    const result = resolveRelevantCharacters(segment, overallAnalysis, '@主角 在画面中向前移动');
+
+    expect(result.map((item) => item.name)).toEqual(['主角']);
+  });
+
+  test('prefers explicit #场景 mentions over bound background scene', () => {
+    const overallAnalysis = {
+      backgrounds: [
+        { id: 'background_1', name: '咖啡馆内景' },
+        { id: 'background_2', name: '街道夜景' }
+      ]
+    };
+
+    const result = resolveRelevantScenes({
+      segment: {
+        analysis: {
+          scenes: ['咖啡馆内景']
+        }
+      },
+      overallAnalysis,
+      prompt: '@主角 从 #街道夜景 快速跑过',
+      sceneNames: ['咖啡馆内景'],
+      backgroundBinding: {
+        backgroundId: 'background_1',
+        backgroundName: '咖啡馆内景'
+      }
+    });
+
+    expect(result.map((item) => item.name)).toEqual(['街道夜景']);
+  });
+
+  test('collects scene reference images by prompt-mentioned scene assets', async () => {
+    listCompletedResourceImageAssetsByResourceKeysMock.mockResolvedValue([
+      {
+        resource_id: 'background_2',
+        asset_path: 'resource-images/street-angle-1.png',
+        asset_url: '/uploads/resource-images/street-angle-1.png'
+      }
+    ]);
+
+    const result = await collectSceneReferenceImages({
+      videoId: 101,
+      segment: {
+        analysis: {
+          scenes: ['咖啡馆内景']
+        }
+      },
+      overallAnalysis: {
+        backgrounds: [
+          { id: 'background_1', name: '咖啡馆内景' },
+          { id: 'background_2', name: '街道夜景' }
+        ]
+      },
+      prompt: '@主角 从 #街道夜景 快速跑过',
+      sceneNames: ['咖啡馆内景'],
+      backgroundBinding: {
+        backgroundId: 'background_1',
+        backgroundName: '咖啡馆内景'
+      }
+    });
+
+    expect(listCompletedResourceImageAssetsByResourceKeysMock).toHaveBeenCalledWith({
+      videoId: 101,
+      resourceType: 'scene',
+      resourceKeys: ['background_2', '街道夜景']
+    });
+    expect(result).toEqual([
+      {
+        relativePath: 'resource-images/street-angle-1.png',
+        url: '/uploads/resource-images/street-angle-1.png',
+        role: 'reference_image'
+      }
+    ]);
+  });
+
+  test('builds reconstruction instructions that mention character and scene references', () => {
+    const prompt = buildSeedDanceReconstructionPrompt({
+      prompt: '角色向前推进。',
+      characterNames: ['主角'],
+      sceneNames: ['街道夜景'],
+      isShot: true
+    });
+
+    expect(prompt).toContain('第一张参考图是该小镜头的典型帧');
+    expect(prompt).toContain('@主角');
+    expect(prompt).toContain('#街道夜景');
+    expect(prompt).toContain('人物左右位置');
+  });
+});

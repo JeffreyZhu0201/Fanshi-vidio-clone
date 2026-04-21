@@ -3,11 +3,14 @@ import { AppError } from '../middleware/errorHandler.js';
 import { TASK_STATUS } from '../config/constants.js';
 import { ensureBackgroundAsset } from './backgroundAssetService.js';
 import {
+  buildSeedDanceReconstructionPrompt,
   broadcastGenerationTaskUpdate,
   collectCharacterReferenceImages,
   collectSceneReferenceImages,
   expandPromptMentions,
-  getBackgroundBindingForSegment
+  getBackgroundBindingForSegment,
+  getPromptMentionNames,
+  getPromptSceneNames
 } from './generationService.js';
 import { publicUrlToRelativePath, resolveUploadPath, toAbsolutePublicUploadUrl } from './fileService.js';
 import { extractVideoFrame, mergeVideos } from './ffmpegService.js';
@@ -658,6 +661,12 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
     }
 
     const optimizedPrompt = expandPromptMentions(task.prompt, characters, overallAnalysis?.backgrounds ?? []);
+    const seedDancePrompt = buildSeedDanceReconstructionPrompt({
+      prompt: optimizedPrompt,
+      characterNames: [...getPromptMentionNames(task.prompt), ...(Array.isArray(shot.characterNames) ? shot.characterNames : [])],
+      sceneNames: [...getPromptSceneNames(task.prompt), ...(Array.isArray(shot.sceneNames) ? shot.sceneNames : []), backgroundBinding?.backgroundName || ''],
+      isShot: true
+    });
     let primaryShotReferenceImage = null;
 
     if (shot.representativeFrameImagePath || shot.representativeFrameImageUrl) {
@@ -700,7 +709,13 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
     });
     const sceneReferenceImages = await collectSceneReferenceImages({
       videoId: segment?.video?.id,
-      backgroundBinding
+      segment,
+      overallAnalysis,
+      prompt: task.prompt,
+      sceneNames: shot.sceneNames,
+      backgroundBinding,
+      sourceVideoAbsolutePath,
+      basenamePrefix: `segment-${segment.id}-${task.shotId}-task-${task.id}`
     });
     const referenceImages = [
       ...(primaryShotReferenceImage ? [primaryShotReferenceImage] : []),
@@ -717,7 +732,7 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
     const result = await generateWithSeedDance({
       sourceAbsolutePath,
       sourcePublicUrl,
-      prompt: optimizedPrompt,
+      prompt: seedDancePrompt,
       basename: `segment-${segment.id}-${task.shotId}-task-${task.id}`,
       duration: getShotDurationForGeneration(shot),
       referenceImages,

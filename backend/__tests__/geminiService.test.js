@@ -128,6 +128,10 @@ describe('geminiService', () => {
     expect(parts[1].text).toContain('backgroundAction');
     expect(parts[1].text).toContain('真实剪辑边界');
     expect(parts[1].text).toContain('shots 是后续小镜头切片与生成的唯一真值来源');
+    expect(parts[1].text).toContain('人物在画面中的左/中/右位置');
+    expect(parts[1].text).toContain('前景/中景/后景');
+    expect(parts[1].text).toContain('视线反打');
+    expect(parts[1].text).toContain('进出画方式');
     expect(requestBody.generationConfig).toMatchObject({
       temperature: 0.2,
       responseMimeType: 'application/json'
@@ -429,5 +433,49 @@ describe('geminiService', () => {
     expect(promptText).not.toContain('场景资源库');
     expect(result.optimizedPrompt).toContain('纯白无缝背景');
     expect(result.optimizedPrompt).not.toContain('#咖啡馆内景');
+  });
+
+  test('optimizes shot generation prompts with blocking and camera detail requirements', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      optimizedPrompt:
+                        '@主角 位于画面左侧前景，在 #咖啡馆内景 中朝右前方快步推进，保持中近景、侧前方机位、稳定跟拍和明确视线关系。'
+                    })
+                  }
+                ]
+              }
+            }
+          ]
+        })
+    });
+
+    const result = await optimizePrompt({
+      prompt: '@主角 走向 #咖啡馆内景 门口。',
+      mode: 'shot_generation',
+      segmentPrompt: '@主角 在 #咖啡馆内景 中与店员短暂对视后转身离开。',
+      shotPrompt: '@主角 走向 #咖啡馆内景 门口。',
+      characters: [{ name: '主角', appearancePrompt: '黑色短发，米色风衣' }],
+      backgrounds: [{ name: '咖啡馆内景', scenePrompt: '暖黄灯光咖啡馆，木质桌椅' }],
+      sceneNames: ['咖啡馆内景'],
+      characterNames: ['主角']
+    });
+
+    const requestBody = JSON.parse(global.fetch.mock.calls[0][1].body);
+    const promptText = requestBody.contents[0].parts[0].text;
+
+    expect(promptText).toContain('镜头级视频生成提示词优化助手');
+    expect(promptText).toContain('人物在画面中的左/中/右位置');
+    expect(promptText).toContain('进出画方式');
+    expect(promptText).toContain('尽量还原原片镜头语言');
+    expect(result.optimizedPrompt).toContain('@主角');
+    expect(result.optimizedPrompt).toContain('#咖啡馆内景');
   });
 });

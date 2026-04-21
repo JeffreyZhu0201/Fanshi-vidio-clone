@@ -165,8 +165,8 @@ const buildFallbackShotList = (anchor, anchorIndex) => {
         id: `shot_${shotIndex + 1}`,
         startTime: shotStartTime,
         endTime: shotEndTime,
-        summary: `片段 ${anchorIndex + 1} 的第 ${shotIndex + 1} 个镜头，延续当前动作与场景节奏。`,
-        prompt: `@主角 在 #${anchor.backgroundName || '主场景'} 中完成第 ${shotIndex + 1} 个镜头的动作变化，保持画面连续、人物一致和镜头衔接。`,
+        summary: `片段 ${anchorIndex + 1} 的第 ${shotIndex + 1} 个镜头，延续当前动作与场景节奏，并体现稳定的构图与人物调度。`,
+        prompt: `@主角 位于画面${['左侧前景', '中央中景', '右侧前景'][shotIndex % 3]}，在 #${anchor.backgroundName || '主场景'} 中完成第 ${shotIndex + 1} 个镜头的单一动作 beat，写清景别、机位方向、视线、前后景层次与运动轨迹，保持画面连续、人物一致和镜头衔接。`,
         sceneNames: anchor.backgroundName ? [anchor.backgroundName] : [],
         characterNames: ['主角'],
         representativeFrameTime: getRepresentativeFrameTime(shotStartTime, shotEndTime),
@@ -438,7 +438,7 @@ const createMockOptimizedPrompt = ({
         ? `涉及角色：${normalizeSceneNameList(characterNames).map((item) => `@${item}`).join('、')}`
         : '',
       sourceSegmentPrompt ? `与大片段衔接：${sourceSegmentPrompt}` : '',
-      '强化单镜头动作、节奏和镜头语言，保持与大片段叙事一致。'
+      '强化单镜头动作、节奏和镜头语言，写清人物站位、前后景关系、景别、机位、视线和运动方向，保持与大片段叙事一致。'
     ]
       .filter(Boolean)
       .join('，');
@@ -1073,7 +1073,7 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
                 startTime: 0,
                 endTime: 2,
                 summary: '镜头解释',
-                prompt: '@角色名 在 #场景名称 中完成该镜头动作的可编辑中文提示词',
+                prompt: '@角色名 位于画面中的明确位置，在 #场景名称 中完成该镜头动作，包含景别、机位、运动方向、视线和遮挡关系的可编辑中文提示词',
                 sceneNames: ['场景名称'],
                 characterNames: ['角色名'],
                 representativeFrameTime: 1.1,
@@ -1106,15 +1106,19 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
     '15. 每个 timeAnchor 都要返回 representativeFrameTime，且该时间点必须落在 startTime 到 endTime 之间；优先选择最适合做预览、最能代表人物或场景的画面，而不是机械取中点。',
     '16. 如果同一场景在多个片段重复出现，允许每个片段返回更贴合该片段语境的 scenePrompt，但 backgroundId 必须保持一致。',
     '17. 每个 timeAnchor 内都必须返回 shots 数组，用于描述该大片段下的小镜头；shots 是后续小镜头切片与生成的唯一真值来源。',
-    '18. shots 必须优先对齐真实剪辑边界、机位变化、构图变化、主体关系变化、场景切换和明显动作 beat，不要机械均分时间。',
-    '19. 每个 shot 尽量只承载一个清晰动作阶段，避免把两个以上关键动作或镜头语言变化混进同一个 shot。',
-    '20. shots 必须按整片绝对时间返回 startTime 和 endTime，严格落在所属 timeAnchor 范围内，按时间升序、无重叠，并尽量覆盖该大片段。',
-    '21. 每个 shot 都要返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote。',
-    '22. representativeFrameTime 必须选择该镜头最有代表性的画面，不允许机械取中点；优先选择最适合作为预览图和生成参考图的画面。',
-    '23. shot.prompt 必须直接服务镜头级视频生成，突出单镜头构图、动作、节奏、人物状态和涉及场景，并使用 @角色名 和 #场景名 引用，不要只重复大片段摘要。',
-    '24. 如果一个 shot 涉及多个场景，需要在 sceneNames 中全部列出，并在 prompt 中按顺序引用对应的 #场景名。',
-    '25. 如果角色较少，也至少保证 characters 返回 1 个对象。',
-    '26. 输出必须是合法 JSON，字段名保持与示例完全一致。'
+    '18. shots 必须优先对齐真实剪辑边界、机位变化、镜头运动变化、景别变化、构图重心变化、主体关系变化、场景切换、视线反打、人物进出画、明显动作 beat 和焦点转移，不要机械均分时间。',
+    '19. 如果同一连续动作里出现了明显的左/中/右站位变化、前后景关系变化、镜头角度变化、横移推拉变化、遮挡关系变化或表演节奏断点，也应该继续拆成新的 shot。',
+    '20. 每个 shot 尽量只承载一个清晰动作阶段和一个稳定镜头意图，避免把两个以上关键动作、两个机位意图或两个构图中心混进同一个 shot。',
+    '21. shots 必须按整片绝对时间返回 startTime 和 endTime，严格落在所属 timeAnchor 范围内，按时间升序、无重叠，并尽量覆盖该大片段。',
+    '22. 每个 shot 都要返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote。',
+    '23. shot.summary 不能只写发生了什么，还要简要点出镜头核心动作、主体关系或构图变化。',
+    '24. representativeFrameTime 必须选择该镜头最有代表性的画面，不允许机械取中点；优先选择最适合作为预览图和生成参考图、最能体现该镜头构图与动作状态的画面。',
+    '25. shot.prompt 必须直接服务镜头级视频生成，必须写清：角色数量、谁在前景/中景/后景、人物在画面中的左/中/右位置、远近层次、朝向与视线方向、肢体姿态、运动轨迹、进出画方式、遮挡关系、镜头景别、拍摄角度、镜头运动、光线氛围，以及与前后镜头的连续关系。',
+    '26. shot.prompt 必须使用 @角色名 和 #场景名 引用，不要把资源正文直接展开，也不要只重复大片段摘要。',
+    '27. 如果一个 shot 涉及多个场景，需要在 sceneNames 中全部列出，并在 prompt 中按顺序引用对应的 #场景名。',
+    '28. 如果一个 shot 涉及多个角色，需要明确每个角色各自的位置、主次关系、视线关系和表演状态，而不是只列名字。',
+    '29. 如果角色较少，也至少保证 characters 返回 1 个对象。',
+    '30. 输出必须是合法 JSON，字段名保持与示例完全一致。'
   ].join('\n');
 };
 
@@ -1245,10 +1249,11 @@ const buildPromptOptimizationPrompt = ({
       '要求：',
       '1. 输出必须服务于单镜头生成，而不是复述大片段摘要。',
       '2. 必须保留并优先使用 @角色名 和 #场景名，不要把资源正文直接展开。',
-      '3. 要补足动作、表演节奏、镜头语言、构图和氛围，但不要偏离当前镜头原意。',
-      '4. 需要与大片段最终提示词保持叙事和视觉连续性。',
-      '5. 如果给了镜头涉及场景和角色，优先围绕这些对象优化。',
-      '6. 只返回 JSON。'
+      '3. 必须补足单镜头级别的动作、表演节奏、镜头语言、构图和氛围，但不要偏离当前镜头原意。',
+      '4. 必须写清人物数量、主次关系、人物在画面中的左/中/右位置、前景/中景/后景关系、朝向、视线、肢体姿态、运动路径、进出画方式、遮挡关系、景别、机位角度和镜头运动。',
+      '5. 需要与大片段最终提示词保持叙事和视觉连续性，尽量还原原片镜头语言。',
+      '6. 如果给了镜头涉及场景和角色，优先围绕这些对象优化。',
+      '7. 只返回 JSON。'
     ].join('\n');
   }
 
@@ -1271,7 +1276,7 @@ const buildPromptOptimizationPrompt = ({
     '2. 所有角色名称统一替换成 @角色名。',
     '3. 如果提示词中出现了场景资源库中的场景名称，也统一替换成 #场景名。',
     '4. 如果原始提示词已经包含 @角色名 或 #场景名，继续保留这种引用形式，不要把资源提示词正文直接展开。',
-    '5. 提示词要更适合视频生成或资源设计，补足镜头、场景、动作、氛围，但不要改变核心语义。',
+    '5. 提示词要更适合视频生成或资源设计，补足镜头、场景、动作、氛围，以及主体站位、景别、机位、视线和运动方向，但不要改变核心语义。',
     '6. 只返回 JSON。'
   ].join('\n');
 };

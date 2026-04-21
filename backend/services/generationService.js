@@ -55,6 +55,22 @@ const CHARACTER_REFERENCE_IMAGE_FIELDS = [
   'image_urls'
 ];
 
+const SCENE_REFERENCE_IMAGE_FIELDS = [
+  'referenceImages',
+  'reference_images',
+  'generatedImages',
+  'generated_images',
+  'backgroundImages',
+  'background_images',
+  'sceneImages',
+  'scene_images',
+  'angleImages',
+  'angle_images',
+  'images',
+  'imageUrls',
+  'image_urls'
+];
+
 const sanitizeBasenamePart = (value = '') => {
   return String(value ?? '')
     .trim()
@@ -152,16 +168,100 @@ const collectReferenceEntriesFromResource = (resource, fieldNames, role = 'refer
   );
 };
 
+const getPromptReferenceNames = (prompt = '', marker = '@') => {
+  const normalizedMarker = String(marker ?? '').trim();
+
+  if (!normalizedMarker) {
+    return [];
+  }
+
+  const escapedMarker = normalizedMarker.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const matcher = new RegExp(`${escapedMarker}([\\p{L}\\p{N}_-]+)`, 'gu');
+
+  return Array.from(String(prompt ?? '').matchAll(matcher), (match) => String(match[1] ?? '').trim()).filter(Boolean);
+};
+
 const getPromptMentionNames = (prompt = '') => {
-  return Array.from(String(prompt ?? '').matchAll(/@([\p{L}\p{N}_-]+)/gu), (match) => String(match[1] ?? '').trim()).filter(
-    Boolean
-  );
+  return getPromptReferenceNames(prompt, '@');
 };
 
 const normalizeCharacterIdentity = (value) => {
   return String(value ?? '')
     .trim()
     .toLowerCase();
+};
+
+const getPromptSceneNames = (prompt = '') => {
+  return getPromptReferenceNames(prompt, '#');
+};
+
+const normalizeSceneIdentity = (value) => {
+  return String(value ?? '')
+    .trim()
+    .replace(/\s+/gu, ' ')
+    .toLowerCase();
+};
+
+const dedupeNameList = (values = [], normalizer = (value) => String(value ?? '').trim()) => {
+  const seenValues = new Set();
+  const result = [];
+
+  values.forEach((value) => {
+    const trimmedValue = String(value ?? '').trim();
+
+    if (!trimmedValue) {
+      return;
+    }
+
+    const normalizedValue = normalizer(trimmedValue);
+
+    if (!normalizedValue || seenValues.has(normalizedValue)) {
+      return;
+    }
+
+    seenValues.add(normalizedValue);
+    result.push(trimmedValue);
+  });
+
+  return result;
+};
+
+const findOrderedResourcesByNames = (resources = [], orderedNames = [], normalizer, getIdentifiers) => {
+  const resourceList = Array.isArray(resources) ? resources.filter(Boolean) : [];
+  const seenResourceKeys = new Set();
+  const result = [];
+
+  orderedNames.forEach((orderedName) => {
+    const normalizedOrderedName = normalizer(orderedName);
+
+    if (!normalizedOrderedName) {
+      return;
+    }
+
+    const matchedResource = resourceList.find((resource) => {
+      return getIdentifiers(resource)
+        .map((identifier) => normalizer(identifier))
+        .filter(Boolean)
+        .includes(normalizedOrderedName);
+    });
+
+    if (!matchedResource) {
+      return;
+    }
+
+    const dedupeKey = getIdentifiers(matchedResource)
+      .map((identifier) => normalizer(identifier))
+      .find(Boolean);
+
+    if (!dedupeKey || seenResourceKeys.has(dedupeKey)) {
+      return;
+    }
+
+    seenResourceKeys.add(dedupeKey);
+    result.push(matchedResource);
+  });
+
+  return result;
 };
 
 const getSegmentCharacterNames = (segment) => {
@@ -176,6 +276,22 @@ const getSegmentCharacterNames = (segment) => {
     .filter(Boolean);
 };
 
+const getSegmentSceneNames = (segment) => {
+  const segmentAnalysis = segment?.analysis ?? {};
+  const explicitScenes = Array.isArray(segmentAnalysis.scenes)
+    ? segmentAnalysis.scenes.map((item) => String(item ?? '').trim()).filter(Boolean)
+    : [];
+  const backgroundName = String(segmentAnalysis.backgroundName ?? '').trim();
+
+  return dedupeNameList(
+    [
+      ...explicitScenes,
+      backgroundName
+    ],
+    normalizeSceneIdentity
+  );
+};
+
 const resolveRelevantCharacters = (segment, overallAnalysis, prompt = '') => {
   const overallCharacters = Array.isArray(overallAnalysis?.characters) ? overallAnalysis.characters.filter(Boolean) : [];
 
@@ -183,25 +299,26 @@ const resolveRelevantCharacters = (segment, overallAnalysis, prompt = '') => {
     return [];
   }
 
-  const segmentCharacterNames = new Set(getSegmentCharacterNames(segment).map(normalizeCharacterIdentity));
-  const promptMentionNames = new Set(getPromptMentionNames(prompt).map(normalizeCharacterIdentity));
-  const filterCharacters = (nameSet) =>
-    overallCharacters.filter((character) => {
-      const characterName = normalizeCharacterIdentity(character?.name);
-      const characterId = normalizeCharacterIdentity(character?.id);
-      return (characterName && nameSet.has(characterName)) || (characterId && nameSet.has(characterId));
-    });
-
-  const segmentMatchedCharacters = segmentCharacterNames.size ? filterCharacters(segmentCharacterNames) : [];
-
-  if (segmentMatchedCharacters.length) {
-    return segmentMatchedCharacters;
-  }
-
-  const promptMatchedCharacters = promptMentionNames.size ? filterCharacters(promptMentionNames) : [];
+  const promptMatchedCharacters = findOrderedResourcesByNames(
+    overallCharacters,
+    getPromptMentionNames(prompt),
+    normalizeCharacterIdentity,
+    (character) => [character?.name, character?.id]
+  );
 
   if (promptMatchedCharacters.length) {
     return promptMatchedCharacters;
+  }
+
+  const segmentMatchedCharacters = findOrderedResourcesByNames(
+    overallCharacters,
+    getSegmentCharacterNames(segment),
+    normalizeCharacterIdentity,
+    (character) => [character?.name, character?.id]
+  );
+
+  if (segmentMatchedCharacters.length) {
+    return segmentMatchedCharacters;
   }
 
   return overallCharacters;
@@ -222,6 +339,33 @@ const buildCharacterFrameReference = async ({
 
   const extractedFrame = await extractVideoFrame(sourceVideoAbsolutePath, representativeFrameTime, {
     basename: `${basenamePrefix}-${sanitizeBasenamePart(character?.id || character?.name || 'character') || 'character'}-reference`
+  });
+
+  if (!extractedFrame?.filePath) {
+    return null;
+  }
+
+  return {
+    relativePath: extractedFrame.filePath,
+    role: 'reference_image'
+  };
+};
+
+const buildSceneFrameReference = async ({
+  background,
+  sourceVideoAbsolutePath,
+  basenamePrefix
+}) => {
+  const representativeFrameTime = Number(
+    background?.representativeFrameTime ?? background?.representative_frame_time
+  );
+
+  if (!sourceVideoAbsolutePath || !Number.isFinite(representativeFrameTime) || representativeFrameTime < 0) {
+    return null;
+  }
+
+  const extractedFrame = await extractVideoFrame(sourceVideoAbsolutePath, representativeFrameTime, {
+    basename: `${basenamePrefix}-${sanitizeBasenamePart(background?.id || background?.name || 'scene') || 'scene'}-reference`
   });
 
   if (!extractedFrame?.filePath) {
@@ -296,24 +440,134 @@ const collectCharacterReferenceImages = async ({
   return dedupeReferenceEntries(referenceImages).slice(0, 9);
 };
 
-const collectSceneReferenceImages = async ({ videoId, backgroundBinding }) => {
-  if (!videoId || !backgroundBinding?.backgroundId) {
+const resolveRelevantScenes = ({ segment, overallAnalysis, prompt = '', sceneNames = [], backgroundBinding = null }) => {
+  const overallBackgrounds = Array.isArray(overallAnalysis?.backgrounds) ? overallAnalysis.backgrounds.filter(Boolean) : [];
+
+  if (!overallBackgrounds.length) {
     return [];
   }
 
-  const persistedSceneAssets = await listCompletedResourceImageAssetsByResourceKeys({
-    videoId,
-    resourceType: 'scene',
-    resourceKeys: [backgroundBinding.backgroundId, backgroundBinding.backgroundName]
+  const promptMatchedScenes = findOrderedResourcesByNames(
+    overallBackgrounds,
+    getPromptSceneNames(prompt),
+    normalizeSceneIdentity,
+    (background) => [background?.name, background?.id, background?.title, background?.sceneName, background?.scene_name]
+  );
+
+  if (promptMatchedScenes.length) {
+    return promptMatchedScenes;
+  }
+
+  const explicitSceneNames = dedupeNameList(
+    [
+      ...sceneNames,
+      ...getSegmentSceneNames(segment)
+    ],
+    normalizeSceneIdentity
+  );
+  const explicitMatchedScenes = findOrderedResourcesByNames(
+    overallBackgrounds,
+    explicitSceneNames,
+    normalizeSceneIdentity,
+    (background) => [background?.name, background?.id, background?.title, background?.sceneName, background?.scene_name]
+  );
+
+  if (explicitMatchedScenes.length) {
+    return explicitMatchedScenes;
+  }
+
+  const backgroundMatchedScenes = findOrderedResourcesByNames(
+    overallBackgrounds,
+    [backgroundBinding?.backgroundId, backgroundBinding?.backgroundName],
+    normalizeSceneIdentity,
+    (background) => [background?.name, background?.id, background?.title, background?.sceneName, background?.scene_name]
+  );
+
+  if (backgroundMatchedScenes.length) {
+    return backgroundMatchedScenes;
+  }
+
+  return overallBackgrounds;
+};
+
+const collectSceneReferenceImages = async ({
+  videoId,
+  segment,
+  overallAnalysis,
+  prompt = '',
+  sceneNames = [],
+  backgroundBinding,
+  sourceVideoAbsolutePath = '',
+  basenamePrefix = 'scene-reference'
+}) => {
+  const relatedScenes = resolveRelevantScenes({
+    segment,
+    overallAnalysis,
+    prompt,
+    sceneNames,
+    backgroundBinding
   });
 
-  return dedupeReferenceEntries(
-    persistedSceneAssets.map((asset) => ({
-      relativePath: asset.asset_path || '',
-      url: asset.asset_url || '',
-      role: 'reference_image'
-    }))
-  ).slice(0, 3);
+  if (!relatedScenes.length) {
+    return [];
+  }
+
+  const persistedSceneAssetMap = new Map();
+
+  if (videoId) {
+    const persistedSceneAssets = await listCompletedResourceImageAssetsByResourceKeys({
+      videoId,
+      resourceType: 'scene',
+      resourceKeys: relatedScenes.flatMap((background) => [background?.id, background?.name]).filter(Boolean)
+    });
+
+    persistedSceneAssets.forEach((asset) => {
+      const currentAssets = persistedSceneAssetMap.get(asset.resource_id) ?? [];
+      currentAssets.push({
+        relativePath: asset.asset_path || '',
+        url: asset.asset_url || '',
+        role: 'reference_image'
+      });
+      persistedSceneAssetMap.set(asset.resource_id, currentAssets);
+    });
+  }
+
+  const referenceImages = [];
+
+  for (const background of relatedScenes) {
+    const persistedAssetsForScene = dedupeReferenceEntries([
+      ...(persistedSceneAssetMap.get(String(background?.id ?? '').trim()) ?? []),
+      ...(persistedSceneAssetMap.get(String(background?.name ?? '').trim()) ?? [])
+    ]).slice(0, 2);
+
+    if (persistedAssetsForScene.length) {
+      referenceImages.push(...persistedAssetsForScene);
+      continue;
+    }
+
+    const explicitReferenceImages = collectReferenceEntriesFromResource(
+      background,
+      SCENE_REFERENCE_IMAGE_FIELDS,
+      'reference_image'
+    ).slice(0, 2);
+
+    if (explicitReferenceImages.length) {
+      referenceImages.push(...explicitReferenceImages);
+      continue;
+    }
+
+    const fallbackFrameReference = await buildSceneFrameReference({
+      background,
+      sourceVideoAbsolutePath,
+      basenamePrefix
+    });
+
+    if (fallbackFrameReference) {
+      referenceImages.push(fallbackFrameReference);
+    }
+  }
+
+  return dedupeReferenceEntries(referenceImages).slice(0, 6);
 };
 
 const expandPromptMentions = (prompt, characters, backgrounds) => {
@@ -440,6 +694,35 @@ const getSeedDanceDurationForSegment = (segment) => {
   return Math.min(15, Math.max(4, roundedDurationSeconds));
 };
 
+const buildSeedDanceReconstructionPrompt = ({
+  prompt = '',
+  characterNames = [],
+  sceneNames = [],
+  isShot = false
+}) => {
+  const normalizedCharacterNames = dedupeNameList(characterNames, normalizeCharacterIdentity);
+  const normalizedSceneNames = dedupeNameList(sceneNames, normalizeSceneIdentity);
+  const basePrompt = String(prompt ?? '').trim();
+
+  return [
+    basePrompt,
+    isShot ? '严格还原原片当前小镜头，不要把多个镜头语义混成一个新镜头。' : '严格延续原片当前片段的剧情、镜头语言和表演逻辑。',
+    isShot
+      ? '第一张参考图是该小镜头的典型帧，必须优先用它锁定构图、景别、机位朝向、人物站位、前后景关系、视线方向和动作瞬间。'
+      : '参考视频是当前片段的原始镜头依据，必须优先沿用它的运动节奏、镜头顺序和空间连续性。',
+    normalizedCharacterNames.length
+      ? `必须把这些角色三视图作为人物身份真值：${normalizedCharacterNames.map((name) => `@${name}`).join('、')}。`
+      : '如果提供了角色三视图，必须优先用它们锁定角色身份、脸型、发型、服装、比例和体态。',
+    normalizedSceneNames.length
+      ? `必须把这些场景参考图作为空间真值：${normalizedSceneNames.map((name) => `#${name}`).join('、')}。`
+      : '如果提供了场景参考图，必须优先用它们锁定空间结构、布景、材质、布光和色彩。',
+    '保持原片相同或最接近的景别、拍摄高度、视角方向、人物左右位置、前中后景层次、遮挡关系、进出画路径、视线方向、镜头运动和动作节奏。',
+    '不要新增原片没有的角色、场景切换、道具焦点、情节动作或夸张镜头运动。'
+  ]
+    .filter(Boolean)
+    .join('\n');
+};
+
 const processGenerationTask = async (taskId) => {
   const task = await GenerationTask.findByPk(taskId, {
     include: [
@@ -507,6 +790,16 @@ const processGenerationTask = async (taskId) => {
     }
 
     const optimizedPrompt = expandPromptMentions(task.prompt, characters, overallAnalysis?.backgrounds ?? []);
+    const seedDancePrompt = buildSeedDanceReconstructionPrompt({
+      prompt: optimizedPrompt,
+      characterNames: [...getPromptMentionNames(task.prompt), ...getSegmentCharacterNames(task.segment)],
+      sceneNames: [
+        ...getPromptSceneNames(task.prompt),
+        ...getSegmentSceneNames(task.segment),
+        backgroundBinding?.backgroundName || ''
+      ],
+      isShot: false
+    });
     const characterReferenceImages = await collectCharacterReferenceImages({
       videoId: task.segment?.video?.id,
       segment: task.segment,
@@ -517,7 +810,13 @@ const processGenerationTask = async (taskId) => {
     });
     const sceneReferenceImages = await collectSceneReferenceImages({
       videoId: task.segment?.video?.id,
-      backgroundBinding
+      segment: task.segment,
+      overallAnalysis,
+      prompt: task.prompt,
+      sceneNames: getSegmentSceneNames(task.segment),
+      backgroundBinding,
+      sourceVideoAbsolutePath,
+      basenamePrefix: `segment-${task.segmentId}-task-${task.id}`
     });
     const referenceImages = dedupeReferenceEntries([
       ...characterReferenceImages,
@@ -533,7 +832,7 @@ const processGenerationTask = async (taskId) => {
     const result = await generateWithSeedDance({
       sourceAbsolutePath,
       sourcePublicUrl,
-      prompt: optimizedPrompt,
+      prompt: seedDancePrompt,
       basename: `segment-${task.segmentId}-task-${task.id}`,
       duration: getSeedDanceDurationForSegment(task.segment),
       referenceImages,
@@ -629,12 +928,17 @@ const getGenerationTaskStatus = async (taskId) => {
 };
 
 export {
+  buildSeedDanceReconstructionPrompt,
   broadcastGenerationTaskUpdate,
   collectCharacterReferenceImages,
   collectSceneReferenceImages,
   expandPromptMentions,
   getBackgroundBindingForSegment,
+  getPromptMentionNames,
+  getPromptSceneNames,
   getGenerationTaskStatus,
+  resolveRelevantCharacters,
+  resolveRelevantScenes,
   serializeGenerationTask,
   startGeneration
 };
