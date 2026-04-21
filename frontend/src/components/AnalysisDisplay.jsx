@@ -896,13 +896,13 @@ const AnalysisDisplay = ({
     );
   };
 
-  const renderGeneratedResourceStrip = (resource) => {
+  const renderGeneratedResourceStrip = (resource, options = {}) => {
     const variantPrompts = getResourceVariantPrompts(resource);
     const optimized = Boolean(resourcePromptOverrides[getResourceKey(resource)]?.prompt);
     const generatedAssets = getResourceImageAssetsForResource(resource);
     const generatedAssetMap = new Map(generatedAssets.map((asset) => [asset.variantId, asset]));
     const isGenerating = resourceGeneratingKeys.includes(getResourceKey(resource));
-    const stackClassName = 'resource-generated-stack';
+    const stackClassName = ['resource-generated-stack', options.className || ''].filter(Boolean).join(' ');
 
     return (
       <div className={stackClassName}>
@@ -1210,6 +1210,8 @@ const AnalysisDisplay = ({
     const variantPrompts = getResourceVariantPrompts(resourceEditor);
     const currentResourceKey = getResourceKey(resourceEditor);
     const isOptimizing = resourceOptimizingKey === currentResourceKey;
+    const generatedAssets = getResourceImageAssetsForResource(resourceEditor);
+    const generationSummary = getResourceGenerationSummary(generatedAssets);
 
     return (
       <ModalSheet
@@ -1225,19 +1227,37 @@ const AnalysisDisplay = ({
       >
         <div className="space-y-4">
           <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-            <div className="rounded-[22px] border border-white/10 bg-black/20 px-4 py-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-white/45">
-                原始参考帧
-              </p>
-              <div className="mt-3">
-                <VideoFramePreview
-                  videoUrl={analysisFrameSource}
-                  timeSeconds={resourceEditor.frameTime}
-                  originalTimeSeconds={resourceEditor.frameTime}
-                  label={resourceEditor.resourceName}
-                  note={resourceEditor.frameNote}
-                  requestedTimeLabel="整片时间"
-                />
+            <div className="space-y-3">
+              <div className="rounded-[22px] border border-white/10 bg-black/20 px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-white/45">
+                  原始参考帧
+                </p>
+                <div className="mt-3">
+                  <VideoFramePreview
+                    videoUrl={analysisFrameSource}
+                    timeSeconds={resourceEditor.frameTime}
+                    originalTimeSeconds={resourceEditor.frameTime}
+                    label={resourceEditor.resourceName}
+                    note={resourceEditor.frameNote}
+                    requestedTimeLabel="整片时间"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-[22px] border border-white/10 bg-black/20 px-4 py-4">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-white/45">
+                    {resourceEditor.resourceType === 'character' ? '三视图预览' : '三角度预览'}
+                  </p>
+                  <span className="resource-mini-chip resource-mini-chip-muted">
+                    已生成 {generationSummary.completedCount}/{variantPrompts.length}
+                  </span>
+                </div>
+                <div className="mt-3">
+                  {renderGeneratedResourceStrip(resourceEditor, {
+                    className: 'resource-generated-stack-modal'
+                  })}
+                </div>
               </div>
             </div>
 
