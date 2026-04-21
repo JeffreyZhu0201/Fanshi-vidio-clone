@@ -1,4 +1,5 @@
 import { Analysis, GenerationTask, Segment, Video } from '../models/index.js';
+import env from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { TASK_STATUS } from '../config/constants.js';
 import { ensureBackgroundAsset } from './backgroundAssetService.js';
@@ -13,6 +14,7 @@ const serializeGenerationMeta = (task) => {
 
   return {
     engine: String(taskMeta.engine ?? '').trim(),
+    ratio: String(taskMeta.ratio ?? '').trim(),
     is_mock: Boolean(taskMeta.isMock),
     remote_task_id: String(taskMeta.remoteTaskId ?? '').trim(),
     fallback_reason: String(taskMeta.fallbackReason ?? '').trim(),
@@ -37,6 +39,11 @@ const serializeGenerationTask = (task) => ({
 
 const broadcastGenerationTaskUpdate = (task) => {
   broadcastRealtimeEvent('generation:progress', serializeGenerationTask(task));
+};
+
+const normalizeGenerationRatio = (value) => {
+  const trimmedValue = String(value ?? '').trim();
+  return /^[1-9]\d{0,2}:[1-9]\d{0,2}$/u.test(trimmedValue) ? trimmedValue : env.SEED_DANCE_RATIO;
 };
 
 const CHARACTER_REFERENCE_IMAGE_FIELDS = [
@@ -834,6 +841,7 @@ const processGenerationTask = async (taskId) => {
       sourcePublicUrl,
       prompt: seedDancePrompt,
       basename: `segment-${task.segmentId}-task-${task.id}`,
+      ratio: normalizeGenerationRatio(task.meta?.ratio),
       duration: getSeedDanceDurationForSegment(task.segment),
       referenceImages,
       referenceVideos: [
@@ -877,7 +885,7 @@ const processGenerationTask = async (taskId) => {
   }
 };
 
-const startGeneration = async ({ segmentId, prompt }) => {
+const startGeneration = async ({ segmentId, prompt, ratio }) => {
   const segment = await Segment.findByPk(segmentId);
 
   if (!segment) {
@@ -888,6 +896,8 @@ const startGeneration = async ({ segmentId, prompt }) => {
 
   assertSeedDanceReady();
 
+  const resolvedRatio = normalizeGenerationRatio(ratio);
+
   const task = await GenerationTask.create({
     segmentId,
     prompt,
@@ -895,6 +905,7 @@ const startGeneration = async ({ segmentId, prompt }) => {
     progress: 0,
     meta: {
       source: 'segment_generation',
+      ratio: resolvedRatio,
       engine: '',
       isMock: false,
       remoteTaskId: '',
@@ -911,7 +922,8 @@ const startGeneration = async ({ segmentId, prompt }) => {
   return {
     task_id: task.id,
     status: task.status,
-    progress: task.progress
+    progress: task.progress,
+    ratio: resolvedRatio
   };
 };
 

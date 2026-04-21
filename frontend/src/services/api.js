@@ -232,29 +232,32 @@ const getTaskStatus = async (taskId) => {
   return response.data;
 };
 
-const generateSegment = async (segmentId, prompt) => {
+const generateSegment = async (segmentId, prompt, ratio = '') => {
   const response = await api.post('/generation/generate', {
     segment_id: segmentId,
-    prompt
+    prompt,
+    ...(ratio ? { ratio } : {})
   });
 
   return response.data;
 };
 
-const generateShot = async (segmentId, shotId, prompt) => {
+const generateShot = async (segmentId, shotId, prompt, ratio = '') => {
   const response = await api.post('/generation/shots/generate', {
     segment_id: segmentId,
     shot_id: shotId,
-    prompt
+    prompt,
+    ...(ratio ? { ratio } : {})
   });
 
   return response.data;
 };
 
-const generateShotBatch = async (segmentId, shots = []) => {
+const generateShotBatch = async (segmentId, shots = [], ratio = '') => {
   const response = await api.post('/generation/shots/generate-batch', {
     segment_id: segmentId,
-    shots
+    shots,
+    ...(ratio ? { ratio } : {})
   });
 
   return response.data;

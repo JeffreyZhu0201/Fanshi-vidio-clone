@@ -192,6 +192,8 @@ const useGeneration = () => {
   const updateTask = useGenerationStore((state) => state.updateTask);
   const setMergeProgress = useGenerationStore((state) => state.setMergeProgress);
   const setSegmentsError = useGenerationStore((state) => state.setSegmentsError);
+  const videoRatio = useGenerationStore((state) => state.videoRatio);
+  const setVideoRatio = useGenerationStore((state) => state.setVideoRatio);
   const [analyzingSegmentId, setAnalyzingSegmentId] = useState(0);
   const [optimizingSegmentId, setOptimizingSegmentId] = useState(0);
   const [generatingSegmentIds, setGeneratingSegmentIds] = useState([]);
@@ -209,6 +211,14 @@ const useGeneration = () => {
   const generationPollingTokenRef = useRef(new Map());
   const shotGenerationPollingTokenRef = useRef(new Map());
   const mergePollingTokenRef = useRef(0);
+
+  const getResolvedVideoRatio = () => {
+    const normalizedRatio = String(useGenerationStore.getState().videoRatio ?? videoRatio ?? '')
+      .trim()
+      .toLowerCase();
+
+    return /^[1-9]\d{0,2}:[1-9]\d{0,2}$/u.test(normalizedRatio) ? normalizedRatio : '16:9';
+  };
 
   const isVideoScopedRequestCancelled = (requestToken, videoId, tokenRef) => {
     const latestVideoId = useVideoStore.getState().currentVideo?.id ?? activeVideoIdRef.current ?? 0;
@@ -1082,7 +1092,7 @@ const useGeneration = () => {
     }
 
     try {
-      const startPayload = await generateSegment(segmentId, sourcePrompt);
+      const startPayload = await generateSegment(segmentId, sourcePrompt, getResolvedVideoRatio());
       activeTaskId = startPayload.task_id ?? '';
 
       if (isGenerationPollingCancelled(segmentId, requestToken, requestVideoId)) {
@@ -1188,7 +1198,7 @@ const useGeneration = () => {
     }
 
     try {
-      const startPayload = await generateShot(segmentId, shotId, sourcePrompt);
+      const startPayload = await generateShot(segmentId, shotId, sourcePrompt, getResolvedVideoRatio());
       activeTaskId = startPayload.task_id ?? '';
 
       if (isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
@@ -1280,7 +1290,8 @@ const useGeneration = () => {
         shotsForGeneration.map((shot) => ({
           shot_id: shot.id,
           prompt: String(shot.prompt ?? '').trim() || String(shot.summary ?? '').trim()
-        }))
+        })),
+        getResolvedVideoRatio()
       );
       const nextSummary = {
         segment_id: segmentId,
@@ -1455,6 +1466,7 @@ const useGeneration = () => {
     backgroundAssetsError,
     tasks,
     mergeProgress,
+    videoRatio,
     analyzingSegmentId,
     optimizingSegmentId,
     generatingSegmentIds,
@@ -1468,6 +1480,7 @@ const useGeneration = () => {
     optimizeSegmentPrompt,
     optimizeShotPrompt,
     saveSegmentShotDefinitions,
+    setVideoRatio,
     generateSegmentVideo,
     generateShotVideo,
     generateAllShotsForSegment,

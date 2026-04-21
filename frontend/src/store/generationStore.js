@@ -2,6 +2,8 @@ import { create } from 'zustand';
 
 const SPLIT_TASK_STORAGE_KEY = 'fanshi.activeSplitTaskId';
 const MERGE_TASK_STORAGE_KEY = 'fanshi.activeMergeTaskId';
+const GENERATION_RATIO_STORAGE_KEY = 'fanshi.videoRatio';
+const DEFAULT_VIDEO_RATIO = '16:9';
 
 const getSessionStorage = () => {
   if (typeof window === 'undefined') {
@@ -33,6 +35,23 @@ const generationSessionStorage = {
   },
   clearMergeTaskId: () => {
     getSessionStorage()?.removeItem(MERGE_TASK_STORAGE_KEY);
+  },
+  getVideoRatio: () => {
+    const persistedRatio = getSessionStorage()?.getItem(GENERATION_RATIO_STORAGE_KEY) || '';
+    return /^[1-9]\d{0,2}:[1-9]\d{0,2}$/u.test(persistedRatio) ? persistedRatio : DEFAULT_VIDEO_RATIO;
+  },
+  setVideoRatio: (ratio) => {
+    const storage = getSessionStorage();
+    const normalizedRatio = /^[1-9]\d{0,2}:[1-9]\d{0,2}$/u.test(String(ratio ?? '').trim())
+      ? String(ratio).trim()
+      : DEFAULT_VIDEO_RATIO;
+
+    if (storage) {
+      storage.setItem(GENERATION_RATIO_STORAGE_KEY, normalizedRatio);
+    }
+  },
+  clearVideoRatio: () => {
+    getSessionStorage()?.removeItem(GENERATION_RATIO_STORAGE_KEY);
   }
 };
 
@@ -112,6 +131,7 @@ const buildResetGenerationState = () => {
 };
 
 const useGenerationStore = create((set) => ({
+  videoRatio: generationSessionStorage.getVideoRatio(),
   segments: [],
   backgroundAssets: [],
   tasks: [],
@@ -274,6 +294,18 @@ const useGenerationStore = create((set) => ({
     set({
       segmentsError,
       segmentsLoading: false
+    }),
+  setVideoRatio: (videoRatio) =>
+    set(() => {
+      const normalizedRatio = /^[1-9]\d{0,2}:[1-9]\d{0,2}$/u.test(String(videoRatio ?? '').trim())
+        ? String(videoRatio).trim()
+        : DEFAULT_VIDEO_RATIO;
+
+      generationSessionStorage.setVideoRatio(normalizedRatio);
+
+      return {
+        videoRatio: normalizedRatio
+      };
     }),
   resetGenerationContext: () =>
     set(() => {

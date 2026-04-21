@@ -557,10 +557,12 @@ describe('Backend API integration', () => {
     const shotStartResponse = await request(app).post('/api/generation/shots/generate').send({
       segment_id: 301,
       shot_id: 'shot_1',
-      prompt: '@主角 完成镜头动作。'
+      prompt: '@主角 完成镜头动作。',
+      ratio: '9:16'
     });
     const shotBatchResponse = await request(app).post('/api/generation/shots/generate-batch').send({
       segment_id: 301,
+      ratio: '1:1',
       shots: [
         {
           shot_id: 'shot_1',
@@ -595,6 +597,22 @@ describe('Backend API integration', () => {
     expect(downloadResponse.headers['content-disposition']).toContain('merged-demo.mp4');
     expect(deleteResponse.status).toBe(200);
     expect(deleteResponse.body.success).toBe(true);
+    expect(shotGenerationServiceMock.startShotGeneration).toHaveBeenCalledWith({
+      segmentId: 301,
+      shotId: 'shot_1',
+      prompt: '@主角 完成镜头动作。',
+      ratio: '9:16'
+    });
+    expect(shotGenerationServiceMock.startShotBatchGeneration).toHaveBeenCalledWith({
+      segmentId: 301,
+      shots: [
+        {
+          shot_id: 'shot_1',
+          prompt: '@主角 完成镜头动作。'
+        }
+      ],
+      ratio: '1:1'
+    });
     expect(segmentServiceMock.updateSegmentShotsById).toHaveBeenCalledWith(301, [
       {
         id: 'temp-shot-1',
@@ -627,7 +645,8 @@ describe('Backend API integration', () => {
     const notFoundResponse = await request(app).get('/api/analysis/999');
     const serverErrorResponse = await request(app).post('/api/generation/generate').send({
       segment_id: 301,
-      prompt: '@主角 走进场景。'
+      prompt: '@主角 走进场景。',
+      ratio: '16:9'
     });
     const missingTaskResponse = await request(app).get('/api/tasks/missing-task-404');
     const unknownRouteResponse = await request(app).get('/api/unknown-endpoint');
@@ -638,6 +657,11 @@ describe('Backend API integration', () => {
     expect(notFoundResponse.body.message).toBe('Analysis not found.');
     expect(serverErrorResponse.status).toBe(503);
     expect(serverErrorResponse.body.message).toContain('Seedance 未配置完成');
+    expect(generationServiceMock.startGeneration).toHaveBeenCalledWith({
+      segmentId: 301,
+      prompt: '@主角 走进场景。',
+      ratio: '16:9'
+    });
     expect(missingTaskResponse.status).toBe(404);
     expect(missingTaskResponse.body.message).toBe('Task not found.');
     expect(unknownRouteResponse.status).toBe(404);

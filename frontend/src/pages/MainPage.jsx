@@ -43,6 +43,8 @@ const CompactStat = ({ label, value, note }) => {
   );
 };
 
+const VIDEO_RATIO_OPTIONS = ['16:9', '9:16', '1:1', '4:3', '3:4'];
+
 const MainPage = () => {
   const [systemModalOpen, setSystemModalOpen] = useState(false);
   const [exportDockOpen, setExportDockOpen] = useState(false);
@@ -65,6 +67,7 @@ const MainPage = () => {
     backgroundAssetsLoading,
     backgroundAssetsError,
     mergeProgress,
+    videoRatio,
     analyzingSegmentId,
     optimizingSegmentId,
     generatingSegmentIds,
@@ -78,6 +81,7 @@ const MainPage = () => {
     optimizeSegmentPrompt,
     optimizeShotPrompt,
     saveSegmentShotDefinitions,
+    setVideoRatio,
     generateSegmentVideo,
     generateShotVideo,
     generateAllShotsForSegment,
@@ -269,6 +273,24 @@ const MainPage = () => {
           </div>
 
           <div className="compact-topbar-actions">
+            <label className="compact-ratio-chip" htmlFor="global-video-ratio">
+              <span className="compact-ratio-copy">
+                <span className="compact-ratio-label">生成比例</span>
+                <span className="compact-ratio-note">子镜头与片段统一沿用</span>
+              </span>
+              <select
+                id="global-video-ratio"
+                className="compact-ratio-select"
+                value={videoRatio}
+                onChange={(event) => setVideoRatio(event.target.value)}
+              >
+                {VIDEO_RATIO_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
             <StatusBadge status={backendStatus} label={`后端 ${backendStatusLabel}`} />
             <StatusBadge
               status={realtimeStatus}
@@ -388,6 +410,7 @@ const MainPage = () => {
               </div>
 
               <div className="stage-toolbar compact-toolbar">
+                <span className="toolbar-pill">全局比例 {videoRatio}</span>
                 <span className="toolbar-pill">Prompt 就绪 {promptsReady}</span>
                 <span className="toolbar-pill">运行中 {activeGenerationCount}</span>
                 <span className="toolbar-pill">已生成 {generatedSegments}</span>

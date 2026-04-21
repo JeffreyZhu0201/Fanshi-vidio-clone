@@ -1,4 +1,5 @@
 import { Analysis, GenerationTask, Segment, ShotGenerationTask, Video } from '../models/index.js';
+import env from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { TASK_STATUS } from '../config/constants.js';
 import { ensureBackgroundAsset } from './backgroundAssetService.js';
@@ -102,11 +103,17 @@ const getNormalizedSegmentShots = (segment) => {
   });
 };
 
+const normalizeGenerationRatio = (value) => {
+  const trimmedValue = String(value ?? '').trim();
+  return /^[1-9]\d{0,2}:[1-9]\d{0,2}$/u.test(trimmedValue) ? trimmedValue : env.SEED_DANCE_RATIO;
+};
+
 const serializeShotGenerationMeta = (task) => {
   const taskMeta = task?.meta ?? {};
 
   return {
     engine: String(taskMeta.engine ?? '').trim(),
+    ratio: String(taskMeta.ratio ?? '').trim(),
     is_mock: Boolean(taskMeta.isMock),
     remote_task_id: String(taskMeta.remoteTaskId ?? '').trim(),
     fallback_reason: String(taskMeta.fallbackReason ?? '').trim(),
@@ -734,6 +741,7 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
       sourcePublicUrl,
       prompt: seedDancePrompt,
       basename: `segment-${segment.id}-${task.shotId}-task-${task.id}`,
+      ratio: normalizeGenerationRatio(task.meta?.ratio),
       duration: getShotDurationForGeneration(shot),
       referenceImages,
       referenceVideos: [
@@ -797,10 +805,11 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
   return ShotGenerationTask.findByPk(task.id);
 };
 
-const startShotGeneration = async ({ segmentId, shotId, prompt }) => {
+const startShotGeneration = async ({ segmentId, shotId, prompt, ratio }) => {
   const segment = await getSegmentWithContextById(segmentId);
   const shot = getShotByIdFromSegment(segment, shotId);
   const resolvedPrompt = String(prompt ?? '').trim() || shot.prompt;
+  const resolvedRatio = normalizeGenerationRatio(ratio);
 
   if (!resolvedPrompt) {
     throw new AppError('请先提供镜头提示词，再生成小镜头。', 400, {
@@ -823,6 +832,7 @@ const startShotGeneration = async ({ segmentId, shotId, prompt }) => {
     progress: 0,
     meta: {
       source: 'shot_generation',
+      ratio: resolvedRatio,
       engine: '',
       isMock: false,
       remoteTaskId: '',
@@ -841,9 +851,10 @@ const startShotGeneration = async ({ segmentId, shotId, prompt }) => {
   return serializeShotGenerationTask(task);
 };
 
-const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, startedAt = '' }) => {
+const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, ratio, startedAt = '' }) => {
   const segment = await getSegmentWithContextById(segmentId);
   const normalizedShots = getNormalizedSegmentShots(segment);
+  const resolvedRatio = normalizeGenerationRatio(ratio);
 
   for (const shot of normalizedShots) {
     const overridePrompt = String(promptOverrides[shot.id] ?? '').trim();
@@ -860,6 +871,7 @@ const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, sta
       meta: {
         source: 'shot_generation_batch',
         batchStartedAt: startedAt,
+        ratio: resolvedRatio,
         engine: '',
         isMock: false,
         remoteTaskId: '',
@@ -889,9 +901,10 @@ const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, sta
   }
 };
 
-const startShotBatchGeneration = async ({ segmentId, shots = [] }) => {
+const startShotBatchGeneration = async ({ segmentId, shots = [], ratio }) => {
   const segment = await getSegmentWithContextById(segmentId);
   const normalizedShots = getNormalizedSegmentShots(segment);
+  const resolvedRatio = normalizeGenerationRatio(ratio);
 
   if (!normalizedShots.length) {
     throw new AppError('当前大片段没有可用的小镜头。', 400, {
@@ -931,6 +944,7 @@ const startShotBatchGeneration = async ({ segmentId, shots = [] }) => {
     void processShotBatchGeneration({
       segmentId,
       promptOverrides,
+      ratio: resolvedRatio,
       startedAt
     });
   });
@@ -939,7 +953,8 @@ const startShotBatchGeneration = async ({ segmentId, shots = [] }) => {
     segment_id: segmentId,
     shot_count: normalizedShots.length,
     status: TASK_STATUS.processing,
-    started_at: startedAt
+    started_at: startedAt,
+    ratio: resolvedRatio
   };
 };
 

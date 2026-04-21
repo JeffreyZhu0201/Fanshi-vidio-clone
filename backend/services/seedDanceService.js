@@ -466,6 +466,7 @@ const createRemoteGenerationTask = async ({
   referenceImages = [],
   referenceVideos = [],
   referenceAudios = [],
+  ratio,
   duration
 }) => {
   return fetchSeedDanceJson(resolveSeedDanceCreateEndpoint(), {
@@ -478,6 +479,7 @@ const createRemoteGenerationTask = async ({
         referenceImages,
         referenceVideos,
         referenceAudios,
+        ratio,
         duration
       })
     )
@@ -523,6 +525,7 @@ const generateSegment = async ({
   referenceImages = [],
   referenceVideos = [],
   referenceAudios = [],
+  ratio,
   duration
 }) => {
   const extension = path.extname(sourceAbsolutePath) || '.mp4';
@@ -537,6 +540,7 @@ const generateSegment = async ({
         referenceImages,
         referenceVideos,
         referenceAudios,
+        ratio,
         duration
       });
       const taskId = extractSeedDanceTaskId(createResult);

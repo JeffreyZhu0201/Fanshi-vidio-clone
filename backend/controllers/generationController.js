@@ -8,7 +8,8 @@ import {
 const generateSegment = async (request, response) => {
   const result = await startGeneration({
     segmentId: request.body.segment_id,
-    prompt: request.body.prompt
+    prompt: request.body.prompt,
+    ratio: request.body.ratio
   });
 
   response.status(202).json(result);
@@ -23,7 +24,8 @@ const generateShot = async (request, response) => {
   const result = await startShotGeneration({
     segmentId: request.body.segment_id,
     shotId: request.body.shot_id,
-    prompt: request.body.prompt
+    prompt: request.body.prompt,
+    ratio: request.body.ratio
   });
 
   response.status(202).json(result);
@@ -32,7 +34,8 @@ const generateShot = async (request, response) => {
 const generateShotBatch = async (request, response) => {
   const result = await startShotBatchGeneration({
     segmentId: request.body.segment_id,
-    shots: request.body.shots ?? []
+    shots: request.body.shots ?? [],
+    ratio: request.body.ratio
   });
 
   response.status(202).json(result);
