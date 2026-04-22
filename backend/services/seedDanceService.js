@@ -52,6 +52,7 @@ const MIN_REFERENCE_VIDEO_DURATION_SECONDS = 1.8;
 const MIN_REFERENCE_VIDEO_DIMENSION = 300;
 const MIN_REFERENCE_VIDEO_PIXEL_COUNT = 409600;
 const MIN_SEED_DANCE_GENERATION_DURATION_SECONDS = 4;
+const SEED_DANCE_SENSITIVE_IMAGE_ERROR_PATTERN = /InputImageSensitiveContentDetected(?:\.[A-Za-z]+)?/u;
 
 const shouldAllowSeedDanceMockFallback = () => {
   return Boolean(env.SEED_DANCE_ALLOW_MOCK_FALLBACK);
@@ -700,6 +701,106 @@ const createRemoteGenerationTask = async ({
   });
 };
 
+const isSeedDanceSensitiveImageError = (error) => {
+  const message = String(error?.message ?? '').trim();
+  return Boolean(message) && SEED_DANCE_SENSITIVE_IMAGE_ERROR_PATTERN.test(message);
+};
+
+const isFrameDerivedReferenceImage = (entry) => {
+  const normalizedEntry = normalizeReferenceEntry(entry, 'reference_image');
+
+  if (!normalizedEntry) {
+    return false;
+  }
+
+  const candidates = [
+    normalizedEntry.relativePath,
+    normalizedEntry.absolutePath,
+    normalizedEntry.url
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).replace(/\\/gu, '/').toLowerCase());
+
+  return candidates.some((value) => /(^|\/)frames\//u.test(value) || value.includes('/frames/'));
+};
+
+const createRemoteGenerationTaskWithImageFallback = async ({
+  prompt,
+  sourcePublicUrl = '',
+  sourceAbsolutePath = '',
+  referenceImages = [],
+  referenceVideos = [],
+  referenceAudios = [],
+  ratio,
+  duration
+}) => {
+  const attempts = [
+    {
+      referenceImages,
+      fallbackReason: ''
+    }
+  ];
+  const referenceImagesWithoutFrames = referenceImages.filter((entry) => !isFrameDerivedReferenceImage(entry));
+
+  if (referenceImagesWithoutFrames.length < referenceImages.length) {
+    attempts.push({
+      referenceImages: referenceImagesWithoutFrames,
+      fallbackReason: 'seedance_retried_without_frame_reference_images'
+    });
+  }
+
+  if (referenceImages.length) {
+    attempts.push({
+      referenceImages: [],
+      fallbackReason: 'seedance_retried_without_any_reference_images'
+    });
+  }
+
+  let lastError = null;
+
+  for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
+    const attempt = attempts[attemptIndex];
+
+    try {
+      const createResult = await createRemoteGenerationTask({
+        prompt,
+        sourcePublicUrl,
+        sourceAbsolutePath,
+        referenceImages: attempt.referenceImages,
+        referenceVideos,
+        referenceAudios,
+        ratio,
+        duration
+      });
+
+      return {
+        createResult,
+        fallbackReason: attempts
+          .slice(1, attemptIndex + 1)
+          .map((item) => item.fallbackReason)
+          .filter(Boolean)
+          .join(';')
+      };
+    } catch (error) {
+      lastError = error;
+
+      if (!isSeedDanceSensitiveImageError(error) || attemptIndex === attempts.length - 1) {
+        throw error;
+      }
+
+      logger.warn('Seedance rejected reference images because of sensitive-content screening, retrying with fewer images.', {
+        message: error.message,
+        attemptIndex,
+        nextFallbackReason: attempts[attemptIndex + 1]?.fallbackReason || 'none',
+        originalReferenceImageCount: referenceImages.length,
+        nextReferenceImageCount: attempts[attemptIndex + 1]?.referenceImages?.length ?? 0
+      });
+    }
+  }
+
+  throw lastError ?? new Error('Seed Dance 创建远端任务失败。');
+};
+
 const waitForRemoteGeneration = async (taskId, { onProgress } = {}) => {
   const startedAt = Date.now();
   let pollCount = 0;
@@ -822,7 +923,10 @@ const generateSegment = async ({
 
   if (canUseRemoteSeedDance) {
     try {
-      const createResult = await createRemoteGenerationTask({
+      const {
+        createResult,
+        fallbackReason: imageFallbackReason
+      } = await createRemoteGenerationTaskWithImageFallback({
         prompt,
         sourcePublicUrl,
         sourceAbsolutePath,
@@ -863,9 +967,12 @@ const generateSegment = async ({
 
       return {
         ...finalizedResult,
-        fallbackReason: !isWebUrl(sourcePublicUrl)
-          ? 'seedance_skipped_non_public_reference_video'
-          : '',
+        fallbackReason: [
+          !isWebUrl(sourcePublicUrl) ? 'seedance_skipped_non_public_reference_video' : '',
+          imageFallbackReason
+        ]
+          .filter(Boolean)
+          .join(';'),
         providerError: ''
       };
     } catch (error) {

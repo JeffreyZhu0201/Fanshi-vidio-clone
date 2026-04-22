@@ -297,6 +297,7 @@ React / Vite
 
 - 能识别 Seedance 最小时长限制
 - 能在后端重启后继续恢复已有远端任务
+- 遇到 `InputImageSensitiveContentDetected` 时，会自动先去掉帧图、再去掉全部参考图做降级重试
 
 #### `taskRecoveryService`
 

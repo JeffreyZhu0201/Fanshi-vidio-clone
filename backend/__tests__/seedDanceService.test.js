@@ -95,6 +95,7 @@ await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
 const {
   buildSeedDanceContentItems,
   buildSeedDanceRequestBody,
+  generateSegment,
   getSeedDanceProviderStatus,
   estimateSeedDanceTaskProgress,
   getSeedDanceRemoteStatusLabel,
@@ -294,6 +295,89 @@ describe('seedDanceService', () => {
       providerDurationSeconds: 4,
       filePath: 'outputs/resumed-shot-trimmed.mp4',
       fileUrl: '/uploads/outputs/resumed-shot-trimmed.mp4'
+    });
+  });
+
+  test('retries without frame-derived reference images when Seedance rejects a sensitive input image', async () => {
+    await mkdir(path.join(tempDir, 'outputs'), { recursive: true });
+    await mkdir(path.join(tempDir, 'frames'), { recursive: true });
+    await mkdir(path.join(tempDir, 'resource-images'), { recursive: true });
+    await writeFile(path.join(tempDir, 'frames', 'segment-shot-reference.jpg'), Buffer.from('fake-frame-binary'));
+    await writeFile(path.join(tempDir, 'resource-images', 'character-front.png'), Buffer.from('fake-resource-binary'));
+
+    const fetchSpy = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'InputImageSensitiveContentDetected.PrivacyInformation',
+              message: 'the input image may contain real person'
+            }
+          }),
+          { status: 400 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'remote-task-2',
+            status: 'queued'
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'remote-task-2',
+            status: 'succeeded',
+            content: {
+              video_url: 'https://example.com/generated-remote-2.mp4'
+            }
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from('fake-remote-video-binary'), {
+          status: 200,
+          headers: {
+            'Content-Type': 'video/mp4'
+          }
+        })
+      );
+
+    const result = await generateSegment({
+      sourceAbsolutePath: sampleVideoPath,
+      sourcePublicUrl: 'https://example.com/source-segment.mp4',
+      prompt: '请严格还原当前镜头',
+      basename: 'retry-sensitive-shot',
+      duration: 1,
+      referenceImages: [
+        {
+          relativePath: 'frames/segment-shot-reference.jpg',
+          role: 'reference_image'
+        },
+        {
+          relativePath: 'resource-images/character-front.png',
+          role: 'reference_image'
+        }
+      ]
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+
+    const firstCreateRequestBody = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body ?? '{}'));
+    const secondCreateRequestBody = JSON.parse(String(fetchSpy.mock.calls[1][1]?.body ?? '{}'));
+
+    expect(firstCreateRequestBody.content.filter((item) => item.type === 'image_url')).toHaveLength(2);
+    expect(secondCreateRequestBody.content.filter((item) => item.type === 'image_url')).toHaveLength(1);
+    expect(result).toMatchObject({
+      remoteTaskId: 'remote-task-2',
+      fallbackReason: 'seedance_retried_without_frame_reference_images',
+      filePath: 'outputs/retry-sensitive-shot-trimmed.mp4',
+      fileUrl: '/uploads/outputs/retry-sensitive-shot-trimmed.mp4'
     });
   });
 
