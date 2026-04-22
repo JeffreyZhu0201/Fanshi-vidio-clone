@@ -728,7 +728,11 @@
   }
 
   .resource-row-primary {
-    @apply space-y-3;
+    @apply relative z-[1] space-y-3;
+  }
+
+  .resource-row-generated {
+    @apply relative z-0;
   }
 
   .resource-inline-meta {

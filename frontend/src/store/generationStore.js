@@ -13,6 +13,8 @@ const getSessionStorage = () => {
   return window.sessionStorage;
 };
 
+const ACTIVE_TASK_STATUSES = new Set(['pending', 'processing', 'uploading', 'checking', 'analyzing', 'polling']);
+
 const generationSessionStorage = {
   getSplitTaskId: () => getSessionStorage()?.getItem(SPLIT_TASK_STORAGE_KEY) || '',
   setSplitTaskId: (taskId) => {
@@ -93,7 +95,7 @@ const buildProgressState = (currentState, partialProgress) => {
 };
 
 const syncSplitTaskStorage = (progressState) => {
-  if (progressState.taskId) {
+  if (progressState.taskId && ACTIVE_TASK_STATUSES.has(progressState.status)) {
     generationSessionStorage.setSplitTaskId(progressState.taskId);
     return;
   }

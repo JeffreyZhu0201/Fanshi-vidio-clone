@@ -221,6 +221,113 @@ describe('geminiService', () => {
     expect(geminiMeta.isMock).toBe(false);
   });
 
+  test('falls back to gemini-2.5-flash when primary model is unavailable', async () => {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        text: async () =>
+          JSON.stringify({
+            error: {
+              message: '当前分组上游负载已饱和，请稍后再试',
+              code: 'model_not_found'
+            }
+          })
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        text: async () =>
+          JSON.stringify({
+            error: {
+              message: '当前分组上游负载已饱和，请稍后再试',
+              code: 'model_not_found'
+            }
+          })
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        text: async () =>
+          JSON.stringify({
+            error: {
+              message: '当前分组上游负载已饱和，请稍后再试',
+              code: 'model_not_found'
+            }
+          })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        plot: '剧情摘要',
+                        characters: [
+                          {
+                            id: 'character_1',
+                            name: '主角',
+                            appearancePrompt: '角色外观',
+                            personalityPrompt: '冷静克制，观察力强'
+                          }
+                        ],
+                        backgrounds: [
+                          {
+                            id: 'background_1',
+                            name: '咖啡馆内景',
+                            description: '背景描述',
+                            scenePrompt: '电影感背景提示词'
+                          }
+                        ],
+                        timeAnchors: [
+                          {
+                            startTime: 0,
+                            endTime: 3,
+                            sceneSummary: '镜头摘要',
+                            scenePrompt: '镜头场景提示词',
+                            backgroundId: 'background_1',
+                            backgroundAction: 'create_new',
+                            backgroundName: '咖啡馆内景'
+                          }
+                        ]
+                      })
+                    }
+                  ]
+                }
+              }
+            ]
+          })
+      });
+
+    const result = await analyzeVideo({
+      video: {
+        filename: 'sample.mp4'
+      },
+      metadata: {
+        duration: 3
+      },
+      videoAbsolutePath: sampleVideoPath
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(4);
+    expect(global.fetch.mock.calls[0][0]).toBe(
+      'https://yunwu.ai/v1beta/models/gemini-2.5-pro:generateContent?key=test-token'
+    );
+    expect(global.fetch.mock.calls[3][0]).toBe(
+      'https://yunwu.ai/v1beta/models/gemini-2.5-flash:generateContent?key=test-token'
+    );
+
+    const geminiMeta = JSON.parse(result.geminiResponse);
+
+    expect(geminiMeta.model).toBe('gemini-2.5-flash');
+    expect(geminiMeta.isMock).toBe(false);
+  });
+
   test('backfills background bindings and reuse action when Gemini omits explicit linkage', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,

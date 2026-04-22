@@ -4,11 +4,13 @@ import { readFile, writeFile } from 'node:fs/promises';
 import env from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
 import logger from '../utils/logger.js';
+import { getVideoMetadata, sliceVideoClip } from './ffmpegService.js';
 import {
   createOutputRelativePath,
   duplicateToUploadPath,
   ensureParentDirectory,
   publicUrlToRelativePath,
+  removeFileIfExists,
   resolveUploadPath,
   toPublicUploadUrl
 } from './fileService.js';
@@ -46,6 +48,10 @@ const SEED_DANCE_REMOTE_STATUS_LABELS = {
   expired: '远端超时',
   cancelled: '远端已取消'
 };
+const MIN_REFERENCE_VIDEO_DURATION_SECONDS = 1.8;
+const MIN_REFERENCE_VIDEO_DIMENSION = 300;
+const MIN_REFERENCE_VIDEO_PIXEL_COUNT = 409600;
+const MIN_SEED_DANCE_GENERATION_DURATION_SECONDS = 4;
 
 const shouldAllowSeedDanceMockFallback = () => {
   return Boolean(env.SEED_DANCE_ALLOW_MOCK_FALLBACK);
@@ -124,6 +130,23 @@ const resolveSeedDanceCreateEndpoint = () => {
 
 const resolveSeedDanceTaskEndpoint = (taskId) => {
   return `${resolveSeedDanceCreateEndpoint()}/${encodeURIComponent(taskId)}`;
+};
+
+const normalizeRequestedSeedDanceDuration = (duration) => {
+  const parsedDuration = Number(duration);
+
+  if (!Number.isFinite(parsedDuration) || parsedDuration <= 0) {
+    return Number(env.SEED_DANCE_DURATION_SECONDS) || MIN_SEED_DANCE_GENERATION_DURATION_SECONDS;
+  }
+
+  return Number(parsedDuration.toFixed(2));
+};
+
+const resolveSeedDanceProviderDuration = (duration) => {
+  return Math.max(
+    MIN_SEED_DANCE_GENERATION_DURATION_SECONDS,
+    Math.ceil(normalizeRequestedSeedDanceDuration(duration))
+  );
 };
 
 const normalizeReferenceEntry = (entry, defaultRole) => {
@@ -239,6 +262,61 @@ const resolveLocalReferenceAbsolutePath = (rawValue = '') => {
   return '';
 };
 
+const resolveReferenceEntryAbsolutePath = (entry) => {
+  const directAbsolutePath = String(entry?.absolutePath ?? '').trim();
+
+  if (directAbsolutePath) {
+    return directAbsolutePath;
+  }
+
+  const relativePath = String(entry?.relativePath ?? '').trim();
+
+  if (relativePath) {
+    return resolveUploadPath(relativePath);
+  }
+
+  return resolveLocalReferenceAbsolutePath(String(entry?.url ?? '').trim());
+};
+
+const getReferenceVideoEntryIssues = async (entry) => {
+  const absolutePath = resolveReferenceEntryAbsolutePath(entry);
+
+  if (!absolutePath) {
+    return [];
+  }
+
+  const metadata = await getVideoMetadata(absolutePath);
+  const durationSeconds =
+    Number.isFinite(Number(metadata.durationSecondsExact)) && Number(metadata.durationSecondsExact) > 0
+      ? Number(metadata.durationSecondsExact)
+      : Number.isFinite(Number(metadata.duration)) && Number(metadata.duration) > 0
+        ? Number(metadata.duration)
+        : null;
+  const width = Number.isFinite(Number(metadata.width)) && Number(metadata.width) > 0 ? Number(metadata.width) : null;
+  const height =
+    Number.isFinite(Number(metadata.height)) && Number(metadata.height) > 0 ? Number(metadata.height) : null;
+  const pixelCount = width !== null && height !== null ? width * height : null;
+  const issues = [];
+
+  if (durationSeconds !== null && durationSeconds < MIN_REFERENCE_VIDEO_DURATION_SECONDS) {
+    issues.push(`duration<${MIN_REFERENCE_VIDEO_DURATION_SECONDS}s`);
+  }
+
+  if (width !== null && width < MIN_REFERENCE_VIDEO_DIMENSION) {
+    issues.push(`width<${MIN_REFERENCE_VIDEO_DIMENSION}`);
+  }
+
+  if (height !== null && height < MIN_REFERENCE_VIDEO_DIMENSION) {
+    issues.push(`height<${MIN_REFERENCE_VIDEO_DIMENSION}`);
+  }
+
+  if (pixelCount !== null && pixelCount < MIN_REFERENCE_VIDEO_PIXEL_COUNT) {
+    issues.push(`pixelCount<${MIN_REFERENCE_VIDEO_PIXEL_COUNT}`);
+  }
+
+  return issues;
+};
+
 const resolveReferenceEntryUrl = async (entry, mediaType) => {
   if (entry.url) {
     if (isRemoteHttpUrl(entry.url) || isDataUrl(entry.url)) {
@@ -287,6 +365,7 @@ const buildSeedDanceContentItems = async ({
         ? [
             {
               url: String(sourcePublicUrl || '').trim(),
+              absolutePath: String(sourceAbsolutePath || '').trim(),
               role: 'reference_video'
             }
           ]
@@ -315,6 +394,21 @@ const buildSeedDanceContentItems = async ({
   }
 
   for (const referenceVideo of normalizedReferenceVideos) {
+    const referenceVideoIssues = await getReferenceVideoEntryIssues(referenceVideo);
+
+    if (referenceVideoIssues.length) {
+      logger.warn('Skipping Seedance reference video because it does not satisfy provider minimum requirements.', {
+        url: String(referenceVideo.url || '').trim(),
+        relativePath: String(referenceVideo.relativePath || '').trim(),
+        absolutePath: String(referenceVideo.absolutePath || '').trim(),
+        minimumDurationSeconds: MIN_REFERENCE_VIDEO_DURATION_SECONDS,
+        minimumDimension: MIN_REFERENCE_VIDEO_DIMENSION,
+        minimumPixelCount: MIN_REFERENCE_VIDEO_PIXEL_COUNT,
+        issues: referenceVideoIssues
+      });
+      continue;
+    }
+
     const resolvedUrl = String(referenceVideo.url || '').trim();
 
     if (!isWebUrl(resolvedUrl)) {
@@ -363,6 +457,8 @@ const buildSeedDanceRequestBody = async ({
   generateAudio = env.SEED_DANCE_GENERATE_AUDIO,
   watermark = env.SEED_DANCE_WATERMARK
 }) => {
+  const providerDuration = resolveSeedDanceProviderDuration(duration);
+
   return {
     model,
     content: await buildSeedDanceContentItems({
@@ -374,7 +470,7 @@ const buildSeedDanceRequestBody = async ({
       referenceAudios
     }),
     ratio,
-    duration,
+    duration: providerDuration,
     resolution,
     generate_audio: generateAudio,
     watermark
@@ -542,6 +638,38 @@ const downloadRemoteVideoToUploads = async (remoteUrl, basename) => {
   };
 };
 
+const trimDownloadedSeedDanceVideo = async ({
+  downloadedAsset,
+  basename,
+  targetDurationSeconds
+}) => {
+  const safeTargetDurationSeconds = normalizeRequestedSeedDanceDuration(targetDurationSeconds);
+
+  if (!downloadedAsset?.filePath || safeTargetDurationSeconds <= 0) {
+    return downloadedAsset;
+  }
+
+  const trimmedAsset = await sliceVideoClip(
+    resolveUploadPath(downloadedAsset.filePath),
+    0,
+    safeTargetDurationSeconds,
+    {
+      basename: `${basename}-trimmed`,
+      directory: 'outputs'
+    }
+  );
+
+  if (trimmedAsset?.filePath && trimmedAsset.filePath !== downloadedAsset.filePath) {
+    await removeFileIfExists(downloadedAsset.filePath);
+  }
+
+  return {
+    ...downloadedAsset,
+    filePath: trimmedAsset?.filePath || downloadedAsset.filePath,
+    fileUrl: trimmedAsset?.fileUrl || downloadedAsset.fileUrl
+  };
+};
+
 const createRemoteGenerationTask = async ({
   prompt,
   sourcePublicUrl = '',
@@ -622,6 +750,8 @@ const generateSegment = async ({
 }) => {
   const extension = path.extname(sourceAbsolutePath) || '.mp4';
   const allowMockFallback = shouldAllowSeedDanceMockFallback();
+  const requestedDuration = normalizeRequestedSeedDanceDuration(duration);
+  const providerDuration = resolveSeedDanceProviderDuration(duration);
 
   if (canUseRemoteSeedDance) {
     try {
@@ -633,7 +763,7 @@ const generateSegment = async ({
         referenceVideos,
         referenceAudios,
         ratio,
-        duration
+        duration: providerDuration
       });
       const taskId = extractSeedDanceTaskId(createResult);
 
@@ -657,10 +787,18 @@ const generateSegment = async ({
       const completedTask = await waitForRemoteGeneration(taskId, {
         onProgress
       });
-      const downloadedAsset = await downloadRemoteVideoToUploads(
+      let downloadedAsset = await downloadRemoteVideoToUploads(
         extractRemoteVideoUrl(completedTask),
         basename
       );
+
+      if (requestedDuration + 0.05 < providerDuration) {
+        downloadedAsset = await trimDownloadedSeedDanceVideo({
+          downloadedAsset,
+          basename,
+          targetDurationSeconds: requestedDuration
+        });
+      }
 
       return {
         filePath: downloadedAsset.filePath,
@@ -669,6 +807,8 @@ const generateSegment = async ({
         remoteTaskId: taskId,
         engine: 'seed-dance-remote',
         isMock: false,
+        requestedDurationSeconds: requestedDuration,
+        providerDurationSeconds: providerDuration,
         fallbackReason: !isWebUrl(sourcePublicUrl)
           ? 'seedance_skipped_non_public_reference_video'
           : '',
@@ -709,5 +849,6 @@ export {
   assertSeedDanceReady,
   estimateSeedDanceTaskProgress,
   getSeedDanceRemoteStatusLabel,
-  extractSeedDanceTaskStatus
+  extractSeedDanceTaskStatus,
+  resolveSeedDanceProviderDuration
 };

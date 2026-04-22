@@ -299,6 +299,50 @@ const normalizeShotDraftForSave = (shotDraft) => ({
   representativeFrameNote: String(shotDraft.representativeFrameNote ?? '').trim()
 });
 
+const normalizeShotDraftForRebuildCheck = (shotDraft) => ({
+  id: String(shotDraft.id ?? '').trim(),
+  startTime: Number(shotDraft.startTime),
+  endTime: Number(shotDraft.endTime),
+  representativeFrameTime: String(shotDraft.representativeFrameTime ?? '').trim()
+    ? Number(shotDraft.representativeFrameTime)
+    : null
+});
+
+const shouldPersistShotDraftsBeforeGeneration = (shotDrafts = [], persistedShots = []) => {
+  if (!Array.isArray(shotDrafts) || !shotDrafts.length) {
+    return false;
+  }
+
+  if (!Array.isArray(persistedShots) || shotDrafts.length !== persistedShots.length) {
+    return true;
+  }
+
+  return shotDrafts.some((shotDraft, shotIndex) => {
+    if (shotDraft?.isNew || String(shotDraft?.id ?? '').startsWith('temp-shot-')) {
+      return true;
+    }
+
+    const currentPersistedShot = persistedShots[shotIndex];
+
+    if (!currentPersistedShot) {
+      return true;
+    }
+
+    const nextRebuildFields = normalizeShotDraftForRebuildCheck(shotDraft);
+    const persistedRebuildFields = normalizeShotDraftForRebuildCheck(currentPersistedShot);
+
+    return JSON.stringify(nextRebuildFields) !== JSON.stringify(persistedRebuildFields);
+  });
+};
+
+const buildShotRebuildSignature = (shots = []) => {
+  if (!Array.isArray(shots)) {
+    return '[]';
+  }
+
+  return JSON.stringify(shots.map((shot) => normalizeShotDraftForRebuildCheck(shot)));
+};
+
 const SegmentCard = ({
   segment,
   overallAnalysis = null,
@@ -327,12 +371,16 @@ const SegmentCard = ({
   const [shotEditorItems, setShotEditorItems] = useState(() =>
     (segment.shots ?? []).map((shot, shotIndex) => buildShotEditorItem(shot, shotIndex))
   );
+  const [persistedShotBaseline, setPersistedShotBaseline] = useState(() =>
+    (segment.shots ?? []).map((shot, shotIndex) => buildShotEditorItem(shot, shotIndex))
+  );
   const [promptModalOpen, setPromptModalOpen] = useState(false);
   const [editorBanner, setEditorBanner] = useState('');
   const seedDanceProvider = useAppStore((state) => state.providerStatuses.seedance);
   const characters = overallAnalysis?.characters ?? [];
   const backgrounds = overallAnalysis?.backgrounds ?? [];
   const segmentShots = Array.isArray(segment.shots) ? segment.shots : [];
+  const segmentShotRebuildSignature = buildShotRebuildSignature(segmentShots);
   const shotGenerationSummary = segment.shotGenerationSummary ?? segment.latestShotAssemblyTask ?? null;
   const originalSegmentSummary =
     timeAnchor?.sceneSummary || timeAnchor?.scene_summary || segment.sceneSummary || segment.scene || '';
@@ -392,6 +440,10 @@ const SegmentCard = ({
     setShotEditorItems((segment.shots ?? []).map((shot, shotIndex) => buildShotEditorItem(shot, shotIndex)));
   }, [segment.id, segment.shots]);
 
+  useEffect(() => {
+    setPersistedShotBaseline((segment.shots ?? []).map((shot, shotIndex) => buildShotEditorItem(shot, shotIndex)));
+  }, [segment.id, segmentShotRebuildSignature]);
+
   const handlePromptChange = (nextValue) => {
     setDraftPrompt(nextValue);
     onPromptChange(segment.id, nextValue);
@@ -449,8 +501,31 @@ const SegmentCard = ({
 
   const persistShotDrafts = async ({
     successMessage = '镜头定义已保存，小镜头切片与典型帧已同步重建。',
-    failureMessage = '镜头保存失败，请检查时间区间或查看页面提醒。'
+    failureMessage = '镜头保存失败，请检查时间区间或查看页面提醒。',
+    skipMessage = ''
   } = {}) => {
+    const requiresPersistence = shouldPersistShotDraftsBeforeGeneration(shotEditorItems, persistedShotBaseline);
+
+    if (!requiresPersistence) {
+      if (skipMessage) {
+        setEditorBanner(skipMessage);
+      }
+
+      const nextShotEditorItems = shotEditorItems.map((shotDraft, shotIndex) => ({
+        ...shotDraft,
+        shotIndex,
+        isNew: false
+      }));
+
+      setShotEditorItems(nextShotEditorItems);
+
+      return {
+        saveResult: null,
+        savedShotDrafts: nextShotEditorItems,
+        skippedSave: true
+      };
+    }
+
     const savePayload = shotEditorItems.map((shotDraft) => normalizeShotDraftForSave(shotDraft));
     const saveResult = await onSaveShots(segment.id, savePayload);
 
@@ -468,6 +543,7 @@ const SegmentCard = ({
     if (Array.isArray(savedShots)) {
       const nextShotEditorItems = savedShots.map((shot, shotIndex) => buildShotEditorItem(shot, shotIndex));
       setShotEditorItems(nextShotEditorItems);
+      setPersistedShotBaseline(nextShotEditorItems);
       setEditorBanner(successMessage);
 
       return {
@@ -487,6 +563,7 @@ const SegmentCard = ({
       isNew: false
     }));
     setShotEditorItems(nextShotEditorItems);
+    setPersistedShotBaseline(nextShotEditorItems);
     setEditorBanner(successMessage);
 
     return {
@@ -512,7 +589,8 @@ const SegmentCard = ({
 
     const persistResult = await persistShotDrafts({
       successMessage: '镜头草稿已自动保存，小镜头切片与典型帧已同步重建，开始批量生成。',
-      failureMessage: '镜头保存失败，请修正后再批量生成。'
+      failureMessage: '镜头保存失败，请修正后再批量生成。',
+      skipMessage: '未检测到镜头结构改动，直接按当前编辑器里的提示词批量生成。'
     });
 
     if (!persistResult) {
@@ -596,7 +674,8 @@ const SegmentCard = ({
 
     const persistResult = await persistShotDrafts({
       successMessage: '镜头草稿已自动保存，小镜头切片与典型帧已同步重建，正在提交镜头生成。',
-      failureMessage: '镜头保存失败，请修正后再生成。'
+      failureMessage: '镜头保存失败，请修正后再生成。',
+      skipMessage: '未检测到镜头结构改动，直接按当前编辑器里的提示词生成当前镜头。'
     });
 
     if (!persistResult) {

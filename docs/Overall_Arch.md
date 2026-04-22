@@ -1,417 +1,531 @@
-# AI视频复刻项目 - 整体架构设计
+# Overall Architecture
 
-## 1. 项目概览
+更新时间：2026-04-22
 
-**项目名称**: Fanshi-vidio-clone  
-**技术栈**: React + Node.js + MySQL + FFmpeg + Gemini API + Seed Dance API  
-**部署环境**: Ubuntu 22.04  
-**应用形态**: 单页应用（SPA），所有功能集成在一个页面
+这份文档写项目当前真实结构，不写理想结构。
 
----
+## 1. 总体结构
 
-## 2. 系统架构
+项目现在分成 4 层：
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     前端 (React SPA)                         │
-│  ┌──────────────┬──────────────┬──────────────┐             │
-│  │ 视频上传区   │ 视频分析展示 │ 片段编辑卡片 │             │
-│  │              │              │              │             │
-│  │ - 拖拽上传   │ - 剧情内容   │ - 预览框     │             │
-│  │ - 进度条     │ - 角色形象   │ - 生成占位   │             │
-│  │ - 文件验证   │ - 镜头背景   │ - 提示词编辑 │             │
-│  │              │ - 时间锚点   │ - 角色标签   │             │
-│  │              │              │ - 生成按钮   │             │
-│  └──────────────┴──────────────┴──────────────┘             │
-│  ┌──────────────────────────────────────────────┐           │
-│  │ 视频拼接区 - 进度条 + 下载按钮               │           │
-│  └──────────────────────────────────────────────┘           │
-└─────────────────────────────────────────────────────────────┘
-                            ↕
-                    REST API (JSON)
-                            ↕
-┌─────────────────────────────────────────────────────────────┐
-│                   后端 (Node.js)                             │
-│  ┌──────────────┬──────────────┬───────────��──┐             │
-│  │ 视频处理服务 │ AI分析服务   │ 视频合成服务 │             │
-│  │              │              │              │             │
-│  │ - 上传验证   │ - Gemini集成 │ - FFmpeg调用 │             │
-│  │ - 存储管理   │ - 提示词优化 │ - 视频拼接   │             │
-│  │ - FFmpeg分割 │ - 角色提取   │ - 进度跟踪   │             │
-│  │              │ - Seed Dance │ - 文件输出   │             │
-│  │              │   API调用    │              │             │
-│  └──────────────┴──────────────┴──────────────┘             │
-│  ┌──────────────────────────────────────────────┐           │
-│  │ 数据库层 (MySQL)                             │           │
-│  │ - 项目表 - 视频表 - 分析结果表 - 任务表      │           │
-│  └──────────────────────────────────────────────┘           │
-└─────────────────────────────────────────────────────────────┘
+1. 前端工作台
+2. 后端 API 与任务编排
+3. 本地媒体处理
+4. 外部 AI 服务
+
+整体关系：
+
+```text
+React / Vite
+  -> Express API
+    -> MySQL / Sequelize
+    -> FFmpeg / FFprobe
+    -> Gemini 文本
+    -> Gemini 生图
+    -> Seedance 视频生成
 ```
 
----
+## 2. 仓库结构
 
-## 3. 项目结构
+### 2.1 前端
 
+目录：`frontend/src`
+
+主要分层：
+
+- `pages`
+  - 页面入口
+- `components`
+  - 上传区
+  - 整片分析区
+  - 角色 / 场景资源卡
+  - 片段卡
+  - Prompt 编辑器
+  - 弹窗、悬浮卡、进度条
+- `hooks`
+  - 上传
+  - 分析
+  - 片段
+  - 生成
+  - 导出
+  - 恢复与重置
+- `services`
+  - 所有 API 请求封装
+- `store`
+  - Zustand 状态仓库
+- `utils`
+  - 时间格式化
+  - 提示词蓝图
+  - URL 与 mention 工具
+
+### 2.2 后端
+
+目录：`backend`
+
+主要分层：
+
+- `routes`
+  - HTTP 路由
+- `controllers`
+  - 请求和响应层
+- `services`
+  - 核心业务逻辑
+- `models`
+  - Sequelize 模型
+- `migrations`
+  - 数据库迁移
+- `middleware`
+  - 错误处理、校验、安全
+- `config`
+  - 环境变量、数据库、Swagger
+- `utils`
+  - 初始化、日志、通用工具
+- `scripts`
+  - smoke、检查、性能脚本
+- `uploads`
+  - 所有本地落盘媒体
+
+## 3. 前端架构
+
+### 3.1 页面布局
+
+当前首页是一个紧凑控制台：
+
+- 顶部：状态栏 + 全局比例
+- 左列：
+  - 项目与上传
+  - 原视频上传区
+  - 资源库与整片理解
+- 右列：
+  - 片段工作台
+- 右下角：
+  - 导出前检查
+  - 成片拼接
+
+### 3.2 前端关键状态
+
+前端主要维护：
+
+- 当前视频
+- 整片分析结果
+- 片段列表
+- 资源图列表
+- 背景资产列表
+- 大片段生成任务
+- 小镜头生成任务
+- 合并任务
+- provider 健康状态
+
+### 3.3 前端关键组件
+
+当前最影响主链路的组件：
+
+- `AnalysisDisplay`
+  - 展示整片理解、角色资源、场景资源、片段分解
+- `SegmentCard`
+  - 展示大片段卡和小镜头编辑弹窗
+- `VideoFramePreview`
+  - 展示持久化典型帧或动态抽帧回退
+- `PromptEditor`
+  - 大片段和资源提示词编辑
+- `ProgressBar`
+  - 长任务进度展示
+
+### 3.4 前端当前实现约定
+
+- 主页尽量只保留结果，不常驻长解释
+- 镜头编辑在弹窗里完成
+- 小镜头结构没有变化时，生成不再强制先保存
+- 只改提示词时，会直接按当前编辑器里的 prompt 生成
+
+这一条是 2026-04-22 新补的关键规则，用来避免：
+
+- 已完成镜头被误判旧
+- 无意义重建小镜头资产
+
+## 4. 后端架构
+
+### 4.1 路由层
+
+当前主要 API：
+
+- `/api/videos`
+  - 上传、查询、删除视频
+- `/api/analysis`
+  - 整片分析
+  - 获取整片分析
+  - 提示词优化
+- `/api/segments`
+  - 切分片段
+  - 获取片段
+  - 片段分析
+  - 保存镜头定义
+- `/api/resource-images`
+  - 角色 / 场景资源图生成与查询
+- `/api/background-assets`
+  - 背景资产查询
+- `/api/generation`
+  - 大片段生成
+  - 小镜头生成
+  - 小镜头批量生成
+  - 生成任务查询
+- `/api/merge`
+  - 发起拼接
+  - 查拼接进度
+  - 下载成片
+- `/api/tasks`
+  - 通用任务进度
+- `/api/health`
+  - 健康检查
+
+### 4.2 核心服务
+
+#### `videoService`
+
+负责：
+
+- 接收上传视频
+- 校验重复上传
+- 读取视频元数据
+- hash 文件名落盘
+- 初始化 `videos`
+
+#### `geminiService`
+
+负责：
+
+- 整片理解 prompt
+- 片段理解 prompt
+- 提示词优化 prompt
+- Gemini 文本请求
+- JSON 解析和 normalize
+
+当前真实特点：
+
+- 主模型失败后会尝试备用模型
+- 只有备用模型也失败时才回退 mock
+
+#### `geminiImageService`
+
+负责：
+
+- Gemini 生图接口调用
+- 图片响应解析
+- 图片保存
+
+当前真实状态：
+
+- 链路已接通
+- 上游 `429` 仍然常见
+
+#### `resourceImageService`
+
+负责：
+
+- 角色三视图生成
+- 场景三角度图生成
+- 资源图落库
+- 部分成功 / 失败汇总
+
+#### `segmentService`
+
+负责：
+
+- 大片段切分
+- 小镜头定义保存
+- 小镜头结构校验
+- 片段列表序列化
+- 小镜头任务与大片段结果的拼装输出
+
+2026-04-22 新补的真实兼容：
+
+- 保存完全相同的小镜头定义时直接 no-op
+- `shotAssemblyInvalidatedAt` 的比较改成秒级边界，避免把同秒新任务误过滤
+
+#### `shotAssetService`
+
+负责：
+
+- 小镜头源视频切片
+- 小镜头典型帧抽取
+- 小镜头资产自愈重建
+
+当前真实兼容：
+
+- 不再只认精确 `ffmpeg-slice`，会兼容 `ffmpeg-slice-openh264` 等变体
+
+#### `shotGenerationService`
+
+负责：
+
+- 小镜头单任务生成
+- 批量小镜头生成
+- 任务状态序列化
+- 全部完成后的大片段自动拼回
+
+#### `generationService`
+
+负责：
+
+- 大片段主生成
+- `@角色` 和 `#场景` 展开
+- 背景资产准备
+- 把最终 prompt 和参考素材送给 Seedance
+
+#### `backgroundAssetService`
+
+负责：
+
+- 背景资产生成和复用
+- 保证同视频内同 `background_id` 只保留一份参考视频
+
+#### `mergeService`
+
+负责：
+
+- 选择每个大片段最终使用的素材
+- FFmpeg 合并
+- 下载输出
+
+#### `ffmpegService`
+
+负责：
+
+- 视频切分
+- 小镜头切片
+- 典型帧抽帧
+- 合并
+- 元数据读取
+
+当前真实兼容：
+
+- `libx264` 不可用时会自动回退其他可用编码方式
+
+#### `seedDanceService`
+
+负责：
+
+- Seedance 请求体构造
+- 参考图 / 参考视频 / 参考音频组装
+- 远端任务创建与轮询
+- 输出下载
+- 过短视频裁回原时长
+
+当前真实兼容：
+
+- 过滤过短参考视频
+- 过滤边长太小的参考视频
+- 过滤像素总数小于 `409600` 的参考视频
+- 生成时长自动适配 provider 最小值
+
+## 5. 数据结构
+
+### 5.1 核心表
+
+当前最重要的表：
+
+- `projects`
+- `videos`
+- `analyses`
+- `segments`
+- `generation_tasks`
+- `shot_generation_tasks`
+- `background_assets`
+- `resource_image_assets`
+
+### 5.2 关键字段语义
+
+#### `analyses`
+
+保存整片理解结果。
+
+关键字段：
+
+- `plot`
+- `characters`
+- `backgrounds`
+- `timeAnchors`
+- `geminiResponse`
+
+#### `segments`
+
+保存大片段。
+
+其中 `analysis` JSON 里会继续保存：
+
+- 片段 prompt
+- 角色列表
+- 场景列表
+- 背景绑定
+- `shots`
+- `shotAssembly`
+- `shotAssemblyInvalidatedAt`
+
+#### `shot_generation_tasks`
+
+专门保存小镜头生成任务。
+
+它和 `generation_tasks` 分开的原因很直接：
+
+- `generation_tasks` 主要服务大片段主结果
+- `shot_generation_tasks` 主要服务镜头级独立结果
+
+#### `background_assets`
+
+保存场景背景参考视频。
+
+唯一约束是：
+
+- 同一视频
+- 同一 `background_id`
+- 只保留一份
+
+#### `resource_image_assets`
+
+保存角色三视图和场景资源图。
+
+一个资源会拆成多条变体：
+
+- 角色：`front / side / back`
+- 场景：`establishing / three-quarter / elevated`
+
+## 6. 本地文件结构
+
+当前落盘目录：
+
+- `backend/uploads/videos`
+  - 原视频
+- `backend/uploads/segments`
+  - 大片段视频
+- `backend/uploads/shots`
+  - 小镜头源视频
+- `backend/uploads/frames`
+  - 典型帧图片
+- `backend/uploads/resource-images`
+  - 角色三视图和场景资源图
+- `backend/uploads/outputs`
+  - Seedance 输出
+  - 拼接输出
+
+## 7. 真实数据流
+
+### 7.1 上传到整片理解
+
+```text
+上传视频
+-> ffprobe 读元数据
+-> videos 入库
+-> Gemini 整片理解
+-> analyses 入库
 ```
-Fanshi-vidio-clone/
-├── README.md
-├── .gitignore
-├── docs/
-│   ├── Overall_Arch.md          (本文件)
-│   ├── 1.项目初始化.md
-│   ├── 2.数据库设计.md
-│   ├── 3.后端API设计.md
-│   ├── 4.前端UI设计.md
-│   ├── 5.集成测试.md
-│   └── 6.部署指南.md
-│
-├── backend/
-│   ├── package.json
-│   ├── .env.example
-│   ├── server.js
-│   ├── config/
-│   │   ├── database.js
-│   │   ├── env.js
-│   │   └── constants.js
-│   ├── routes/
-│   │   ├── video.js
-│   │   ├── analysis.js
-│   │   └── generation.js
-│   ├── controllers/
-│   │   ├── videoController.js
-│   │   ├── analysisController.js
-│   │   └── generationController.js
-│   ├── services/
-│   │   ├── geminiService.js
-│   │   ├── ffmpegService.js
-│   │   ├── seedDanceService.js
-│   │   └── videoService.js
-│   ├── models/
-│   │   ├── Project.js
-│   │   ├── Video.js
-│   │   ├── Analysis.js
-│   │   └── Task.js
-│   ├── middleware/
-│   │   ├── auth.js
-│   │   ├── errorHandler.js
-│   │   └── validation.js
-│   ├── utils/
-│   │   ├── logger.js
-│   │   ├── fileHandler.js
-│   │   └── helpers.js
-│   └── uploads/
-│       ├── videos/
-│       ├── segments/
-│       └── outputs/
-│
-├── frontend/
-│   ├── package.json
-│   ├── .env.example
-│   ├── public/
-│   │   └── index.html
-│   ├── src/
-│   │   ├── index.js
-│   │   ├── App.jsx
-│   │   ├── components/
-│   │   │   ├── UploadArea.jsx
-│   │   │   ├── AnalysisDisplay.jsx
-│   │   │   ├── SegmentCard.jsx
-│   │   │   ├── PromptEditor.jsx
-│   │   │   ├── VideoMerge.jsx
-│   │   │   └── ProgressBar.jsx
-│   │   ├── pages/
-│   │   │   └── MainPage.jsx
-│   │   ├── services/
-│   │   │   ├── api.js
-│   │   │   └── websocket.js
-│   │   ├── hooks/
-│   │   │   ├── useVideoUpload.js
-│   │   │   ├── useAnalysis.js
-│   │   │   └── useGeneration.js
-│   │   ├── store/
-│   │   │   ├── videoStore.js
-│   │   │   ├── analysisStore.js
-│   │   │   └── generationStore.js
-│   │   ├── styles/
-│   │   │   ├── App.css
-│   │   │   ├── components.css
-│   │   │   └── theme.css
-│   │   └── utils/
-│   │       ├── formatters.js
-│   │       └── validators.js
-│   └── .gitignore
-│
-└── .git/
+
+### 7.2 整片理解到切分
+
+```text
+analysis.time_anchors
+-> 切大片段
+-> 写 segments
+-> analysis.time_anchors[*].shots
+-> 切小镜头源视频
+-> 抽小镜头典型帧
+-> 写入 segment.analysis.shots
 ```
 
----
+### 7.3 资源图
 
-## 4. 核心功能流程
-
-### 4.1 视频上传与分析流程
-
-```
-用户上传视频
-    ↓
-前端验证 (格式、大小)
-    ↓
-后端接收 + 存储
-    ↓
-调用 Gemini API 分析视频
-    ↓
-提取: 剧情、角色、背景、时间锚点
-    ↓
-存储分析结果到数据库
-    ↓
-前端展示分析结果
+```text
+角色 / 场景资源提示词
+-> Gemini 生图
+-> resource_image_assets
+-> uploads/resource-images
 ```
 
-### 4.2 视频分割与片段编辑流程
+### 7.4 小镜头生成
 
-```
-获取时间锚点
-    ↓
-后端调用 FFmpeg 分割视频
-    ↓
-生成视频片段文件
-    ↓
-前端展示片段列表 (卡片形式)
-    ↓
-用户编辑提示词
-    ↓
-点击"优化提示词" → Gemini 优化
-    ↓
-角色自动标记 (@符号蓝色)
-    ↓
-点击"生成" → Seed Dance API 生成
+```text
+shot.prompt
+-> 展开 @角色 / #场景
+-> 准备小镜头源视频 + 典型帧 + 资源图 + 背景资产
+-> Seedance
+-> shot_generation_tasks
+-> 小镜头结果
+-> 全部成功后拼回大片段
 ```
 
-### 4.3 视频拼接与下载流程
+### 7.5 导出
 
-```
-用户点击"拼接视频"
-    ↓
-后端调用 FFmpeg 合并所有片段
-    ↓
-前端显示进度条 (WebSocket 实时更新)
-    ↓
-合并完成
-    ↓
-前端显示下载按钮
-    ↓
-用户下载最终视频
+```text
+按大片段挑最终素材
+-> 有新结果就优先用新结果
+-> 没有就回退原始大片段
+-> merge
+-> 下载成片
 ```
 
----
+## 8. 当前最重要的架构约定
 
-## 5. 数据库设计
+### 8.1 小镜头真值来自整片理解
 
-### 5.1 核心表结构
+真值来源：
 
-**projects 表** - 项目���息
-```sql
-id, user_id, name, description, created_at, updated_at
-```
+- `analysis.time_anchors[*].shots`
 
-**videos 表** - 视频文件
-```sql
-id, project_id, filename, file_path, duration, size, status, created_at
-```
+### 8.2 时间统一用整片绝对秒数
 
-**analyses 表** - 视频分析结果
-```sql
-id, video_id, plot, characters, backgrounds, time_anchors (JSON), created_at
-```
+以下字段都默认是整片绝对秒数：
 
-**segments 表** - 视频片段
-```sql
-id, video_id, segment_index, start_time, end_time, file_path, analysis (JSON)
-```
+- `timeAnchor.startTime/endTime`
+- `shot.startTime/endTime`
+- `representativeFrameTime`
 
-**generation_tasks 表** - 生成任务
-```sql
-id, segment_id, prompt, status, result_url, progress, created_at, updated_at
-```
+### 8.3 典型帧优先使用已落盘资源
 
----
+优先级：
 
-## 6. API 端点设计
+1. `representativeFrameImageUrl`
+2. 动态抽帧回退
 
-### 视频管理
-- `POST /api/videos/upload` - 上传视频
-- `GET /api/videos/:id` - 获取视频信息
-- `DELETE /api/videos/:id` - 删除视频
+### 8.4 生成前一定展开资源标签
 
-### 分析服务
-- `POST /api/analysis/analyze` - 分析视频
-- `GET /api/analysis/:videoId` - 获取分析结果
-- `POST /api/analysis/optimize-prompt` - 优化提示词
+生成前一定会：
 
-### 视频处理
-- `POST /api/segments/split` - 分割视频
-- `GET /api/segments/:videoId` - 获取片段列表
-- `POST /api/generation/generate` - 生成片段
+- 把 `@角色` 替换成角色资源真实提示词
+- 把 `#场景` 替换成场景资源真实提示词
 
-### 视频合成
-- `POST /api/merge/start` - 开始拼接
-- `GET /api/merge/:taskId/progress` - 获取进度
-- `GET /api/merge/:taskId/download` - 下载视频
+### 8.5 导出不断链
 
----
+当前规则一直保持：
 
-## 7. 前端 UI 设计
+- 优先使用新生成结果
+- 缺失时自动回退原片段
+- 不让导出链路整体中断
 
-### 单页面布局 (响应式)
+## 9. 当前架构的现实限制
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    顶部导航栏                        │
-│  Logo | 项目名称 | 用户菜单                         │
-└─────────────────────────────────────────────────────┘
+### 9.1 外部模型稳定性仍然影响成功率
 
-┌─────────────────────────────────────────────────────┐
-│                   主工作区 (3列布局)                 │
-│                                                     │
-│ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ │
-│ │   左侧栏     │ │   中间区     │ │   右侧栏     │ │
-│ │              │ │              │ │              │ │
-│ │ 上传区       │ │ 分析展示     │ │ 片段卡片列表 │ │
-│ │ - 拖拽上传   │ │ - 剧情       │ │ - 预览       │ │
-│ │ - 进度条     │ │ - 角色       │ │ - 提示词编辑 │ │
-│ │ - 文件列表   │ │ - 背景       │ │ - 生成按钮   │ │
-│ │              │ │ - 时间轴     │ │              │ │
-│ │ 拼接区       │ │              │ │ 滚动查看更多 │ │
-│ │ - 进度条     │ │              │ │              │ │
-│ │ - 下载按钮   │ │              │ │              │ │
-│ └──────────────┘ └──────────────┘ └──────────────┘ │
-│                                                     │
-└─────────────────────────────────────────────────────┘
-```
+当前最不稳定的还是：
 
-### 色彩方案
-- 主色: #6366F1 (靛蓝)
-- 辅色: #EC4899 (粉红)
-- 背景: #F8FAFC (浅灰)
-- 文字: #1E293B (深灰)
+- Gemini 生图
+- Seedance 长任务
 
-### 交互设计
-- 拖拽上传视频
-- 实时进度条反馈
-- 卡片式片段展示
-- 内联编辑提示词
-- 角色标签自动高亮
+### 9.2 小镜头批量拼回还要继续长链路复测
 
----
+单镜头已经真实成功过。
 
-## 8. 开发流程与版本管理
+但还需要继续验证：
 
-### Git 工作流
+- 全部镜头成功
+- 自动拼回大片段
+- 再进入整片 merge
 
-```
-main (生产分支)
-  ↑
-  │ (merge with PR)
-  │
-develop (开发分支)
-  ↑
-  │ (feature branches)
-  │
-feature/video-upload
-feature/gemini-analysis
-feature/ffmpeg-split
-feature/segment-edit
-feature/seed-dance-gen
-feature/video-merge
-```
+### 9.3 浏览器端当前视频上下文仍依赖当前 origin
 
-### 开发阶段
+当前工作流主要假设同一前端 origin 持续使用。
 
-| 阶段 | 功能 | 分支 | 文档 |
-|------|------|------|------|
-| 1 | 项目初始化 + 数据库 | `feature/init` | `1.项目初始化.md` |
-| 2 | 后端 API 框架 | `feature/backend-api` | `2.数据库设计.md` |
-| 3 | 视频上传 + Gemini 分析 | `feature/video-analysis` | `3.后端API设计.md` |
-| 4 | FFmpeg 分割 + 片段管理 | `feature/video-split` | `4.前端UI设计.md` |
-| 5 | 前端 UI + 交互 | `feature/frontend-ui` | `5.集成测试.md` |
-| 6 | Seed Dance 生成 | `feature/generation` | `6.部署指南.md` |
-| 7 | 视频拼接 + 下载 | `feature/video-merge` | - |
-| 8 | 集成测试 + 优化 | `feature/testing` | - |
+如果浏览器切到另一个 origin，例如：
 
----
+- `127.0.0.1`
+- `localhost`
 
-## 9. 全栈开发约束与规范
-
-### 代码质量标准
-
-**后端 (Node.js)**
-- 使用 Express.js 框架
-- 遵循 MVC 架构
-- 错误处理: 统一的 try-catch + 错误中间件
-- 日志: 使用 winston 或 pino
-- 验证: 使用 joi 或 zod
-- 数据库: 使用 ORM (Sequelize 或 TypeORM)
-- 环境变量: .env 文件管理敏感信息
-- API 文档: Swagger/OpenAPI
-
-**前端 (React)**
-- 使用函数组件 + Hooks
-- 状态管理: Zustand 或 Redux Toolkit
-- 样式: Tailwind CSS + CSS Modules
-- 组件库: shadcn/ui 或 Material-UI
-- 类型检查: PropTypes 或 TypeScript
-- 测试: Jest + React Testing Library
-- 代码格式: Prettier + ESLint
-
-### 安全性要求
-- 后端 API 验证所有输入
-- 文件上传大小限制 (500MB)
-- 文件类型白名单 (mp4, mov, avi)
-- 敏感信息不存储在前端
-- CORS 配置严格
-- SQL 注入防护 (使用参数化查询)
-- XSS 防护 (React 自动转义)
-
-### 性能要求
-- 视频上传分块处理
-- 后端异步任务队列 (Bull 或 RabbitMQ)
-- 前端虚拟滚动 (大量片段)
-- 数据库查询优化 (索引)
-- CDN 加速静态资源
-- WebSocket 实时进度更新
-
----
-
-## 10. 部署与运维
-
-### 环境配置
-- **开发**: localhost:3000 (前端) + localhost:5000 (后端)
-- **生产**: Docker 容器化 + Nginx 反向代理
-
-### 依赖服务
-- MySQL 8.0+
-- FFmpeg 4.4+
-- Node.js 18+
-- Redis (可选，用于任务队列)
-
-### 监控告警
-- 后端日志: ELK Stack
-- 性能监控: New Relic 或 DataDog
-- 错误追踪: Sentry
-
----
-
-## 11. 下一步行动
-
-1. **初始化项目** → 生成 `1.项目初始化.md`
-2. **设计数据库** → 生成 `2.数据库设计.md`
-3. **设计 API** → 生成 `3.后端API设计.md`
-4. **设计 UI** → 生成 `4.前端UI设计.md`
-5. **编写代码** → 按功能分阶段实现
-6. **集成测试** → 生成 `5.集成测试.md`
-7. **部署上线** → 生成 `6.部署指南.md`
-
----
-
-**文档版本**: v1.0  
-**最后更新**: 2026-04-16  
-**维护者**: 项目架构师
+两边的本地存储上下文不是同一份，当前视频选择态不会自动共享。

@@ -15,6 +15,16 @@ import {
 
 const execFileAsync = promisify(execFile);
 const binaryAvailability = new Map();
+const SLICE_VIDEO_TRANSCODE_CANDIDATES = [
+  {
+    engine: 'ffmpeg-slice-openh264',
+    args: ['-c:v', 'libopenh264', '-pix_fmt', 'yuv420p', '-c:a', 'aac']
+  },
+  {
+    engine: 'ffmpeg-slice-mpeg4',
+    args: ['-c:v', 'mpeg4', '-q:v', '5', '-c:a', 'aac']
+  }
+];
 
 const isBinaryAvailable = async (binaryName) => {
   if (binaryAvailability.has(binaryName)) {
@@ -157,36 +167,55 @@ const sliceVideoClip = async (
   let engine = 'mock-copy';
 
   if (ffmpegAvailable) {
-    try {
-      await execFileAsync('ffmpeg', [
-        '-y',
-        '-i',
-        absoluteSourcePath,
-        '-ss',
-        String(Number(safeStartTime.toFixed(3))),
-        '-t',
-        String(duration),
-        '-c:v',
-        'libx264',
-        '-preset',
-        'veryfast',
-        '-pix_fmt',
-        'yuv420p',
-        '-c:a',
-        'aac',
-        '-movflags',
-        '+faststart',
-        absoluteTargetPath
-      ]);
-      engine = 'ffmpeg-slice';
-    } catch (error) {
-      logger.warn('FFmpeg clip slicing failed, falling back to file copy for development flow.', {
-        message: error.message,
-        absoluteSourcePath,
-        startTimeSeconds: safeStartTime,
-        endTimeSeconds: safeEndTime
-      });
-      await duplicateToUploadPath(absoluteSourcePath, relativePath);
+    let lastTranscodeError = null;
+
+    for (const candidate of SLICE_VIDEO_TRANSCODE_CANDIDATES) {
+      try {
+        await execFileAsync('ffmpeg', [
+          '-y',
+          '-i',
+          absoluteSourcePath,
+          '-ss',
+          String(Number(safeStartTime.toFixed(3))),
+          '-t',
+          String(duration),
+          ...candidate.args,
+          '-movflags',
+          '+faststart',
+          absoluteTargetPath
+        ]);
+        engine = candidate.engine;
+        lastTranscodeError = null;
+        break;
+      } catch (error) {
+        lastTranscodeError = error;
+      }
+    }
+
+    if (engine === 'mock-copy') {
+      try {
+        await execFileAsync('ffmpeg', [
+          '-y',
+          '-ss',
+          String(Number(safeStartTime.toFixed(3))),
+          '-i',
+          absoluteSourcePath,
+          '-t',
+          String(duration),
+          '-c',
+          'copy',
+          absoluteTargetPath
+        ]);
+        engine = 'ffmpeg-slice-copy';
+      } catch (error) {
+        logger.warn('FFmpeg clip slicing failed, falling back to file copy for development flow.', {
+          message: (lastTranscodeError || error).message,
+          absoluteSourcePath,
+          startTimeSeconds: safeStartTime,
+          endTimeSeconds: safeEndTime
+        });
+        await duplicateToUploadPath(absoluteSourcePath, relativePath);
+      }
     }
   } else {
     await duplicateToUploadPath(absoluteSourcePath, relativePath);

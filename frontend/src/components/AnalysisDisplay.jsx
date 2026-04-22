@@ -19,6 +19,8 @@ import {
 import { formatDuration } from '../utils/formatDuration.js';
 import { buildVideoAnalysisPrompt } from '../utils/promptBlueprints.js';
 
+const EMPTY_ITEMS = Object.freeze([]);
+
 const TAB_ITEMS = [
   { id: 'overview', label: '总览', note: '剧情与整片情报' },
   { id: 'characters', label: '角色', note: '角色资源与三视图' },
@@ -283,6 +285,10 @@ const createResourceEditorState = () => ({
   highlightedPrompt: ''
 });
 
+const isResourceEditorEmpty = (state) => {
+  return !state?.resourceType && !state?.resourceId && !state?.resourceName && !state?.draftPrompt;
+};
+
 const buildCharacterViewPrompts = ({
   resourceName,
   prompt,
@@ -414,9 +420,9 @@ const AnalysisDisplay = ({
   const [resourceGeneratingKeys, setResourceGeneratingKeys] = useState([]);
   const geminiImageProvider = useAppStore((state) => state.providerStatuses.geminiImage);
 
-  const characters = analysis?.characters ?? [];
-  const backgrounds = analysis?.backgrounds ?? [];
-  const timeAnchors = analysis?.time_anchors ?? [];
+  const characters = analysis?.characters ?? EMPTY_ITEMS;
+  const backgrounds = analysis?.backgrounds ?? EMPTY_ITEMS;
+  const timeAnchors = analysis?.time_anchors ?? EMPTY_ITEMS;
   const backgroundAssetMap = useMemo(() => {
     return new Map(backgroundAssets.map((asset) => [asset.backgroundId, asset]));
   }, [backgroundAssets]);
@@ -783,7 +789,7 @@ const AnalysisDisplay = ({
         null;
 
       if (!nextResource) {
-        return createResourceEditorState();
+        return isResourceEditorEmpty(currentState) ? currentState : createResourceEditorState();
       }
 
       if (!currentState.resourceId || getResourceKey(nextResource) !== currentResourceKey) {

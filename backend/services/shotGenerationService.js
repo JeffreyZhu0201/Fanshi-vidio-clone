@@ -224,7 +224,8 @@ const broadcastShotAssemblyUpdate = (segmentId, shotAssembly, fallbackSummary = 
 };
 
 const buildShotTaskLookup = (tasks = [], segmentIds = [], { createdAfter = '' } = {}) => {
-  const createdAfterMs = createdAfter ? Date.parse(createdAfter) : 0;
+  const rawCreatedAfterMs = createdAfter ? Date.parse(createdAfter) : 0;
+  const createdAfterMs = rawCreatedAfterMs ? Math.floor(rawCreatedAfterMs / 1000) * 1000 : 0;
   const latestAttemptTaskBySegmentId = new Map(segmentIds.map((segmentId) => [Number(segmentId), new Map()]));
   const latestCompletedTaskBySegmentId = new Map(segmentIds.map((segmentId) => [Number(segmentId), new Map()]));
 

@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+
 import { extractVideoFrame, sliceVideoClip } from './ffmpegService.js';
 import { removeFileIfExists, resolveUploadPath } from './fileService.js';
 import logger from '../utils/logger.js';
@@ -86,6 +88,20 @@ const buildShotAssetBasename = (segment, shot, shotIndex) => {
   return `segment-${sanitize(rawSegmentId)}-${sanitize(rawShotId)}`;
 };
 
+const isClippedSourceEngine = (engine = '') => {
+  return String(engine).trim().startsWith('ffmpeg-slice');
+};
+
+const uploadAssetExists = (relativePath = '') => {
+  const normalizedPath = String(relativePath ?? '').trim();
+
+  if (!normalizedPath) {
+    return false;
+  }
+
+  return existsSync(resolveUploadPath(normalizedPath));
+};
+
 const cleanupShotAssets = async (shots = []) => {
   const assetPaths = shots.flatMap((shot) => [
     String(shot?.sourceFilePath ?? '').trim(),
@@ -142,7 +158,7 @@ const rebuildShotAssetsForSegment = async ({
         });
       }
 
-      const usesClippedSource = sourceClip?.engine === 'ffmpeg-slice';
+      const usesClippedSource = isClippedSourceEngine(sourceClip?.engine);
 
       try {
         representativeFrame = await extractVideoFrame(
@@ -186,9 +202,19 @@ const shotAssetsNeedRebuild = (shots = []) => {
   return shots.some((shot) => {
     const sourceFilePath = String(shot?.sourceFilePath ?? '').trim();
     const sourceFileUrl = String(shot?.sourceFileUrl ?? '').trim();
+    const representativeFrameImagePath = String(shot?.representativeFrameImagePath ?? '').trim();
+    const representativeFrameImageUrl = String(shot?.representativeFrameImageUrl ?? '').trim();
     const representativeFrameActualTime = normalizeOptionalNumber(shot?.representativeFrameActualTime);
 
-    return !sourceFilePath || !sourceFileUrl || representativeFrameActualTime === null;
+    return (
+      !sourceFilePath ||
+      !sourceFileUrl ||
+      !representativeFrameImagePath ||
+      !representativeFrameImageUrl ||
+      representativeFrameActualTime === null ||
+      !uploadAssetExists(sourceFilePath) ||
+      !uploadAssetExists(representativeFrameImagePath)
+    );
   });
 };
 

@@ -22,7 +22,7 @@ const ensureSampleVideo = async () => {
     '-f',
     'lavfi',
     '-i',
-    'color=c=black:s=320x240:d=1',
+    'color=c=black:s=320x240:d=3',
     '-pix_fmt',
     'yuv420p',
     tempVideoPath

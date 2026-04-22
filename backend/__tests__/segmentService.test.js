@@ -199,6 +199,83 @@ describe('segmentService', () => {
     });
   });
 
+  test('keeps shot tasks created in the same second as invalidation visible after refresh', async () => {
+    const segmentUpdate = jest.fn().mockImplementation(function update(payload) {
+      this.analysis = payload.analysis;
+      return Promise.resolve(this);
+    });
+
+    Segment.findAll.mockResolvedValue([
+      {
+        id: 201,
+        segmentIndex: 0,
+        startTime: 0,
+        endTime: 4,
+        filePath: 'segments/source/demo-0.mp4',
+        analysis: {
+          shotAssemblyInvalidatedAt: '2026-04-22T01:58:48.317Z',
+          shots: [
+            {
+              id: 'shot_same_second',
+              startTime: 0,
+              endTime: 1,
+              summary: '同秒新镜头任务',
+              prompt: '@主角 在门口停顿',
+              sceneNames: ['咖啡馆内景'],
+              characterNames: ['主角'],
+              representativeFrameTime: 0.5,
+              representativeFrameNote: '同秒任务',
+              sourceFilePath: 'shots/shot_same_second.mp4',
+              sourceFileUrl: '/uploads/shots/shot_same_second.mp4',
+              representativeFrameImagePath: 'frames/shot_same_second.jpg',
+              representativeFrameImageUrl: '/uploads/frames/shot_same_second.jpg',
+              representativeFrameActualTime: 0.5
+            }
+          ]
+        },
+        update: segmentUpdate
+      }
+    ]);
+
+    GenerationTask.findAll.mockResolvedValue([]);
+    ShotGenerationTask.findAll.mockResolvedValue([
+      {
+        id: 401,
+        segmentId: 201,
+        shotId: 'shot_same_second',
+        shotIndex: 0,
+        prompt: '@主角 在门口停顿',
+        optimizedPrompt: '@主角 在门口停顿',
+        startTime: 0,
+        endTime: 1,
+        durationSeconds: 1,
+        status: 'processing',
+        progress: 68,
+        resultUrl: '',
+        errorMessage: null,
+        meta: {
+          remoteStatus: 'running',
+          remoteStatusLabel: '远端生成中'
+        },
+        createdAt: '2026-04-22T01:58:48.000Z',
+        updatedAt: '2026-04-22T01:59:04.000Z'
+      }
+    ]);
+
+    const segments = await listSegmentsByVideoId(101);
+
+    expect(segments).toHaveLength(1);
+    expect(segments[0].analysis.shots[0].latestGenerationTask).toMatchObject({
+      task_id: 401,
+      status: 'processing',
+      remote_status: 'running'
+    });
+    expect(segments[0].shot_generation_summary).toMatchObject({
+      status: 'processing',
+      processing_shot_count: 1
+    });
+  });
+
   test('preserves scene binding metadata when re-analyzing a segment', async () => {
     Segment.findByPk.mockResolvedValue({
       id: 201,
@@ -297,6 +374,69 @@ describe('segmentService', () => {
       representativeFrameImagePath: expect.stringContaining('frames/segment-201-shot_saved_1-representative-frame'),
       representativeFrameImageUrl: expect.stringContaining('/uploads/frames/segment-201-shot_saved_1-representative-frame'),
       representativeFrameActualTime: 1.1
+    });
+  });
+
+  test('does not rebuild shot assets or invalidate results when shot definitions are unchanged', async () => {
+    const segmentUpdate = jest.fn().mockImplementation(function update(payload) {
+      this.analysis = payload.analysis;
+      return Promise.resolve(this);
+    });
+
+    Segment.findByPk.mockResolvedValue({
+      id: 201,
+      videoId: 101,
+      segmentIndex: 0,
+      startTime: 0,
+      endTime: 4,
+      filePath: 'segments/source/demo-0.mp4',
+      analysis: {
+        shots: [
+          {
+            id: 'shot_saved_1',
+            startTime: 0,
+            endTime: 2,
+            summary: '主角推门进入咖啡馆',
+            prompt: '@主角 推门进入 #咖啡馆内景',
+            sceneNames: ['咖啡馆内景'],
+            characterNames: ['主角'],
+            representativeFrameTime: 1.1,
+            representativeFrameNote: '主角进门时的代表帧',
+            sourceFilePath: 'shots/existing-shot.mp4',
+            sourceFileUrl: '/uploads/shots/existing-shot.mp4',
+            representativeFrameImagePath: 'frames/existing-shot.jpg',
+            representativeFrameImageUrl: '/uploads/frames/existing-shot.jpg',
+            representativeFrameActualTime: 1.1
+          }
+        ],
+        shotAssemblyInvalidatedAt: ''
+      },
+      update: segmentUpdate
+    });
+    GenerationTask.findAll.mockResolvedValue([]);
+    ShotGenerationTask.findAll.mockResolvedValue([]);
+
+    const segment = await updateSegmentShotsById(201, [
+      {
+        id: 'shot_saved_1',
+        startTime: 0,
+        endTime: 2,
+        summary: '主角推门进入咖啡馆',
+        prompt: '@主角 推门进入 #咖啡馆内景',
+        sceneNames: ['咖啡馆内景'],
+        characterNames: ['主角'],
+        representativeFrameTime: 1.1,
+        representativeFrameNote: '主角进门时的代表帧'
+      }
+    ]);
+
+    expect(segmentUpdate).not.toHaveBeenCalled();
+    expect(sliceVideoClip).not.toHaveBeenCalled();
+    expect(extractVideoFrame).not.toHaveBeenCalled();
+    expect(segment.analysis.shots[0]).toMatchObject({
+      id: 'shot_saved_1',
+      sourceFilePath: 'shots/existing-shot.mp4',
+      representativeFrameImagePath: 'frames/existing-shot.jpg'
     });
   });
 });

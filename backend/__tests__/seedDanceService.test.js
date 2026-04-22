@@ -39,8 +39,57 @@ await jest.unstable_mockModule('../services/fileService.js', () => ({
   duplicateToUploadPath: jest.fn(),
   ensureParentDirectory: jest.fn(),
   publicUrlToRelativePath: jest.fn((publicUrl) => String(publicUrl).replace(/^\/?uploads\//u, '')),
+  removeFileIfExists: jest.fn(),
   resolveUploadPath: jest.fn((relativePath) => path.join(tempDir, String(relativePath))),
   toPublicUploadUrl: jest.fn((relativePath) => `/uploads/${String(relativePath).replace(/^\/+/, '')}`)
+}));
+
+await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
+  getVideoMetadata: jest.fn(async (absolutePath) => {
+    const normalizedPath = String(absolutePath ?? '');
+
+    if (normalizedPath.includes('short-reference')) {
+      return {
+        duration: 1,
+        durationSecondsExact: 1.2,
+        width: 640,
+        height: 360
+      };
+    }
+
+    if (normalizedPath.includes('low-res-reference')) {
+      return {
+        duration: 3,
+        durationSecondsExact: 3,
+        width: 320,
+        height: 240
+      };
+    }
+
+    if (normalizedPath.includes('low-pixel-reference')) {
+      return {
+        duration: 3,
+        durationSecondsExact: 3,
+        width: 640,
+        height: 360
+      };
+    }
+
+    return {
+      duration: 3,
+      durationSecondsExact: 3,
+      width: 1280,
+      height: 720
+    };
+  }),
+  sliceVideoClip: jest.fn(async (_absolutePath, startTimeSeconds, endTimeSeconds, options = {}) => ({
+    startTime: startTimeSeconds,
+    endTime: endTimeSeconds,
+    duration: Number((Number(endTimeSeconds) - Number(startTimeSeconds)).toFixed(3)),
+    filePath: `${options.directory || 'shots'}/${options.basename || 'trimmed'}.mp4`,
+    fileUrl: `/uploads/${options.directory || 'shots'}/${options.basename || 'trimmed'}.mp4`,
+    engine: 'ffmpeg-slice-openh264'
+  }))
 }));
 
 const {
@@ -48,7 +97,8 @@ const {
   buildSeedDanceRequestBody,
   getSeedDanceProviderStatus,
   estimateSeedDanceTaskProgress,
-  getSeedDanceRemoteStatusLabel
+  getSeedDanceRemoteStatusLabel,
+  resolveSeedDanceProviderDuration
 } = await import(
   '../services/seedDanceService.js'
 );
@@ -159,6 +209,18 @@ describe('seedDanceService', () => {
     });
   });
 
+  test('normalizes too-short generation durations to the provider minimum', async () => {
+    const requestBody = await buildSeedDanceRequestBody({
+      prompt: '短镜头也需要满足 provider 最小时长',
+      duration: 1
+    });
+
+    expect(resolveSeedDanceProviderDuration(1)).toBe(4);
+    expect(requestBody).toMatchObject({
+      duration: 4
+    });
+  });
+
   test('reports Seedance provider readiness for health checks', () => {
     expect(getSeedDanceProviderStatus()).toEqual(
       expect.objectContaining({
@@ -195,5 +257,65 @@ describe('seedDanceService', () => {
       .map((item) => item.video_url.url);
 
     expect(videoUrls).toEqual(['https://example.com/reference-video.mp4']);
+  });
+
+  test('skips local upload reference videos shorter than the provider minimum duration', async () => {
+    const content = await buildSeedDanceContentItems({
+      prompt: '过滤过短 reference_video',
+      sourceAbsolutePath: path.join(tempDir, 'short-reference.mp4'),
+      sourcePublicUrl: 'https://example.com/short-reference.mp4',
+      referenceVideos: [
+        {
+          url: 'https://example.com/long-reference.mp4',
+          absolutePath: sampleVideoPath
+        }
+      ]
+    });
+
+    const videoUrls = content
+      .filter((item) => item.type === 'video_url')
+      .map((item) => item.video_url.url);
+
+    expect(videoUrls).toEqual(['https://example.com/long-reference.mp4']);
+  });
+
+  test('skips local upload reference videos smaller than the provider minimum dimensions', async () => {
+    const content = await buildSeedDanceContentItems({
+      prompt: '过滤低分辨率 reference_video',
+      sourceAbsolutePath: path.join(tempDir, 'low-res-reference.mp4'),
+      sourcePublicUrl: 'https://example.com/low-res-reference.mp4',
+      referenceVideos: [
+        {
+          url: 'https://example.com/long-reference.mp4',
+          absolutePath: sampleVideoPath
+        }
+      ]
+    });
+
+    const videoUrls = content
+      .filter((item) => item.type === 'video_url')
+      .map((item) => item.video_url.url);
+
+    expect(videoUrls).toEqual(['https://example.com/long-reference.mp4']);
+  });
+
+  test('skips local upload reference videos below the provider minimum pixel count', async () => {
+    const content = await buildSeedDanceContentItems({
+      prompt: '过滤低像素 reference_video',
+      sourceAbsolutePath: path.join(tempDir, 'low-pixel-reference.mp4'),
+      sourcePublicUrl: 'https://example.com/low-pixel-reference.mp4',
+      referenceVideos: [
+        {
+          url: 'https://example.com/long-reference.mp4',
+          absolutePath: sampleVideoPath
+        }
+      ]
+    });
+
+    const videoUrls = content
+      .filter((item) => item.type === 'video_url')
+      .map((item) => item.video_url.url);
+
+    expect(videoUrls).toEqual(['https://example.com/long-reference.mp4']);
   });
 });

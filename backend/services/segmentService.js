@@ -12,7 +12,7 @@ import {
 } from './shotGenerationService.js';
 import { completeTask, createTask, failTask, updateTask } from './taskService.js';
 import { splitVideo } from './ffmpegService.js';
-import { rebuildShotAssetsForSegment } from './shotAssetService.js';
+import { rebuildShotAssetsForSegment, shotAssetsNeedRebuild } from './shotAssetService.js';
 import { getVideoRecordById, resolveVideoAbsolutePath } from './videoService.js';
 
 const serializeGenerationTask = (task) => {
@@ -89,7 +89,14 @@ const normalizeShotDefinitions = (shots, segmentStartTime, segmentEndTime) => {
 };
 
 const getShotDefinitionInvalidatedAt = (segment) => {
-  return String(segment?.analysis?.shotAssemblyInvalidatedAt ?? '').trim();
+  const invalidatedAt = String(segment?.analysis?.shotAssemblyInvalidatedAt ?? '').trim();
+  const invalidatedAtMs = invalidatedAt ? Date.parse(invalidatedAt) : 0;
+
+  if (!invalidatedAtMs) {
+    return '';
+  }
+
+  return new Date(Math.floor(invalidatedAtMs / 1000) * 1000).toISOString();
 };
 
 const isTaskStaleShotAssembly = (task, invalidatedAt = '') => {
@@ -105,7 +112,7 @@ const isTaskStaleShotAssembly = (task, invalidatedAt = '') => {
     return false;
   }
 
-  return taskCreatedAtMs < invalidatedAtMs;
+  return taskCreatedAtMs < Math.floor(invalidatedAtMs / 1000) * 1000;
 };
 
 const buildPersistedShotDefinitions = (shots, segmentStartTime, segmentEndTime) => {
@@ -164,6 +171,22 @@ const buildPersistedShotDefinitions = (shots, segmentStartTime, segmentEndTime) 
   return sortedShots;
 };
 
+const arePersistedShotDefinitionsEqual = (leftShots = [], rightShots = []) => {
+  if (!Array.isArray(leftShots) || !Array.isArray(rightShots) || leftShots.length !== rightShots.length) {
+    return false;
+  }
+
+  return leftShots.every((leftShot, shotIndex) => {
+    const rightShot = rightShots[shotIndex];
+
+    if (!rightShot) {
+      return false;
+    }
+
+    return JSON.stringify(leftShot) === JSON.stringify(rightShot);
+  });
+};
+
 const serializeSegment = (
   segment,
   latestCompletedGenerationTask = null,
@@ -215,6 +238,33 @@ const serializeSegment = (
     latest_generation_task: serializeGenerationTask(filteredLatestCompletedGenerationTask),
     latest_attempt_task: serializeGenerationTask(filteredLatestAttemptTask)
   };
+};
+
+const ensurePersistentShotAssets = async (segment) => {
+  const currentShots = Array.isArray(segment?.analysis?.shots) ? segment.analysis.shots : [];
+
+  if (!currentShots.length || !shotAssetsNeedRebuild(currentShots)) {
+    return segment;
+  }
+
+  const rebuiltShots = await rebuildShotAssetsForSegment({
+    segment,
+    shots: currentShots,
+    previousShots: currentShots,
+    cleanupExisting: false
+  });
+
+  const nextAnalysis = {
+    ...(segment.analysis ?? {}),
+    shots: rebuiltShots
+  };
+
+  await segment.update({
+    analysis: nextAnalysis
+  });
+  segment.analysis = nextAnalysis;
+
+  return segment;
 };
 
 const normalizeTimeAnchors = (timeAnchors) => {
@@ -568,7 +618,7 @@ const startSplitVideo = async ({ videoId, timeAnchors }) => {
 };
 
 const analyzeSegmentById = async (segmentId) => {
-  const segment = await getSegmentRecordById(segmentId);
+  const segment = await ensurePersistentShotAssets(await getSegmentRecordById(segmentId));
   const overallAnalysis = await getAnalysisRecordByVideoId(segment.videoId);
 
   if (!overallAnalysis) {
@@ -641,12 +691,14 @@ const listSegmentsByVideoId = async (videoId) => {
     return [];
   }
 
+  const hydratedSegments = await Promise.all(segments.map((segment) => ensurePersistentShotAssets(segment)));
+
   const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestTasksBySegmentIds(
-    segments.map((segment) => segment.id)
+    hydratedSegments.map((segment) => segment.id)
   );
 
   return Promise.all(
-    segments.map(async (segment) => {
+    hydratedSegments.map(async (segment) => {
       const shotDefinitionInvalidatedAt = getShotDefinitionInvalidatedAt(segment);
       const {
         latestAttemptTaskBySegmentId: latestAttemptShotTaskBySegmentId,
@@ -671,6 +723,27 @@ const updateSegmentShotsById = async (segmentId, shots) => {
   const segmentStartTime = Number(segment.startTime);
   const segmentEndTime = Number(segment.endTime);
   const persistedShots = buildPersistedShotDefinitions(shots, segmentStartTime, segmentEndTime);
+  const currentPersistedShots = normalizeShotDefinitions(segment.analysis?.shots ?? [], segmentStartTime, segmentEndTime);
+
+  if (arePersistedShotDefinitionsEqual(currentPersistedShots, persistedShots)) {
+    const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestTasksBySegmentIds([segment.id]);
+    const shotDefinitionInvalidatedAt = getShotDefinitionInvalidatedAt(segment);
+    const {
+      latestAttemptTaskBySegmentId: latestAttemptShotTaskBySegmentId,
+      latestCompletedTaskBySegmentId: latestCompletedShotTaskBySegmentId
+    } = await getLatestShotTaskMapsBySegmentIds([segment.id], {
+      createdAfter: shotDefinitionInvalidatedAt
+    });
+
+    return serializeSegment(
+      segment,
+      latestCompletedTaskBySegmentId.get(segment.id) ?? null,
+      latestAttemptTaskBySegmentId.get(segment.id) ?? null,
+      latestCompletedShotTaskBySegmentId.get(segment.id) ?? new Map(),
+      latestAttemptShotTaskBySegmentId.get(segment.id) ?? new Map()
+    );
+  }
+
   const invalidatedAt = new Date().toISOString();
   const rebuiltShots = await rebuildShotAssetsForSegment({
     segment,

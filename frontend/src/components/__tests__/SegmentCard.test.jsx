@@ -202,9 +202,10 @@ describe('SegmentCard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '生成当前镜头' }));
     return waitFor(() => {
-      expect(onSaveShots).toHaveBeenCalledTimes(1);
       expect(onGenerateShot).toHaveBeenCalledWith(1, 'shot-1', '@主角 推门走进 #咖啡馆内景');
     }).then(async () => {
+      expect(onSaveShots).not.toHaveBeenCalled();
+
       fireEvent.click(screen.getByRole('button', { name: '新增镜头' }));
       const shotCards = screen.getAllByText(/镜头 \d+/);
       expect(shotCards.length).toBeGreaterThan(1);
@@ -217,11 +218,11 @@ describe('SegmentCard', () => {
       fireEvent.click(screen.getAllByRole('button', { name: '生成当前镜头' })[1]);
 
       await waitFor(() => {
-        expect(onSaveShots).toHaveBeenCalledTimes(2);
+        expect(onSaveShots).toHaveBeenCalledTimes(1);
         expect(onGenerateShot).toHaveBeenCalledWith(1, 'saved-shot-2', '@主角 在 #咖啡馆内景 中落座');
       });
 
-      const secondSavePayload = onSaveShots.mock.calls[1][1];
+      const secondSavePayload = onSaveShots.mock.calls[0][1];
       expect(secondSavePayload).toHaveLength(2);
       expect(secondSavePayload[1].summary).toBe('新增镜头摘要');
       expect(secondSavePayload[1].prompt).toBe('@主角 在 #咖啡馆内景 中落座');
@@ -229,7 +230,6 @@ describe('SegmentCard', () => {
       fireEvent.click(screen.getByRole('button', { name: '一键生成全部镜头' }));
 
       await waitFor(() => {
-        expect(onSaveShots).toHaveBeenCalledTimes(3);
         expect(onGenerateAllShots).toHaveBeenCalledWith(
           1,
           expect.arrayContaining([
@@ -244,10 +244,12 @@ describe('SegmentCard', () => {
         );
       });
 
+      expect(onSaveShots).toHaveBeenCalledTimes(1);
+
       fireEvent.click(screen.getByRole('button', { name: '保存镜头' }));
 
       await waitFor(() => {
-        expect(onSaveShots).toHaveBeenCalledTimes(4);
+        expect(onSaveShots).toHaveBeenCalledTimes(1);
       });
     });
   });

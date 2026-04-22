@@ -173,15 +173,7 @@ const ensureBackgroundAsset = async ({
         basename: `background-assets/video-${video.id}-background-${backgroundId.replace(
           /[^\p{L}\p{N}_-]+/gu,
           '-'
-        )}`,
-        referenceVideos: sourcePublicUrl
-          ? [
-              {
-                url: sourcePublicUrl,
-                role: 'reference_video'
-              }
-            ]
-          : []
+        )}`
       });
 
       await backgroundAsset.update({

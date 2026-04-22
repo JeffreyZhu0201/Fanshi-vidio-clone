@@ -534,6 +534,34 @@ const isAuthLikeGeminiStatus = (statusCode) => {
   return [400, 401, 403, 404].includes(Number(statusCode));
 };
 
+const isGeminiModelUnavailableError = (error) => {
+  const message = String(error?.message ?? '').trim();
+  const statusCode = Number(error?.statusCode ?? 0);
+
+  if ([400, 404].includes(statusCode)) {
+    return true;
+  }
+
+  return /model_not_found|无可用渠道|distributor|上游负载已饱和|模型不可用/iu.test(message);
+};
+
+const getGeminiModelCandidates = (requestedModel) => {
+  const fallbackModels = [requestedModel, env.GEMINI_SEGMENT_MODEL, env.GEMINI_MODEL, 'gemini-2.5-flash'];
+  const seenModels = new Set();
+
+  return fallbackModels
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean)
+    .filter((item) => {
+      if (seenModels.has(item)) {
+        return false;
+      }
+
+      seenModels.add(item);
+      return true;
+    });
+};
+
 const resolveVideoMimeType = (absolutePath) => {
   return VIDEO_MIME_TYPES[path.extname(absolutePath).toLowerCase()] || 'video/mp4';
 };
@@ -922,107 +950,118 @@ const callRemoteGemini = async ({
   model = env.GEMINI_MODEL
 }) => {
   const resolvedMode = videoAbsolutePath && mode !== 'google' ? 'google' : mode;
-  const endpoint = resolveGeminiEndpoint(resolvedMode, model);
-  const requestBody =
-    resolvedMode === 'openai'
-      ? await buildOpenAiPromptPayload({ prompt, videoAbsolutePath, model })
-      : await buildGooglePromptPayload({ prompt, videoAbsolutePath });
   const requestTimeoutMs = getGeminiRequestTimeoutMs({ videoAbsolutePath });
-  const requestVariants =
-    resolvedMode === 'google'
-      ? [
-          {
-            name: 'bearer+query-key',
-            url: appendKeyQuery(endpoint, env.GEMINI_API_KEY),
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${env.GEMINI_API_KEY}`
-            }
-          },
-          {
-            name: 'query-key',
-            url: appendKeyQuery(endpoint, env.GEMINI_API_KEY),
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          },
-          {
-            name: 'bearer',
-            url: endpoint,
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${env.GEMINI_API_KEY}`
-            }
-          }
-        ]
-      : [
-          {
-            name: 'bearer',
-            url: endpoint,
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${env.GEMINI_API_KEY}`
-            }
-          }
-        ];
-
   let lastError = null;
 
-  for (let variantIndex = 0; variantIndex < requestVariants.length; variantIndex += 1) {
-    const requestVariant = requestVariants[variantIndex];
+  for (const modelCandidate of getGeminiModelCandidates(model)) {
+    const endpoint = resolveGeminiEndpoint(resolvedMode, modelCandidate);
+    const requestBody =
+      resolvedMode === 'openai'
+        ? await buildOpenAiPromptPayload({ prompt, videoAbsolutePath, model: modelCandidate })
+        : await buildGooglePromptPayload({ prompt, videoAbsolutePath });
+    const requestVariants =
+      resolvedMode === 'google'
+        ? [
+            {
+              name: 'bearer+query-key',
+              url: appendKeyQuery(endpoint, env.GEMINI_API_KEY),
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${env.GEMINI_API_KEY}`
+              }
+            },
+            {
+              name: 'query-key',
+              url: appendKeyQuery(endpoint, env.GEMINI_API_KEY),
+              headers: {
+                'Content-Type': 'application/json'
+              }
+            },
+            {
+              name: 'bearer',
+              url: endpoint,
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${env.GEMINI_API_KEY}`
+              }
+            }
+          ]
+        : [
+            {
+              name: 'bearer',
+              url: endpoint,
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${env.GEMINI_API_KEY}`
+              }
+            }
+          ];
 
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        const response = await fetch(requestVariant.url, {
-          method: 'POST',
-          headers: requestVariant.headers,
-          body: JSON.stringify(requestBody),
-          redirect: 'follow',
-          signal: AbortSignal.timeout(requestTimeoutMs)
-        });
+    for (let variantIndex = 0; variantIndex < requestVariants.length; variantIndex += 1) {
+      const requestVariant = requestVariants[variantIndex];
 
-        const responseText = await response.text();
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          const response = await fetch(requestVariant.url, {
+            method: 'POST',
+            headers: requestVariant.headers,
+            body: JSON.stringify(requestBody),
+            redirect: 'follow',
+            signal: AbortSignal.timeout(requestTimeoutMs)
+          });
 
-        if (!response.ok) {
-          const error = new Error(
-            `Gemini request failed with status ${response.status}: ${responseText.slice(0, 240)}`
-          );
-          error.statusCode = response.status;
-          error.authVariant = requestVariant.name;
-          throw error;
+          const responseText = await response.text();
+
+          if (!response.ok) {
+            const error = new Error(
+              `Gemini request failed with status ${response.status}: ${responseText.slice(0, 240)}`
+            );
+            error.statusCode = response.status;
+            error.authVariant = requestVariant.name;
+            error.model = modelCandidate;
+            throw error;
+          }
+
+          const responsePayload = responseText ? JSON.parse(responseText) : {};
+
+          return {
+            authVariant: requestVariant.name,
+            model: modelCandidate,
+            responsePayload,
+            responseText:
+              resolvedMode === 'openai'
+                ? extractOpenAiResponseText(responsePayload)
+                : extractGoogleResponseText(responsePayload)
+          };
+        } catch (error) {
+          lastError = error;
+
+          if (isAuthLikeGeminiStatus(error.statusCode) && variantIndex < requestVariants.length - 1) {
+            break;
+          }
+
+          if (attempt >= 3 || !isRetryableGeminiStatus(error.statusCode)) {
+            break;
+          }
+
+          await sleep(getGeminiRetryDelayMs(attempt));
         }
+      }
 
-        const responsePayload = responseText ? JSON.parse(responseText) : {};
-
-        return {
-          authVariant: requestVariant.name,
-          responsePayload,
-          responseText:
-            resolvedMode === 'openai'
-              ? extractOpenAiResponseText(responsePayload)
-              : extractGoogleResponseText(responsePayload)
-        };
-      } catch (error) {
-        lastError = error;
-
-        if (
-          isAuthLikeGeminiStatus(error.statusCode) &&
-          variantIndex < requestVariants.length - 1
-        ) {
-          break;
-        }
-
-        if (attempt >= 3 || !isRetryableGeminiStatus(error.statusCode)) {
-          break;
-        }
-
-        await sleep(getGeminiRetryDelayMs(attempt));
+      if (lastError && !isAuthLikeGeminiStatus(lastError.statusCode)) {
+        break;
       }
     }
 
-    if (lastError && !isAuthLikeGeminiStatus(lastError.statusCode)) {
+    if (!lastError || !isGeminiModelUnavailableError(lastError)) {
       break;
     }
+
+    logger.warn('Gemini primary model unavailable, retrying with fallback model.', {
+      requestedModel: model,
+      fallbackModel: modelCandidate,
+      message: lastError.message
+    });
   }
 
   throw lastError ?? new Error('Gemini request failed.');
@@ -1296,7 +1335,7 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath }) => {
   }
 
   try {
-    const { authVariant, responsePayload, responseText } = await callRemoteGemini({
+    const { authVariant, model: resolvedModel, responsePayload, responseText } = await callRemoteGemini({
       prompt: buildVideoAnalysisPrompt({ video, metadata }),
       videoAbsolutePath
     });
@@ -1324,7 +1363,7 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath }) => {
       timeAnchors: derivedTimeAnchors,
       geminiResponse: buildGeminiResponseEnvelope({
         provider: 'remote-gemini',
-        model: env.GEMINI_MODEL,
+        model: resolvedModel || env.GEMINI_MODEL,
         mode: env.GEMINI_API_COMPAT_MODE,
         authVariant,
         isMock: false,
@@ -1408,7 +1447,7 @@ const optimizePrompt = async ({
   }
 
   try {
-    const { responseText } = await callRemoteGemini({
+    const { model: resolvedModel, responseText } = await callRemoteGemini({
       prompt: buildPromptOptimizationPrompt({
         prompt,
         characters,
@@ -1425,7 +1464,8 @@ const optimizePrompt = async ({
 
     return {
       optimizedPrompt,
-      highlightedPrompt: renderHighlightedPrompt(optimizedPrompt)
+      highlightedPrompt: renderHighlightedPrompt(optimizedPrompt),
+      model: resolvedModel || env.GEMINI_MODEL
     };
   } catch (error) {
     if (shouldUseStrictRemoteGemini()) {
