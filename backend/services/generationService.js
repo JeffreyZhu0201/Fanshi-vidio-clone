@@ -4,7 +4,11 @@ import { AppError } from '../middleware/errorHandler.js';
 import { TASK_STATUS } from '../config/constants.js';
 import { ensureBackgroundAsset } from './backgroundAssetService.js';
 import { listCompletedResourceImageAssetsByResourceKeys } from './resourceImageService.js';
-import { assertSeedDanceReady, generateSegment as generateWithSeedDance } from './seedDanceService.js';
+import {
+  assertSeedDanceReady,
+  generateSegment as generateWithSeedDance,
+  resumeRemoteGenerationTask
+} from './seedDanceService.js';
 import { resolveUploadPath, toAbsolutePublicUploadUrl } from './fileService.js';
 import { extractVideoFrame } from './ffmpegService.js';
 import { broadcastRealtimeEvent } from './realtimeService.js';
@@ -810,6 +814,41 @@ const processGenerationTask = async (taskId) => {
     });
     broadcastGenerationTaskUpdate(task);
 
+    const remoteTaskId = String(task.meta?.remoteTaskId ?? '').trim();
+
+    if (remoteTaskId) {
+      const result = await resumeRemoteGenerationTask({
+        remoteTaskId,
+        basename: `segment-${task.segmentId}-task-${task.id}`,
+        duration: getSeedDanceDurationForSegment(task.segment),
+        onProgress: async (progressPayload) => {
+          await applySeedDanceTaskProgress(task, progressPayload);
+        }
+      });
+
+      await task.update({
+        status: TASK_STATUS.completed,
+        progress: 100,
+        resultUrl: result.fileUrl,
+        errorMessage: null,
+        meta: {
+          ...(task.meta ?? {}),
+          source: 'segment_generation',
+          engine: result.engine || '',
+          isMock: Boolean(result.isMock),
+          remoteTaskId: result.remoteTaskId || remoteTaskId,
+          remoteStatus: 'succeeded',
+          remoteStatusLabel: '远端已完成',
+          remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
+          remoteUpdatedAt: task.meta?.remoteUpdatedAt ?? null,
+          fallbackReason: result.fallbackReason || '',
+          providerError: result.providerError || ''
+        }
+      });
+      broadcastGenerationTaskUpdate(task);
+      return;
+    }
+
     const characters = task.segment?.video?.analysis?.characters ?? [];
     const overallAnalysis = task.segment?.video?.analysis ?? null;
     const backgroundBinding = getBackgroundBindingForSegment(task.segment, overallAnalysis);
@@ -1011,6 +1050,7 @@ export {
   getPromptMentionNames,
   getPromptSceneNames,
   getGenerationTaskStatus,
+  processGenerationTask,
   resolveRelevantCharacters,
   resolveRelevantScenes,
   serializeGenerationTask,

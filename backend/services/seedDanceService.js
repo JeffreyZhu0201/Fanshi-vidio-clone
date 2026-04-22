@@ -587,13 +587,13 @@ const estimateSeedDanceTaskProgress = ({ status = '', pollCount = 0, currentProg
 
 const notifyRemoteProgress = async (onProgress, responsePayload, context = {}) => {
   if (typeof onProgress !== 'function') {
-    return;
+    return null;
   }
 
   const status = extractSeedDanceTaskStatus(responsePayload);
   const { createdAt, updatedAt } = extractSeedDanceTaskTimestamps(responsePayload);
 
-  await onProgress({
+  const progressPayload = {
     taskId: extractSeedDanceTaskId(responsePayload) || String(context.taskId ?? '').trim(),
     status,
     statusLabel: getSeedDanceRemoteStatusLabel(status),
@@ -604,7 +604,10 @@ const notifyRemoteProgress = async (onProgress, responsePayload, context = {}) =
     }),
     createdAt,
     updatedAt
-  });
+  };
+
+  await onProgress(progressPayload);
+  return progressPayload;
 };
 
 const downloadRemoteVideoToUploads = async (remoteUrl, basename) => {
@@ -700,6 +703,7 @@ const createRemoteGenerationTask = async ({
 const waitForRemoteGeneration = async (taskId, { onProgress } = {}) => {
   const startedAt = Date.now();
   let pollCount = 0;
+  let currentProgress = 0;
 
   while (Date.now() - startedAt <= env.SEED_DANCE_MAX_WAIT_MS) {
     const taskResponsePayload = await fetchSeedDanceJson(resolveSeedDanceTaskEndpoint(taskId), {
@@ -708,11 +712,15 @@ const waitForRemoteGeneration = async (taskId, { onProgress } = {}) => {
     const taskPayload = unwrapSeedDancePayload(taskResponsePayload);
     const status = extractSeedDanceTaskStatus(taskPayload);
 
-    await notifyRemoteProgress(onProgress, taskPayload, {
+    const progressPayload = await notifyRemoteProgress(onProgress, taskPayload, {
       taskId,
       pollCount,
-      currentProgress: 0
+      currentProgress
     });
+
+    if (Number.isFinite(Number(progressPayload?.progress))) {
+      currentProgress = Number(progressPayload.progress);
+    }
 
     if (['succeeded', 'completed', 'success'].includes(status)) {
       return taskPayload;
@@ -734,6 +742,65 @@ const waitForRemoteGeneration = async (taskId, { onProgress } = {}) => {
   }
 
   throw new Error('Seed Dance 生成超时，请稍后在任务列表中重试。');
+};
+
+const finalizeRemoteGenerationResult = async ({
+  completedTask,
+  taskId,
+  basename,
+  targetDurationSeconds
+}) => {
+  const requestedDuration = normalizeRequestedSeedDanceDuration(targetDurationSeconds);
+  const providerDuration = resolveSeedDanceProviderDuration(targetDurationSeconds);
+  let downloadedAsset = await downloadRemoteVideoToUploads(
+    extractRemoteVideoUrl(completedTask),
+    basename
+  );
+
+  if (requestedDuration + 0.05 < providerDuration) {
+    downloadedAsset = await trimDownloadedSeedDanceVideo({
+      downloadedAsset,
+      basename,
+      targetDurationSeconds: requestedDuration
+    });
+  }
+
+  return {
+    filePath: downloadedAsset.filePath,
+    fileUrl: downloadedAsset.fileUrl,
+    remoteUrl: downloadedAsset.remoteUrl,
+    remoteTaskId: taskId,
+    engine: 'seed-dance-remote',
+    isMock: false,
+    requestedDurationSeconds: requestedDuration,
+    providerDurationSeconds: providerDuration,
+    fallbackReason: '',
+    providerError: ''
+  };
+};
+
+const resumeRemoteGenerationTask = async ({
+  remoteTaskId,
+  basename = 'generated-segment',
+  duration,
+  onProgress
+}) => {
+  const safeRemoteTaskId = String(remoteTaskId ?? '').trim();
+
+  if (!safeRemoteTaskId) {
+    throw new Error('缺少远端任务 ID，无法恢复 Seed Dance 任务。');
+  }
+
+  const completedTask = await waitForRemoteGeneration(safeRemoteTaskId, {
+    onProgress
+  });
+
+  return finalizeRemoteGenerationResult({
+    completedTask,
+    taskId: safeRemoteTaskId,
+    basename,
+    targetDurationSeconds: duration
+  });
 };
 
 const generateSegment = async ({
@@ -787,28 +854,15 @@ const generateSegment = async ({
       const completedTask = await waitForRemoteGeneration(taskId, {
         onProgress
       });
-      let downloadedAsset = await downloadRemoteVideoToUploads(
-        extractRemoteVideoUrl(completedTask),
-        basename
-      );
-
-      if (requestedDuration + 0.05 < providerDuration) {
-        downloadedAsset = await trimDownloadedSeedDanceVideo({
-          downloadedAsset,
-          basename,
-          targetDurationSeconds: requestedDuration
-        });
-      }
+      const finalizedResult = await finalizeRemoteGenerationResult({
+        completedTask,
+        taskId,
+        basename,
+        targetDurationSeconds: requestedDuration
+      });
 
       return {
-        filePath: downloadedAsset.filePath,
-        fileUrl: downloadedAsset.fileUrl,
-        remoteUrl: downloadedAsset.remoteUrl,
-        remoteTaskId: taskId,
-        engine: 'seed-dance-remote',
-        isMock: false,
-        requestedDurationSeconds: requestedDuration,
-        providerDurationSeconds: providerDuration,
+        ...finalizedResult,
         fallbackReason: !isWebUrl(sourcePublicUrl)
           ? 'seedance_skipped_non_public_reference_video'
           : '',
@@ -850,5 +904,6 @@ export {
   estimateSeedDanceTaskProgress,
   getSeedDanceRemoteStatusLabel,
   extractSeedDanceTaskStatus,
-  resolveSeedDanceProviderDuration
+  resolveSeedDanceProviderDuration,
+  resumeRemoteGenerationTask
 };

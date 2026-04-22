@@ -21,6 +21,7 @@ import {
 } from './middleware/security.js';
 import apiRouter from './routes/index.js';
 import { attachRealtimeServer, closeRealtimeServers } from './services/realtimeService.js';
+import { recoverInFlightTasks } from './services/taskRecoveryService.js';
 import { ensureUploadDirectories } from './utils/bootstrap.js';
 import logger, { morganStream } from './utils/logger.js';
 import { loadHttpsCredentials } from './utils/ssl.js';
@@ -116,6 +117,9 @@ const startServers = async (app) => {
 
   await ensureUploadDirectories();
   await connectDatabase({ force: true });
+  queueMicrotask(() => {
+    void recoverInFlightTasks();
+  });
 
   if (env.HTTPS_ENABLED) {
     const credentials = loadHttpsCredentials({

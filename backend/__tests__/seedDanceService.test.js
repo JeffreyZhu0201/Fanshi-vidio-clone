@@ -98,7 +98,8 @@ const {
   getSeedDanceProviderStatus,
   estimateSeedDanceTaskProgress,
   getSeedDanceRemoteStatusLabel,
-  resolveSeedDanceProviderDuration
+  resolveSeedDanceProviderDuration,
+  resumeRemoteGenerationTask
 } = await import(
   '../services/seedDanceService.js'
 );
@@ -116,6 +117,7 @@ describe('seedDanceService', () => {
   });
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     await rm(tempDir, { recursive: true, force: true });
   });
 
@@ -239,6 +241,60 @@ describe('seedDanceService', () => {
     expect(estimateSeedDanceTaskProgress({ status: 'queued', pollCount: 1, currentProgress: 45 })).toBe(55);
     expect(estimateSeedDanceTaskProgress({ status: 'running', pollCount: 2, currentProgress: 55 })).toBe(78);
     expect(estimateSeedDanceTaskProgress({ status: 'succeeded', pollCount: 3, currentProgress: 78 })).toBe(97);
+  });
+
+  test('can resume an existing remote Seedance task and trim it back to the target duration', async () => {
+    await mkdir(path.join(tempDir, 'outputs'), { recursive: true });
+
+    const fetchSpy = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'remote-task-1',
+            status: 'succeeded',
+            content: {
+              video_url: 'https://example.com/generated-remote.mp4'
+            },
+            created_at: 1776823143,
+            updated_at: 1776823886
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from('fake-remote-video-binary'), {
+          status: 200,
+          headers: {
+            'Content-Type': 'video/mp4'
+          }
+        })
+      );
+    const progressEvents = [];
+
+    const resumedResult = await resumeRemoteGenerationTask({
+      remoteTaskId: 'remote-task-1',
+      basename: 'resumed-shot',
+      duration: 1,
+      onProgress: async (progressPayload) => {
+        progressEvents.push(progressPayload);
+      }
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(progressEvents.at(-1)).toMatchObject({
+      taskId: 'remote-task-1',
+      status: 'succeeded',
+      progress: 97
+    });
+    expect(resumedResult).toMatchObject({
+      remoteTaskId: 'remote-task-1',
+      engine: 'seed-dance-remote',
+      requestedDurationSeconds: 1,
+      providerDurationSeconds: 4,
+      filePath: 'outputs/resumed-shot-trimmed.mp4',
+      fileUrl: '/uploads/outputs/resumed-shot-trimmed.mp4'
+    });
   });
 
   test('skips local reference videos because Seedance requires web urls', async () => {

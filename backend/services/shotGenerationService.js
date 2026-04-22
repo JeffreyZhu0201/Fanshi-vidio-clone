@@ -16,7 +16,11 @@ import {
 import { publicUrlToRelativePath, resolveUploadPath, toAbsolutePublicUploadUrl } from './fileService.js';
 import { extractVideoFrame, mergeVideos } from './ffmpegService.js';
 import { broadcastRealtimeEvent } from './realtimeService.js';
-import { assertSeedDanceReady, generateSegment as generateWithSeedDance } from './seedDanceService.js';
+import {
+  assertSeedDanceReady,
+  generateSegment as generateWithSeedDance,
+  resumeRemoteGenerationTask
+} from './seedDanceService.js';
 import { rebuildShotAssetsForSegment, shotAssetsNeedRebuild } from './shotAssetService.js';
 
 const SHOT_TASK_EVENT = 'shot:progress';
@@ -686,6 +690,58 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
     const generationWarnings = [];
     const sourceAbsolutePath = shotSourceAbsolutePath || segmentSourceAbsolutePath;
     const sourcePublicUrl = shotSourcePublicUrl || segmentSourcePublicUrl;
+    const remoteTaskId = String(task.meta?.remoteTaskId ?? '').trim();
+
+    if (remoteTaskId) {
+      const result = await resumeRemoteGenerationTask({
+        remoteTaskId,
+        basename: `segment-${segment.id}-${task.shotId}-task-${task.id}`,
+        duration: getShotDurationForGeneration(shot),
+        onProgress: async (progressPayload) => {
+          await applySeedDanceShotTaskProgress(task, progressPayload);
+        }
+      });
+
+      await task.update({
+        status: TASK_STATUS.completed,
+        progress: 100,
+        resultUrl: result.fileUrl,
+        errorMessage: null,
+        meta: {
+          ...(task.meta ?? {}),
+          source: 'shot_generation',
+          engine: result.engine || '',
+          isMock: Boolean(result.isMock),
+          remoteTaskId: result.remoteTaskId || remoteTaskId,
+          remoteStatus: 'succeeded',
+          remoteStatusLabel: '远端已完成',
+          remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
+          remoteUpdatedAt: task.meta?.remoteUpdatedAt ?? null,
+          fallbackReason: result.fallbackReason || '',
+          providerError: result.providerError || ''
+        }
+      });
+      broadcastShotGenerationTaskUpdate(task);
+      await refreshShotAssemblyProgressFromTasks(task.segmentId);
+
+      if (attemptAssembly) {
+        try {
+          await attemptPendingShotAssembly(task.segmentId);
+        } catch (error) {
+          const refreshedSegment = await Segment.findByPk(task.segmentId);
+
+          if (refreshedSegment?.analysis?.shotAssembly) {
+            await updateSegmentShotAssembly(refreshedSegment, {
+              status: TASK_STATUS.failed,
+              progress: 100,
+              errorMessage: error.message
+            });
+          }
+        }
+      }
+
+      return ShotGenerationTask.findByPk(task.id);
+    }
 
     if (!shotSourceAbsolutePath) {
       generationWarnings.push('小镜头源视频缺失，已回退到大片段源视频');
@@ -1044,6 +1100,8 @@ export {
   getShotGenerationSummaryForSegment,
   getShotGenerationTaskStatus,
   hydrateAnalysisShotsWithTasks,
+  attemptPendingShotAssembly,
+  processShotGenerationTask,
   serializeShotGenerationTask,
   startShotBatchGeneration,
   startShotGeneration
