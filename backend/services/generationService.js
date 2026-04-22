@@ -752,6 +752,19 @@ const getSeedDanceDurationForSegment = (segment) => {
   return Math.min(15, Math.max(4, roundedDurationSeconds));
 };
 
+const normalizeComparablePrompt = (value) => String(value ?? '').trim();
+
+const doesSegmentTaskMatchGenerationRequest = ({ task, prompt, ratio }) => {
+  if (!task) {
+    return false;
+  }
+
+  return (
+    normalizeComparablePrompt(task.prompt) === normalizeComparablePrompt(prompt) &&
+    normalizeGenerationRatio(task.meta?.ratio) === normalizeGenerationRatio(ratio)
+  );
+};
+
 const buildSeedDanceReconstructionPrompt = ({
   prompt = '',
   characterNames = [],
@@ -775,7 +788,8 @@ const buildSeedDanceReconstructionPrompt = ({
       ? `必须把这些场景参考图作为空间真值：${normalizedSceneNames.map((name) => `#${name}`).join('、')}。`
       : '如果提供了场景参考图，必须优先用它们锁定空间结构、布景、材质、布光和色彩。',
     '保持原片相同或最接近的景别、拍摄高度、视角方向、人物左右位置、前中后景层次、遮挡关系、进出画路径、视线方向、镜头运动和动作节奏。',
-    '不要新增原片没有的角色、场景切换、道具焦点、情节动作或夸张镜头运动。'
+    '不要新增原片没有的角色、场景切换、道具焦点、情节动作或夸张镜头运动。',
+    '画面里不要任何字幕、台词字卡、贴纸文案、Logo、水印、角标、UI 浮层或其它可见文字。'
   ]
     .filter(Boolean)
     .join('\n');
@@ -994,6 +1008,47 @@ const startGeneration = async ({ segmentId, prompt, ratio }) => {
   assertSeedDanceReady();
 
   const resolvedRatio = normalizeGenerationRatio(ratio);
+  const latestTasks = await GenerationTask.findAll({
+    where: {
+      segmentId
+    },
+    order: [['createdAt', 'DESC']]
+  });
+  const latestAttemptTask = latestTasks[0] ?? null;
+  const latestCompletedTask = latestTasks.find((task) => task.status === TASK_STATUS.completed) ?? null;
+
+  if (
+    latestAttemptTask &&
+    [TASK_STATUS.pending, TASK_STATUS.processing].includes(latestAttemptTask.status) &&
+    doesSegmentTaskMatchGenerationRequest({
+      task: latestAttemptTask,
+      prompt,
+      ratio: resolvedRatio
+    })
+  ) {
+    return {
+      task_id: latestAttemptTask.id,
+      status: latestAttemptTask.status,
+      progress: latestAttemptTask.progress,
+      ratio: resolvedRatio
+    };
+  }
+
+  if (
+    latestCompletedTask?.resultUrl &&
+    doesSegmentTaskMatchGenerationRequest({
+      task: latestCompletedTask,
+      prompt,
+      ratio: resolvedRatio
+    })
+  ) {
+    return {
+      task_id: latestCompletedTask.id,
+      status: latestCompletedTask.status,
+      progress: latestCompletedTask.progress,
+      ratio: resolvedRatio
+    };
+  }
 
   const task = await GenerationTask.create({
     segmentId,

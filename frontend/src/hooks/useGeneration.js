@@ -1297,15 +1297,23 @@ const useGeneration = () => {
       const nextSummary = {
         segment_id: segmentId,
         status: batchPayload.status ?? 'processing',
-        progress: 0,
+        progress: Number(batchPayload.progress ?? (batchPayload.status === 'completed' ? 100 : 0)) || 0,
         total_shot_count: Number(batchPayload.shot_count ?? shotsForGeneration.length) || shotsForGeneration.length,
-        completed_shot_count: 0,
-        failed_shot_count: 0,
+        completed_shot_count: Number(batchPayload.completed_shot_count ?? 0) || 0,
+        failed_shot_count: Number(batchPayload.failed_shot_count ?? 0) || 0,
         processing_shot_count:
-          Number(batchPayload.shot_count ?? shotsForGeneration.length) || shotsForGeneration.length,
-        pending_assembly: true,
-        result_url: '',
-        error_message: '',
+          Number(
+            batchPayload.processing_shot_count ??
+              (batchPayload.status === 'processing'
+                ? Number(batchPayload.shot_count ?? shotsForGeneration.length) || shotsForGeneration.length
+                : 0)
+          ) || 0,
+        pending_assembly:
+          typeof batchPayload.pending_assembly === 'boolean'
+            ? batchPayload.pending_assembly
+            : batchPayload.status !== 'completed',
+        result_url: toAbsoluteAssetUrl(batchPayload.result_url),
+        error_message: batchPayload.error_message ?? '',
         assembly_generation_task_id: null,
         source: 'shot_assembly',
         started_at: batchPayload.started_at ?? '',
@@ -1316,6 +1324,10 @@ const useGeneration = () => {
         shotGenerationSummary: nextSummary,
         latestShotAssemblyTask: nextSummary
       });
+
+      if (['completed', 'failed'].includes(nextSummary.status)) {
+        markShotBatchGenerating(segmentId, false);
+      }
 
       return batchPayload;
     } catch (error) {

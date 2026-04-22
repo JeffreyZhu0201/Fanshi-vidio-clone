@@ -38,7 +38,8 @@ await jest.unstable_mockModule('../services/resourceImageService.js', () => ({
 
 await jest.unstable_mockModule('../services/seedDanceService.js', () => ({
   assertSeedDanceReady: jest.fn(),
-  generateSegment: jest.fn()
+  generateSegment: jest.fn(),
+  resumeRemoteGenerationTask: jest.fn()
 }));
 
 await jest.unstable_mockModule('../services/fileService.js', () => ({
@@ -166,5 +167,6 @@ describe('generationService helpers', () => {
     expect(prompt).toContain('@主角');
     expect(prompt).toContain('#街道夜景');
     expect(prompt).toContain('人物左右位置');
+    expect(prompt).toContain('不要任何字幕');
   });
 });

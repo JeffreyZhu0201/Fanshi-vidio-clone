@@ -112,6 +112,140 @@ const normalizeGenerationRatio = (value) => {
   return /^[1-9]\d{0,2}:[1-9]\d{0,2}$/u.test(trimmedValue) ? trimmedValue : env.SEED_DANCE_RATIO;
 };
 
+const normalizeComparablePrompt = (value) => String(value ?? '').trim();
+
+const areNumericTaskFieldsEqual = (leftValue, rightValue) => {
+  const leftNumber = Number(leftValue);
+  const rightNumber = Number(rightValue);
+
+  if (!Number.isFinite(leftNumber) || !Number.isFinite(rightNumber)) {
+    return false;
+  }
+
+  return Math.abs(leftNumber - rightNumber) < 0.01;
+};
+
+const doesShotTaskMatchGenerationRequest = ({ task, shot, prompt, ratio }) => {
+  if (!task || !shot) {
+    return false;
+  }
+
+  return (
+    String(task.shotId ?? '').trim() === String(shot.id ?? '').trim() &&
+    normalizeComparablePrompt(task.prompt) === normalizeComparablePrompt(prompt) &&
+    normalizeGenerationRatio(task.meta?.ratio) === normalizeGenerationRatio(ratio) &&
+    areNumericTaskFieldsEqual(task.startTime, shot.startTime) &&
+    areNumericTaskFieldsEqual(task.endTime, shot.endTime) &&
+    areNumericTaskFieldsEqual(task.durationSeconds, shot.durationSeconds)
+  );
+};
+
+const getExistingReusableShotTask = ({
+  latestAttemptTaskByShotId = new Map(),
+  latestCompletedTaskByShotId = new Map(),
+  shot,
+  prompt,
+  ratio
+}) => {
+  const latestAttemptTask = latestAttemptTaskByShotId.get(String(shot?.id ?? '').trim()) ?? null;
+
+  if (
+    latestAttemptTask &&
+    [TASK_STATUS.pending, TASK_STATUS.processing].includes(latestAttemptTask.status) &&
+    doesShotTaskMatchGenerationRequest({
+      task: latestAttemptTask,
+      shot,
+      prompt,
+      ratio
+    })
+  ) {
+    return latestAttemptTask;
+  }
+
+  const latestCompletedTask = latestCompletedTaskByShotId.get(String(shot?.id ?? '').trim()) ?? null;
+
+  if (
+    latestCompletedTask?.resultUrl &&
+    latestCompletedTask.status === TASK_STATUS.completed &&
+    doesShotTaskMatchGenerationRequest({
+      task: latestCompletedTask,
+      shot,
+      prompt,
+      ratio
+    })
+  ) {
+    return latestCompletedTask;
+  }
+
+  return null;
+};
+
+const createCompletedReuseTaskForBatch = async ({
+  segmentId,
+  shot,
+  prompt,
+  ratio,
+  startedAt,
+  sourceTask
+}) => {
+  const reuseTask = await ShotGenerationTask.create({
+    segmentId,
+    shotId: shot.id,
+    shotIndex: shot.shotIndex,
+    prompt,
+    optimizedPrompt: sourceTask.optimizedPrompt || prompt,
+    startTime: shot.startTime,
+    endTime: shot.endTime,
+    durationSeconds: shot.durationSeconds,
+    status: TASK_STATUS.completed,
+    progress: 100,
+    resultUrl: sourceTask.resultUrl,
+    errorMessage: null,
+    meta: {
+      ...(sourceTask.meta ?? {}),
+      source: 'shot_generation_batch_reuse',
+      batchStartedAt: startedAt,
+      ratio: normalizeGenerationRatio(ratio),
+      reusedFromTaskId: sourceTask.id
+    }
+  });
+
+  broadcastShotGenerationTaskUpdate(reuseTask);
+  return reuseTask;
+};
+
+const createResumedReuseTaskForBatch = async ({
+  segmentId,
+  shot,
+  prompt,
+  ratio,
+  startedAt,
+  sourceTask
+}) => {
+  const resumedTask = await ShotGenerationTask.create({
+    segmentId,
+    shotId: shot.id,
+    shotIndex: shot.shotIndex,
+    prompt,
+    optimizedPrompt: sourceTask.optimizedPrompt || prompt,
+    startTime: shot.startTime,
+    endTime: shot.endTime,
+    durationSeconds: shot.durationSeconds,
+    status: TASK_STATUS.pending,
+    progress: Math.max(0, Number(sourceTask.progress ?? 0) || 0),
+    meta: {
+      ...(sourceTask.meta ?? {}),
+      source: 'shot_generation_batch_resume',
+      batchStartedAt: startedAt,
+      ratio: normalizeGenerationRatio(ratio),
+      reusedFromTaskId: sourceTask.id
+    }
+  });
+
+  broadcastShotGenerationTaskUpdate(resumedTask);
+  return resumedTask;
+};
+
 const serializeShotGenerationMeta = (task) => {
   const taskMeta = task?.meta ?? {};
 
@@ -935,6 +1069,21 @@ const startShotGeneration = async ({ segmentId, shotId, prompt, ratio }) => {
 
   assertSeedDanceReady();
 
+  const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestShotTaskMapsBySegmentIds([
+    segmentId
+  ]);
+  const existingTask = getExistingReusableShotTask({
+    latestAttemptTaskByShotId: latestAttemptTaskBySegmentId.get(segmentId) ?? new Map(),
+    latestCompletedTaskByShotId: latestCompletedTaskBySegmentId.get(segmentId) ?? new Map(),
+    shot,
+    prompt: resolvedPrompt,
+    ratio: resolvedRatio
+  });
+
+  if (existingTask) {
+    return serializeShotGenerationTask(existingTask);
+  }
+
   const task = await ShotGenerationTask.create({
     segmentId,
     shotId: shot.id,
@@ -974,14 +1123,56 @@ const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, rat
   const segment = await getSegmentWithContextById(segmentId);
   const normalizedShots = getNormalizedSegmentShots(segment);
   const resolvedRatio = normalizeGenerationRatio(ratio);
+  const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestShotTaskMapsBySegmentIds([
+    segmentId
+  ]);
+  const latestAttemptTaskByShotId = latestAttemptTaskBySegmentId.get(segmentId) ?? new Map();
+  const latestCompletedTaskByShotId = latestCompletedTaskBySegmentId.get(segmentId) ?? new Map();
 
   for (const shot of normalizedShots) {
     const overridePrompt = String(promptOverrides[shot.id] ?? '').trim();
+    const targetPrompt = overridePrompt || shot.prompt;
+    const reusableTask = getExistingReusableShotTask({
+      latestAttemptTaskByShotId,
+      latestCompletedTaskByShotId,
+      shot,
+      prompt: targetPrompt,
+      ratio: resolvedRatio
+    });
+
+    if (reusableTask?.status === TASK_STATUS.completed && reusableTask.resultUrl) {
+      await createCompletedReuseTaskForBatch({
+        segmentId,
+        shot,
+        prompt: targetPrompt,
+        ratio: resolvedRatio,
+        startedAt,
+        sourceTask: reusableTask
+      });
+      continue;
+    }
+
+    if (reusableTask && [TASK_STATUS.pending, TASK_STATUS.processing].includes(reusableTask.status)) {
+      const resumedTask = await createResumedReuseTaskForBatch({
+        segmentId,
+        shot,
+        prompt: targetPrompt,
+        ratio: resolvedRatio,
+        startedAt,
+        sourceTask: reusableTask
+      });
+
+      await processShotGenerationTask(resumedTask.id, {
+        attemptAssembly: false
+      });
+      continue;
+    }
+
     const task = await ShotGenerationTask.create({
       segmentId,
       shotId: shot.id,
       shotIndex: shot.shotIndex,
-      prompt: overridePrompt || shot.prompt,
+      prompt: targetPrompt,
       startTime: shot.startTime,
       endTime: shot.endTime,
       durationSeconds: shot.durationSeconds,
@@ -1047,6 +1238,78 @@ const startShotBatchGeneration = async ({ segmentId, shots = [], ratio }) => {
 
     return accumulator;
   }, {});
+  const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestShotTaskMapsBySegmentIds([
+    segmentId
+  ]);
+  const latestAttemptTaskByShotId = latestAttemptTaskBySegmentId.get(segmentId) ?? new Map();
+  const latestCompletedTaskByShotId = latestCompletedTaskBySegmentId.get(segmentId) ?? new Map();
+  const matchingReusableTasks = normalizedShots.map((shot) => {
+    const resolvedPrompt = String(promptOverrides[shot.id] ?? '').trim() || shot.prompt;
+
+    return getExistingReusableShotTask({
+      latestAttemptTaskByShotId,
+      latestCompletedTaskByShotId,
+      shot,
+      prompt: resolvedPrompt,
+      ratio: resolvedRatio
+    });
+  });
+  const allShotsAlreadyReusableCompleted =
+    normalizedShots.length > 0 &&
+    matchingReusableTasks.every((task) => task?.status === TASK_STATUS.completed && task?.resultUrl);
+  const existingAssemblyResultUrl = String(
+    segment.analysis?.shotAssembly?.resultUrl ?? segment.analysis?.shotAssembly?.result_url ?? ''
+  ).trim();
+  const existingAssemblyStatus = String(segment.analysis?.shotAssembly?.status ?? '').trim().toLowerCase();
+
+  if (
+    Boolean(segment.analysis?.shotAssembly?.pendingAssembly) &&
+    [TASK_STATUS.pending, TASK_STATUS.processing].includes(existingAssemblyStatus)
+  ) {
+    const currentSummary = await getShotGenerationSummaryForSegment(segment, {
+      createdAfter: segment.analysis?.shotAssembly?.startedAt ?? segment.analysis?.shotAssembly?.started_at ?? ''
+    });
+
+    if (
+      Number(currentSummary.processing_shot_count ?? 0) > 0 ||
+      Number(currentSummary.failed_shot_count ?? 0) > 0 ||
+      String(currentSummary.result_url ?? '').trim()
+    ) {
+      return {
+        segment_id: segmentId,
+        shot_count: normalizedShots.length,
+        status: currentSummary.status,
+        started_at: currentSummary.started_at ?? segment.analysis?.shotAssembly?.startedAt ?? '',
+        ratio: resolvedRatio,
+        progress: currentSummary.progress,
+        completed_shot_count: currentSummary.completed_shot_count,
+        failed_shot_count: currentSummary.failed_shot_count,
+        processing_shot_count: currentSummary.processing_shot_count,
+        pending_assembly: currentSummary.pending_assembly,
+        result_url: currentSummary.result_url || '',
+        reused_existing_result: true
+      };
+    }
+  }
+
+  if (allShotsAlreadyReusableCompleted && existingAssemblyResultUrl) {
+    return {
+      segment_id: segmentId,
+      shot_count: normalizedShots.length,
+      status: TASK_STATUS.completed,
+      started_at:
+        segment.analysis?.shotAssembly?.startedAt ?? segment.analysis?.shotAssembly?.started_at ?? '',
+      ratio: resolvedRatio,
+      progress: 100,
+      completed_shot_count: normalizedShots.length,
+      failed_shot_count: 0,
+      processing_shot_count: 0,
+      pending_assembly: false,
+      result_url: existingAssemblyResultUrl,
+      reused_existing_result: true
+    };
+  }
+
   const startedAt = new Date().toISOString();
 
   await updateSegmentShotAssembly(segment, {
