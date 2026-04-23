@@ -12,7 +12,7 @@ describe('VideoMerge', () => {
         video={{ id: 1, filename: 'demo.mp4' }}
         segments={[
           { id: 1, generatedUrl: 'https://example.com/generated-1.mp4' },
-          { id: 2, generatedUrl: '' }
+          { id: 2, generatedUrl: 'https://example.com/generated-2.mp4' }
         ]}
         mergeProgress={{
           status: 'completed',

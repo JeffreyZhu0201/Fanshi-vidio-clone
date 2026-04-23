@@ -217,4 +217,65 @@ describe('segment source consistency', () => {
 
     unmount();
   });
+
+  it('ignores completed mock-copy results as a real generated preview', async () => {
+    useVideoStore.setState({
+      currentVideo: {
+        id: 901,
+        filename: 'segment-source.mp4'
+      }
+    });
+
+    getSegments.mockResolvedValue([
+      {
+        id: 1002,
+        segment_index: 1,
+        start_time: 4,
+        end_time: 8,
+        file_path: 'segments/source/segment-1.mp4',
+        file_url: '/uploads/segments/source/segment-1.mp4',
+        analysis: {
+          prompt: '@主角 继续推进剧情',
+          characters: ['主角']
+        },
+        latest_generation_task: {
+          id: 6001,
+          status: 'completed',
+          progress: 100,
+          result_url: '/uploads/outputs/segment-1-mock.mp4',
+          engine: 'mock-copy',
+          is_mock: true,
+          fallback_reason: 'remote_generation_failed',
+          error_message: null
+        },
+        latest_attempt_task: {
+          id: 6001,
+          status: 'completed',
+          progress: 100,
+          result_url: '/uploads/outputs/segment-1-mock.mp4',
+          engine: 'mock-copy',
+          is_mock: true,
+          fallback_reason: 'remote_generation_failed',
+          error_message: null
+        }
+      }
+    ]);
+
+    const { unmount } = renderHook(() => useSegments());
+
+    await waitFor(() => {
+      expect(getSegments).toHaveBeenCalledWith(901);
+    });
+
+    await waitFor(() => {
+      expect(useGenerationStore.getState().segments).toHaveLength(1);
+    });
+
+    const hydratedSegment = useGenerationStore.getState().segments[0];
+
+    expect(hydratedSegment.generatedUrl).toBe('');
+    expect(hydratedSegment.latestCompletedGenerationTask.is_mock).toBe(true);
+
+    unmount();
+  });
 });

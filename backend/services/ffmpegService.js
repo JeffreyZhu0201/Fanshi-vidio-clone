@@ -346,45 +346,57 @@ const mergeVideos = async (absoluteInputPaths, { basename = 'merged-video', onPr
   const absoluteTargetPath = resolveUploadPath(relativePath);
   await ensureParentDirectory(absoluteTargetPath);
 
-  let engine = 'mock-copy';
-
-  if (ffmpegAvailable && absoluteInputPaths.length > 1) {
-    const listFilePath = path.join(os.tmpdir(), `fanshi-merge-${Date.now()}.txt`);
-
-    try {
-      const listContent = absoluteInputPaths
-        .map((filePath) => `file '${filePath.replace(/'/g, "'\\''")}'`)
-        .join('\n');
-
-      await writeFile(listFilePath, listContent, 'utf8');
-      if (typeof onProgress === 'function') {
-        onProgress(35);
-      }
-
-      await execFileAsync('ffmpeg', [
-        '-y',
-        '-f',
-        'concat',
-        '-safe',
-        '0',
-        '-i',
-        listFilePath,
-        '-c',
-        'copy',
-        absoluteTargetPath
-      ]);
-
-      engine = 'ffmpeg';
-    } catch (error) {
-      logger.warn('FFmpeg merge failed, falling back to mock merge strategy.', {
-        message: error.message
-      });
-      await duplicateToUploadPath(absoluteInputPaths[0], relativePath);
-    } finally {
-      await rm(listFilePath, { force: true });
-    }
-  } else {
+  if (absoluteInputPaths.length === 1) {
     await duplicateToUploadPath(absoluteInputPaths[0], relativePath);
+
+    if (typeof onProgress === 'function') {
+      onProgress(100);
+    }
+
+    return {
+      filePath: relativePath,
+      fileUrl: toPublicUploadUrl(relativePath),
+      engine: 'single-input-copy'
+    };
+  }
+
+  if (!ffmpegAvailable) {
+    throw new Error('FFmpeg is required to merge multiple videos, but it is not available.');
+  }
+
+  const listFilePath = path.join(os.tmpdir(), `fanshi-merge-${Date.now()}.txt`);
+
+  try {
+    const listContent = absoluteInputPaths
+      .map((filePath) => `file '${filePath.replace(/'/g, "'\\''")}'`)
+      .join('\n');
+
+    await writeFile(listFilePath, listContent, 'utf8');
+    if (typeof onProgress === 'function') {
+      onProgress(35);
+    }
+
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      listFilePath,
+      '-c',
+      'copy',
+      absoluteTargetPath
+    ]);
+  } catch (error) {
+    logger.warn('FFmpeg merge failed; refusing to fake a merged result by copying only the first input.', {
+      message: error.message,
+      inputCount: absoluteInputPaths.length
+    });
+    await rm(absoluteTargetPath, { force: true });
+    throw new Error('FFmpeg merge failed, so no merged output was produced.');
+  } finally {
+    await rm(listFilePath, { force: true });
   }
 
   if (typeof onProgress === 'function') {
@@ -394,7 +406,7 @@ const mergeVideos = async (absoluteInputPaths, { basename = 'merged-video', onPr
   return {
     filePath: relativePath,
     fileUrl: toPublicUploadUrl(relativePath),
-    engine
+    engine: 'ffmpeg'
   };
 };
 

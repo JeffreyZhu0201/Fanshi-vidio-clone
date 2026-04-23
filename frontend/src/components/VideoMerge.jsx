@@ -21,7 +21,7 @@ const VideoMerge = ({
   onDownload
 }) => {
   const generatedSegments = segments.filter((segment) => segment.generatedUrl).length;
-  const canMerge = Boolean(video?.id) && segments.length > 0;
+  const canMerge = Boolean(video?.id) && segments.length > 0 && generatedSegments === segments.length;
   const isMerging = mergeProgress.status === 'processing' || mergeProgress.status === 'pending';
   const isCompleted = mergeProgress.status === 'completed';
 
@@ -36,9 +36,7 @@ const VideoMerge = ({
           <StatusBadge status={mergeProgress.status} />
         </div>
 
-        <p className="floating-export-copy">
-          优先使用已生成片段，缺失部分自动回退到原片，保持导出不断链。
-        </p>
+        <p className="floating-export-copy">只使用真实生成完成的片段导出，缺失结果时会直接报错提醒。</p>
 
         <div className="floating-export-grid">
           <div className="floating-export-metric">
@@ -109,8 +107,8 @@ const VideoMerge = ({
       title="成片拼接"
       description={
         compactMode
-          ? '优先使用已生成片段，缺失部分自动回退到原片。'
-          : '拼接任务会优先使用已生成的片段，没有生成结果的片段会自动回退到原片内容。'
+          ? '只使用真实生成片段导出。'
+          : '拼接任务只使用真实生成完成的片段，没有结果时会直接提示缺失。'
       }
       actions={<StatusBadge status={mergeProgress.status} />}
       compact={compactMode}
@@ -122,7 +120,7 @@ const VideoMerge = ({
             <p className="text-[11px] uppercase tracking-[0.24em] text-white/40">当前项目</p>
             <p className="mt-2 truncate text-sm font-semibold text-white">{video?.filename || '未选择视频'}</p>
             <p className="mt-1 text-[11px] leading-5 text-white/55">
-              优先使用已生成片段，缺失部分自动回退到原片内容，保证成片导出不断链。
+              只使用真实生成完成的片段导出，不再用原片片段充数。
             </p>
           </div>
 

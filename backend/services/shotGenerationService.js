@@ -34,6 +34,7 @@ import {
 
 const SHOT_TASK_EVENT = 'shot:progress';
 const SHOT_ASSEMBLY_EVENT = 'shot-assembly:progress';
+const inflightShotGenerationTaskProcesses = new Map();
 
 const normalizeOptionalNumber = (value) => {
   const parsedValue = Number(value);
@@ -171,6 +172,23 @@ const doesShotTaskMatchGenerationRequest = ({ task, shot, prompt, ratio }) => {
   );
 };
 
+const isTaskMarkedMock = (task) => {
+  const taskMeta = task?.meta ?? {};
+  const engine = String(taskMeta.engine ?? '').trim().toLowerCase();
+  const fallbackReason = String(taskMeta.fallbackReason ?? '').trim().toLowerCase();
+
+  return (
+    Boolean(taskMeta.isMock) ||
+    engine.includes('mock') ||
+    fallbackReason.includes('remote_generation_failed') ||
+    fallbackReason.includes('missing_remote_config')
+  );
+};
+
+const isUsableCompletedShotTask = (task) => {
+  return Boolean(task?.status === TASK_STATUS.completed && task?.resultUrl && !isTaskMarkedMock(task));
+};
+
 const getExistingReusableShotTask = ({
   latestAttemptTaskByShotId = new Map(),
   latestCompletedTaskByShotId = new Map(),
@@ -196,8 +214,7 @@ const getExistingReusableShotTask = ({
   const latestCompletedTask = latestCompletedTaskByShotId.get(String(shot?.id ?? '').trim()) ?? null;
 
   if (
-    latestCompletedTask?.resultUrl &&
-    latestCompletedTask.status === TASK_STATUS.completed &&
+    isUsableCompletedShotTask(latestCompletedTask) &&
     doesShotTaskMatchGenerationRequest({
       task: latestCompletedTask,
       shot,
@@ -209,6 +226,21 @@ const getExistingReusableShotTask = ({
   }
 
   return null;
+};
+
+const shouldRestartLocalShotTask = (task) => {
+  if (!task || ![TASK_STATUS.pending, TASK_STATUS.processing].includes(task.status)) {
+    return false;
+  }
+
+  if (String(task.meta?.remoteTaskId ?? '').trim()) {
+    return false;
+  }
+
+  const updatedAtMs = task?.updatedAt ? Date.parse(task.updatedAt) : 0;
+  const staleAfterMs = Math.max(30000, Number(env.SEED_DANCE_CREATE_TIMEOUT_MS ?? 120000) + 10000);
+
+  return Boolean(updatedAtMs) && Date.now() - updatedAtMs > staleAfterMs;
 };
 
 const createCompletedReuseTaskForBatch = async ({
@@ -421,7 +453,7 @@ const buildShotTaskLookup = (tasks = [], segmentIds = [], { createdAfter = '' } 
       latestAttemptTaskBySegmentId.set(segmentId, latestAttemptByShotId);
     }
 
-    if (task.status === TASK_STATUS.completed) {
+    if (isUsableCompletedShotTask(task)) {
       const latestCompletedByShotId = latestCompletedTaskBySegmentId.get(segmentId) ?? new Map();
 
       if (!latestCompletedByShotId.has(shotId)) {
@@ -471,7 +503,8 @@ const buildShotGenerationSummary = ({
   const processingShotCount = shots.filter((shot) =>
     [TASK_STATUS.pending, TASK_STATUS.processing].includes(latestAttemptTaskByShotId.get(shot.id)?.status)
   ).length;
-  const hasAssemblyResult = Boolean(shotAssembly?.resultUrl || shotAssembly?.result_url);
+  const hasAllRealShotResults = totalShotCount > 0 && completedShotCount === totalShotCount;
+  const hasAssemblyResult = hasAllRealShotResults && Boolean(shotAssembly?.resultUrl || shotAssembly?.result_url);
   let status = String(shotAssembly?.status ?? '').trim();
 
   if (!status) {
@@ -504,6 +537,7 @@ const buildShotGenerationSummary = ({
     segmentId,
     {
       ...shotAssembly,
+      resultUrl: hasAssemblyResult ? shotAssembly?.resultUrl ?? shotAssembly?.result_url ?? '' : '',
       status,
       progress,
       totalShotCount,
@@ -727,6 +761,13 @@ const createSegmentAssemblyGenerationTask = async ({
   shotTasks = [],
   prompt = ''
 }) => {
+  if (shotTasks.some((task) => !isUsableCompletedShotTask(task))) {
+    throw new AppError('小镜头结果包含非真实 Seedance 输出，已禁止拼回大片段。', 409, {
+      segment_id: segment.id,
+      shot_task_ids: shotTasks.map((task) => task?.id).filter(Boolean)
+    });
+  }
+
   const assemblyTask = await GenerationTask.create({
     segmentId: segment.id,
     prompt,
@@ -737,12 +778,13 @@ const createSegmentAssemblyGenerationTask = async ({
     meta: {
       source: 'shot_assembly',
       engine: mergedResult.engine || '',
-      isMock: shotTasks.some((task) => Boolean(task.meta?.isMock)),
+      isMock: false,
       remoteTaskId: '',
-      fallbackReason: shotTasks.some((task) => String(task.meta?.fallbackReason ?? '').trim())
-        ? 'contains_shot_fallback'
-        : '',
+      fallbackReason: '',
       providerError: '',
+      shotGenerationWarnings: shotTasks
+        .map((task) => String(task.meta?.fallbackReason ?? '').trim())
+        .filter(Boolean),
       shotTaskIds: shotTasks.map((task) => task.id),
       shotIds: shotTasks.map((task) => task.shotId)
     }
@@ -832,7 +874,7 @@ const getShotDurationForGeneration = (shot) => {
   return Number(durationSeconds.toFixed(2));
 };
 
-const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}) => {
+const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = true } = {}) => {
   const task = await ShotGenerationTask.findByPk(taskId, {
     include: [
       {
@@ -918,6 +960,7 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
           engine: result.engine || '',
           isMock: Boolean(result.isMock),
           remoteTaskId: result.remoteTaskId || remoteTaskId,
+          remoteUrl: result.remoteUrl || '',
           remoteStatus: 'succeeded',
           remoteStatusLabel: '远端已完成',
           remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
@@ -1104,6 +1147,7 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
         engine: result.engine || '',
         isMock: Boolean(result.isMock),
         remoteTaskId: result.remoteTaskId || '',
+        remoteUrl: result.remoteUrl || '',
         remoteStatus: 'succeeded',
         remoteStatusLabel: '远端已完成',
         remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
@@ -1153,6 +1197,27 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
   return ShotGenerationTask.findByPk(task.id);
 };
 
+const processShotGenerationTask = async (taskId, options = {}) => {
+  const taskKey = String(taskId ?? '').trim();
+
+  if (!taskKey) {
+    return null;
+  }
+
+  const inflightProcess = inflightShotGenerationTaskProcesses.get(taskKey);
+
+  if (inflightProcess) {
+    return inflightProcess;
+  }
+
+  const processPromise = processShotGenerationTaskUnlocked(taskId, options).finally(() => {
+    inflightShotGenerationTaskProcesses.delete(taskKey);
+  });
+
+  inflightShotGenerationTaskProcesses.set(taskKey, processPromise);
+  return processPromise;
+};
+
 const startShotGeneration = async ({ segmentId, shotId, prompt, ratio }) => {
   const segment = await getSegmentWithContextById(segmentId);
   const shot = getShotByIdFromSegment(segment, shotId);
@@ -1180,6 +1245,14 @@ const startShotGeneration = async ({ segmentId, shotId, prompt, ratio }) => {
   });
 
   if (existingTask) {
+    if (shouldRestartLocalShotTask(existingTask)) {
+      queueMicrotask(() => {
+        void processShotGenerationTask(existingTask.id, {
+          attemptAssembly: true
+        });
+      });
+    }
+
     return serializeShotGenerationTask(existingTask);
   }
 
@@ -1351,28 +1424,6 @@ const startShotBatchGeneration = async ({ segmentId, shots = [], ratio }) => {
 
     return accumulator;
   }, {});
-  const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestShotTaskMapsBySegmentIds([
-    segmentId
-  ]);
-  const latestAttemptTaskByShotId = latestAttemptTaskBySegmentId.get(segmentId) ?? new Map();
-  const latestCompletedTaskByShotId = latestCompletedTaskBySegmentId.get(segmentId) ?? new Map();
-  const matchingReusableTasks = normalizedShots.map((shot) => {
-    const resolvedPrompt = String(promptOverrides[shot.id] ?? '').trim() || shot.prompt;
-
-    return getExistingReusableShotTask({
-      latestAttemptTaskByShotId,
-      latestCompletedTaskByShotId,
-      shot,
-      prompt: resolvedPrompt,
-      ratio: resolvedRatio
-    });
-  });
-  const allShotsAlreadyReusableCompleted =
-    normalizedShots.length > 0 &&
-    matchingReusableTasks.every((task) => task?.status === TASK_STATUS.completed && task?.resultUrl);
-  const existingAssemblyResultUrl = String(
-    segment.analysis?.shotAssembly?.resultUrl ?? segment.analysis?.shotAssembly?.result_url ?? ''
-  ).trim();
   const existingAssemblyStatus = String(segment.analysis?.shotAssembly?.status ?? '').trim().toLowerCase();
 
   if (
@@ -1403,24 +1454,6 @@ const startShotBatchGeneration = async ({ segmentId, shots = [], ratio }) => {
         reused_existing_result: true
       };
     }
-  }
-
-  if (allShotsAlreadyReusableCompleted && existingAssemblyResultUrl) {
-    return {
-      segment_id: segmentId,
-      shot_count: normalizedShots.length,
-      status: TASK_STATUS.completed,
-      started_at:
-        segment.analysis?.shotAssembly?.startedAt ?? segment.analysis?.shotAssembly?.started_at ?? '',
-      ratio: resolvedRatio,
-      progress: 100,
-      completed_shot_count: normalizedShots.length,
-      failed_shot_count: 0,
-      processing_shot_count: 0,
-      pending_assembly: false,
-      result_url: existingAssemblyResultUrl,
-      reused_existing_result: true
-    };
   }
 
   const startedAt = new Date().toISOString();

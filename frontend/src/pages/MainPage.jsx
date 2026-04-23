@@ -237,7 +237,7 @@ const MainPage = () => {
     {
       id: 'merge',
       label: '导出成片',
-      description: '优先使用已生成片段，缺失部分自动回退原片。',
+      description: '只使用真实生成片段，缺失部分直接提示。',
       status: mergeStageStatus,
       meta:
         mergeProgress.status === 'completed'

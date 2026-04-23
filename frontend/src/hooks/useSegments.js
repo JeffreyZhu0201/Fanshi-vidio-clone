@@ -74,6 +74,26 @@ const normalizeShotGenerationTask = (taskPayload) => {
   };
 };
 
+const isTaskMockLike = (task) => {
+  const engine = String(task?.engine ?? '').trim().toLowerCase();
+  const fallbackReason = String(task?.fallback_reason ?? '').trim().toLowerCase();
+
+  return (
+    Boolean(task?.is_mock) ||
+    engine.includes('mock') ||
+    fallbackReason.includes('remote_generation_failed') ||
+    fallbackReason.includes('missing_remote_config')
+  );
+};
+
+const getUsableCompletedTaskResultUrl = (task) => {
+  if (!task || task.status !== 'completed' || !task.result_url || isTaskMockLike(task)) {
+    return '';
+  }
+
+  return task.result_url;
+};
+
 const normalizeShotGenerationSummary = (summaryPayload) => {
   if (!summaryPayload) {
     return null;
@@ -187,7 +207,9 @@ const normalizeSegment = (segment) => {
         latestCompletedGenerationTask: normalizeShotGenerationTask(
           shot.latestCompletedGenerationTask ?? shot.latest_completed_generation_task
         ),
-        generatedUrl: toAbsoluteAssetUrl(shot.generatedUrl ?? shot.generated_url)
+        generatedUrl: getUsableCompletedTaskResultUrl(
+          normalizeShotGenerationTask(shot.latestCompletedGenerationTask ?? shot.latest_completed_generation_task)
+        )
       }))
     : [];
   const normalizedShotSummary = normalizeShotGenerationSummary(segment.shot_generation_summary);
@@ -199,7 +221,7 @@ const normalizeSegment = (segment) => {
     endTime: Number(segment.end_time),
     sourceUrl: toAbsoluteAssetUrl(segment.file_url),
     sourcePath: segment.file_path,
-    generatedUrl: latestCompletedGenerationTask?.result_url ?? '',
+    generatedUrl: getUsableCompletedTaskResultUrl(latestCompletedGenerationTask),
     scene: segment.analysis?.scene ?? '',
     scenes: segment.analysis?.scenes ?? [],
     action: segment.analysis?.action ?? '',

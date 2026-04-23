@@ -7,6 +7,23 @@ import { createTask, getTask, completeTask, failTask, updateTask } from './taskS
 import { publicUrlToRelativePath, resolveUploadPath } from './fileService.js';
 import { getVideoRecordById } from './videoService.js';
 
+const isTaskMarkedMock = (task) => {
+  const taskMeta = task?.meta ?? {};
+  const engine = String(taskMeta.engine ?? '').trim().toLowerCase();
+  const fallbackReason = String(taskMeta.fallbackReason ?? '').trim().toLowerCase();
+
+  return (
+    Boolean(taskMeta.isMock) ||
+    engine.includes('mock') ||
+    fallbackReason.includes('remote_generation_failed') ||
+    fallbackReason.includes('missing_remote_config')
+  );
+};
+
+const isUsableCompletedGenerationTask = (task) => {
+  return Boolean(task?.status === 'completed' && task?.resultUrl && !isTaskMarkedMock(task));
+};
+
 const processMergeTask = async (taskId, videoId) => {
   try {
     updateTask(taskId, {
@@ -40,7 +57,7 @@ const processMergeTask = async (taskId, videoId) => {
 
     const latestCompletedTaskBySegmentId = new Map();
     generationTasks.forEach((task) => {
-      if (!latestCompletedTaskBySegmentId.has(task.segmentId)) {
+      if (isUsableCompletedGenerationTask(task) && !latestCompletedTaskBySegmentId.has(task.segmentId)) {
         latestCompletedTaskBySegmentId.set(task.segmentId, task);
       }
     });
@@ -52,7 +69,11 @@ const processMergeTask = async (taskId, videoId) => {
         return resolveUploadPath(publicUrlToRelativePath(latestTask.resultUrl));
       }
 
-      return resolveUploadPath(segment.filePath);
+      throw new AppError('存在片段没有真实 Seedance 生成结果，已禁止用原片片段充数导出。', 409, {
+        video_id: videoId,
+        segment_id: segment.id,
+        segment_index: segment.segmentIndex
+      });
     });
 
     updateTask(taskId, {

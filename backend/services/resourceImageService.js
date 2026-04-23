@@ -152,6 +152,10 @@ const summarizeResourceImageError = (message = '') => {
     return 'Gemini 生图服务未配置完成，请先检查后端图片模型密钥和地址。';
   }
 
+  if (/fetch failed|request failed|unexpected eof|connect timeout|timed out/iu.test(normalizedMessage)) {
+    return '当前到 Gemini 生图服务的连接不稳定，请稍后重试。';
+  }
+
   return normalizedMessage;
 };
 

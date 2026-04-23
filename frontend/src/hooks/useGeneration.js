@@ -154,6 +154,26 @@ const normalizeGenerationTask = (taskPayload) => {
   };
 };
 
+const isTaskMockLike = (task) => {
+  const engine = String(task?.engine ?? '').trim().toLowerCase();
+  const fallbackReason = String(task?.fallback_reason ?? '').trim().toLowerCase();
+
+  return (
+    Boolean(task?.is_mock) ||
+    engine.includes('mock') ||
+    fallbackReason.includes('remote_generation_failed') ||
+    fallbackReason.includes('missing_remote_config')
+  );
+};
+
+const getUsableCompletedTaskResultUrl = (task) => {
+  if (!task || task.status !== 'completed' || !task.result_url || isTaskMockLike(task)) {
+    return '';
+  }
+
+  return task.result_url;
+};
+
 const normalizeShotAssemblyPayload = (payload) => {
   if (!payload) {
     return null;
@@ -181,7 +201,9 @@ const getShotRuntimeKey = (segmentId, shotId) => `${segmentId}:${shotId}`;
 
 const buildClientShotSummary = (segment, shots, currentSummary = null) => {
   const totalShotCount = shots.length;
-  const completedShotCount = shots.filter((shot) => Boolean(shot.latestCompletedGenerationTask?.task_id)).length;
+  const completedShotCount = shots.filter((shot) =>
+    Boolean(getUsableCompletedTaskResultUrl(shot.latestCompletedGenerationTask))
+  ).length;
   const failedShotCount = shots.filter((shot) => shot.latestGenerationTask?.status === 'failed').length;
   const processingShotCount = shots.filter((shot) =>
     ['pending', 'processing'].includes(shot.latestGenerationTask?.status)
@@ -511,7 +533,9 @@ const useGeneration = () => {
           latestCompletedGenerationTask: normalizeShotTask(
             shot.latestCompletedGenerationTask ?? shot.latest_completed_generation_task
           ),
-          generatedUrl: toAbsoluteAssetUrl(shot.generatedUrl ?? shot.generated_url)
+          generatedUrl: getUsableCompletedTaskResultUrl(
+            normalizeShotTask(shot.latestCompletedGenerationTask ?? shot.latest_completed_generation_task)
+          )
         }))
       : currentSegment.shots ?? [];
 
@@ -539,11 +563,7 @@ const useGeneration = () => {
       highlightedPrompt: '',
       latestCompletedGenerationTask: normalizeGenerationTask(segmentPayload.latest_generation_task),
       latestGenerationTask: normalizeGenerationTask(segmentPayload.latest_attempt_task),
-      generatedUrl:
-        toAbsoluteAssetUrl(segmentPayload.latest_shot_assembly_task?.result_url) ||
-        toAbsoluteAssetUrl(segmentPayload.shot_generation_summary?.result_url) ||
-        toAbsoluteAssetUrl(segmentPayload.latest_generation_task?.result_url) ||
-        ''
+      generatedUrl: getUsableCompletedTaskResultUrl(normalizeGenerationTask(segmentPayload.latest_generation_task))
     });
 
     return segmentPayload;
@@ -671,17 +691,15 @@ const useGeneration = () => {
           payload.optimized_prompt ?? currentSegment?.latestGenerationTask?.optimizedPrompt ?? '',
         error_message: payload.error_message ?? payload.message ?? ''
       });
+      const nextGeneratedUrl = getUsableCompletedTaskResultUrl(nextGenerationTask);
 
       updateSegment(resolvedSegmentId, {
         latestGenerationTask: nextGenerationTask,
         latestCompletedGenerationTask:
-          payload.status === 'completed' && payload.result_url
+          nextGeneratedUrl
             ? nextGenerationTask
             : currentSegment?.latestCompletedGenerationTask ?? null,
-        generatedUrl:
-          payload.status === 'completed' && payload.result_url
-            ? toAbsoluteAssetUrl(payload.result_url)
-            : currentSegment?.generatedUrl ?? ''
+        generatedUrl: nextGeneratedUrl || currentSegment?.generatedUrl || ''
       });
     });
   }, [updateSegment, updateTask]);
@@ -697,19 +715,17 @@ const useGeneration = () => {
       }
 
       const nextShotTask = normalizeShotTask(payload);
+      const nextShotGeneratedUrl = getUsableCompletedTaskResultUrl(nextShotTask);
       const nextShots = (currentSegment.shots ?? []).map((shot) =>
         shot.id === payloadShotId
           ? {
               ...shot,
               latestGenerationTask: nextShotTask,
               latestCompletedGenerationTask:
-                nextShotTask?.status === 'completed'
+                nextShotGeneratedUrl
                   ? nextShotTask
                   : shot.latestCompletedGenerationTask ?? null,
-              generatedUrl:
-                nextShotTask?.status === 'completed'
-                  ? nextShotTask.result_url
-                  : shot.generatedUrl ?? ''
+              generatedUrl: nextShotGeneratedUrl || shot.generatedUrl || ''
             }
           : shot
       );

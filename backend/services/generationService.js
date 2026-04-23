@@ -45,6 +45,23 @@ const serializeGenerationTask = (task) => ({
   updated_at: task.updatedAt
 });
 
+const isTaskMarkedMock = (task) => {
+  const taskMeta = task?.meta ?? {};
+  const engine = String(taskMeta.engine ?? '').trim().toLowerCase();
+  const fallbackReason = String(taskMeta.fallbackReason ?? '').trim().toLowerCase();
+
+  return (
+    Boolean(taskMeta.isMock) ||
+    engine.includes('mock') ||
+    fallbackReason.includes('remote_generation_failed') ||
+    fallbackReason.includes('missing_remote_config')
+  );
+};
+
+const isUsableCompletedGenerationTask = (task) => {
+  return Boolean(task?.status === TASK_STATUS.completed && task?.resultUrl && !isTaskMarkedMock(task));
+};
+
 const broadcastGenerationTaskUpdate = (task) => {
   broadcastRealtimeEvent('generation:progress', serializeGenerationTask(task));
 };
@@ -875,6 +892,7 @@ const processGenerationTask = async (taskId) => {
           engine: result.engine || '',
           isMock: Boolean(result.isMock),
           remoteTaskId: result.remoteTaskId || remoteTaskId,
+          remoteUrl: result.remoteUrl || '',
           remoteStatus: 'succeeded',
           remoteStatusLabel: '远端已完成',
           remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
@@ -995,6 +1013,7 @@ const processGenerationTask = async (taskId) => {
         engine: result.engine || '',
         isMock: Boolean(result.isMock),
         remoteTaskId: result.remoteTaskId || '',
+        remoteUrl: result.remoteUrl || '',
         remoteStatus: 'succeeded',
         remoteStatusLabel: '远端已完成',
         remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
@@ -1041,7 +1060,7 @@ const startGeneration = async ({ segmentId, prompt, ratio }) => {
     order: [['createdAt', 'DESC']]
   });
   const latestAttemptTask = latestTasks[0] ?? null;
-  const latestCompletedTask = latestTasks.find((task) => task.status === TASK_STATUS.completed) ?? null;
+  const latestCompletedTask = latestTasks.find((task) => isUsableCompletedGenerationTask(task)) ?? null;
 
   if (
     latestAttemptTask &&
@@ -1061,7 +1080,7 @@ const startGeneration = async ({ segmentId, prompt, ratio }) => {
   }
 
   if (
-    latestCompletedTask?.resultUrl &&
+    isUsableCompletedGenerationTask(latestCompletedTask) &&
     doesSegmentTaskMatchGenerationRequest({
       task: latestCompletedTask,
       prompt,

@@ -1,11 +1,10 @@
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import os from 'node:os';
-import { readFile, unlink, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import env from '../config/env.js';
 import logger from '../utils/logger.js';
+import { requestExternalJson } from './externalHttpService.js';
 import { removeFileIfExists, resolveUploadPath } from './fileService.js';
 import { extractVideoFrame } from './ffmpegService.js';
 
@@ -32,10 +31,13 @@ const stripMarkdownCodeFence = (value = '') => {
     .trim();
 };
 
-const CURL_HTTP_STATUS_MARKER = '__CURL_HTTP_STATUS__:';
 const WHOLE_VIDEO_ANALYSIS_MIN_FRAME_COUNT = 4;
 const WHOLE_VIDEO_ANALYSIS_MAX_FRAME_COUNT = 6;
-const WHOLE_VIDEO_PRIMARY_UPLOAD_TIMEOUT_MS = 20 * 1000;
+const WHOLE_VIDEO_ANALYSIS_MODEL = 'gemini-2.5-pro';
+const WHOLE_VIDEO_PRIMARY_UPLOAD_TIMEOUT_MS = Math.max(
+  Number(env.GEMINI_WHOLE_VIDEO_TIMEOUT_MS) || 0,
+  10 * 60 * 1000
+);
 const WHOLE_VIDEO_FRAME_FALLBACK_TIMEOUT_MS = 60 * 1000;
 
 const extractJsonObject = (value = '') => {
@@ -79,9 +81,13 @@ const isNetworkLikeGeminiError = (error) => {
     return false;
   }
 
-  return /fetch failed|connect timeout|tls connection|socket disconnected|econnreset|enotfound|eai_again|timed out/iu.test(
+  return /fetch failed|connect timeout|tls connection|socket disconnected|econnreset|enotfound|eai_again|timed out|timeout|aborted|unexpected eof/iu.test(
     normalizedMessage
   );
+};
+
+const isGeminiTimeoutError = (error) => {
+  return /timed out|timeout|aborted/iu.test(describeGeminiTransportError(error));
 };
 
 const renderHighlightedPrompt = (prompt = '') => {
@@ -600,7 +606,11 @@ const isGeminiModelUnavailableError = (error) => {
   return /model_not_found|无可用渠道|distributor|上游负载已饱和|模型不可用/iu.test(message);
 };
 
-const getGeminiModelCandidates = (requestedModel) => {
+const getGeminiModelCandidates = (requestedModel, { allowModelFallback = true } = {}) => {
+  if (!allowModelFallback) {
+    return [String(requestedModel ?? '').trim()].filter(Boolean);
+  }
+
   const fallbackModels = [requestedModel, env.GEMINI_SEGMENT_MODEL, env.GEMINI_MODEL, 'gemini-2.5-flash'];
   const seenModels = new Set();
 
@@ -1140,7 +1150,10 @@ const analyzeVideoWithFrameFallback = async ({
   try {
     const { authVariant, model: resolvedModel, responsePayload, responseText } = await callRemoteGemini({
       prompt: buildFrameFallbackVideoAnalysisPrompt({ video, metadata, frameSamples }),
-      imageAbsolutePaths: frameSamples.map((sample) => sample.absolutePath)
+      imageAbsolutePaths: frameSamples.map((sample) => sample.absolutePath),
+      requestTimeoutOverrideMs: WHOLE_VIDEO_FRAME_FALLBACK_TIMEOUT_MS,
+      preferCurlTransport: true,
+      model: env.GEMINI_SEGMENT_MODEL || env.GEMINI_MODEL
     });
     const parsedPayload = parseJsonPayload(responseText, '整片分析模型（关键帧回退）');
 
@@ -1172,91 +1185,7 @@ const analyzeVideoWithFrameFallback = async ({
   }
 };
 
-const executeCurlRequest = async ({ url, headers = {}, requestBody, timeoutMs = env.EXTERNAL_REQUEST_TIMEOUT }) => {
-  const maxTimeSeconds = Math.max(1, Math.ceil(Number(timeoutMs) / 1000));
-  const requestBodyFilePath = path.join(
-    os.tmpdir(),
-    `fanshi-gemini-request-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`
-  );
-  const args = [
-    '--silent',
-    '--show-error',
-    '--location',
-    '--max-time',
-    String(maxTimeSeconds),
-    '--connect-timeout',
-    '15',
-    '--request',
-    'POST',
-    url,
-    '--write-out',
-    CURL_HTTP_STATUS_MARKER + '%{http_code}'
-  ];
-
-  Object.entries(headers).forEach(([headerName, headerValue]) => {
-    if (headerValue === undefined || headerValue === null || headerValue === '') {
-      return;
-    }
-
-    args.push('--header', `${headerName}: ${headerValue}`);
-  });
-
-  args.push('--data-binary', `@${requestBodyFilePath}`);
-
-  await writeFile(requestBodyFilePath, JSON.stringify(requestBody), 'utf8');
-
-  try {
-    return await new Promise((resolve, reject) => {
-      const curlProcess = spawn('curl', args, {
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-      let stdout = '';
-      let stderr = '';
-
-      curlProcess.stdout.setEncoding('utf8');
-      curlProcess.stderr.setEncoding('utf8');
-      curlProcess.stdout.on('data', (chunk) => {
-        stdout += chunk;
-      });
-      curlProcess.stderr.on('data', (chunk) => {
-        stderr += chunk;
-      });
-      curlProcess.on('error', (error) => {
-        reject(error);
-      });
-      curlProcess.on('close', (code) => {
-        if (code !== 0) {
-          const curlError = new Error(
-            `Gemini curl fallback failed with exit code ${code}: ${String(stderr || stdout).trim() || 'Unknown curl error'}`
-          );
-          curlError.exitCode = code;
-          reject(curlError);
-          return;
-        }
-
-        const markerIndex = stdout.lastIndexOf(CURL_HTTP_STATUS_MARKER);
-
-        if (markerIndex === -1) {
-          reject(new Error('Gemini curl fallback did not return an HTTP status marker.'));
-          return;
-        }
-
-        const responseBody = stdout.slice(0, markerIndex);
-        const rawStatusCode = stdout.slice(markerIndex + CURL_HTTP_STATUS_MARKER.length).trim();
-        const statusCode = Number(rawStatusCode);
-
-        resolve({
-          statusCode: Number.isFinite(statusCode) ? statusCode : 0,
-          responseText: responseBody
-        });
-      });
-    });
-  } finally {
-    await unlink(requestBodyFilePath).catch(() => {});
-  }
-};
-
-const callRemoteGeminiWithCurl = async ({
+const callRemoteGeminiOverHttp = async ({
   url,
   headers = {},
   requestBody,
@@ -1265,24 +1194,23 @@ const callRemoteGeminiWithCurl = async ({
   authVariant = '',
   model = env.GEMINI_MODEL
 }) => {
-  const { statusCode, responseText } = await executeCurlRequest({
-    url,
+  const { response, responseText, responsePayload } = await requestExternalJson(url, {
+    method: 'POST',
     headers,
-    requestBody,
+    body: JSON.stringify(requestBody),
     timeoutMs
   });
+  const statusCode = response.status;
 
   if (statusCode < 200 || statusCode >= 300) {
     const error = new Error(
-      `Gemini curl request failed with status ${statusCode}: ${responseText.slice(0, 240)}`
+      `Gemini request failed with status ${statusCode}: ${responseText.slice(0, 240)}`
     );
     error.statusCode = statusCode;
     error.authVariant = authVariant;
     error.model = model;
     throw error;
   }
-
-  const responsePayload = responseText ? JSON.parse(responseText) : {};
 
   return {
     authVariant,
@@ -1321,8 +1249,12 @@ const callRemoteGemini = async ({
   videoAbsolutePath = '',
   imageAbsolutePaths = [],
   requestTimeoutOverrideMs = null,
+  preferCurlTransport = false,
   mode = env.GEMINI_API_COMPAT_MODE,
-  model = env.GEMINI_MODEL
+  model = env.GEMINI_MODEL,
+  allowModelFallback = true,
+  allowAuthVariantFallback = true,
+  maxAttempts = 3
 }) => {
   const hasMediaInput = Boolean(videoAbsolutePath || imageAbsolutePaths.length);
   const resolvedMode = hasMediaInput && mode !== 'google' ? 'google' : mode;
@@ -1332,7 +1264,7 @@ const callRemoteGemini = async ({
       : getGeminiRequestTimeoutMs({ videoAbsolutePath });
   let lastError = null;
 
-  for (const modelCandidate of getGeminiModelCandidates(model)) {
+  for (const modelCandidate of getGeminiModelCandidates(model, { allowModelFallback })) {
     const endpoint = resolveGeminiEndpoint(resolvedMode, modelCandidate);
     const requestBody =
       resolvedMode === 'openai'
@@ -1375,77 +1307,68 @@ const callRemoteGemini = async ({
               }
             }
           ];
+    const activeRequestVariants = allowAuthVariantFallback ? requestVariants : requestVariants.slice(0, 1);
 
-    for (let variantIndex = 0; variantIndex < requestVariants.length; variantIndex += 1) {
-      const requestVariant = requestVariants[variantIndex];
+    for (let variantIndex = 0; variantIndex < activeRequestVariants.length; variantIndex += 1) {
+      const requestVariant = activeRequestVariants[variantIndex];
 
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
-        try {
-          const response = await fetch(requestVariant.url, {
-            method: 'POST',
-            headers: requestVariant.headers,
-            body: JSON.stringify(requestBody),
-            redirect: 'follow',
-            signal: AbortSignal.timeout(requestTimeoutMs)
-          });
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        if (preferCurlTransport || hasMediaInput) {
+          try {
+            return await callRemoteGeminiOverHttp({
+              url: requestVariant.url,
+              headers: requestVariant.headers,
+              requestBody,
+              timeoutMs: requestTimeoutMs,
+              mode: resolvedMode,
+              authVariant: `${requestVariant.name}+node`,
+              model: modelCandidate
+            });
+          } catch (nodeTransportError) {
+            lastError = nodeTransportError;
 
-          const responseText = await response.text();
-
-          if (!response.ok) {
-            const error = new Error(
-              `Gemini request failed with status ${response.status}: ${responseText.slice(0, 240)}`
-            );
-            error.statusCode = response.status;
-            error.authVariant = requestVariant.name;
-            error.model = modelCandidate;
-            throw error;
-          }
-
-          const responsePayload = responseText ? JSON.parse(responseText) : {};
-
-          return {
-            authVariant: requestVariant.name,
-            model: modelCandidate,
-            responsePayload,
-            responseText:
-              resolvedMode === 'openai'
-                ? extractOpenAiResponseText(responsePayload)
-                : extractGoogleResponseText(responsePayload)
-          };
-        } catch (error) {
-          let effectiveError = error;
-
-          if (isNetworkLikeGeminiError(error)) {
-            try {
-              const curlResult = await callRemoteGeminiWithCurl({
-                url: requestVariant.url,
-                headers: requestVariant.headers,
-                requestBody,
-                timeoutMs: requestTimeoutMs,
-                mode: resolvedMode,
-                authVariant: `${requestVariant.name}+curl`,
-                model: modelCandidate
-              });
-
-              logger.warn('Gemini fetch transport failed, switched to curl fallback.', {
-                model: modelCandidate,
-                authVariant: requestVariant.name,
-                message: describeGeminiTransportError(error)
-              });
-
-              return curlResult;
-            } catch (curlError) {
-              effectiveError = curlError;
+            if (
+              allowAuthVariantFallback &&
+              isAuthLikeGeminiStatus(nodeTransportError.statusCode) &&
+              variantIndex < activeRequestVariants.length - 1
+            ) {
+              break;
             }
+
+            if (
+              attempt >= maxAttempts ||
+              (!isRetryableGeminiStatus(nodeTransportError.statusCode) && !isNetworkLikeGeminiError(nodeTransportError))
+            ) {
+              break;
+            }
+
+            await sleep(getGeminiRetryDelayMs(attempt));
+            continue;
           }
+        }
 
-          lastError = effectiveError;
+        try {
+          return await callRemoteGeminiOverHttp({
+            url: requestVariant.url,
+            headers: requestVariant.headers,
+            requestBody,
+            timeoutMs: requestTimeoutMs,
+            mode: resolvedMode,
+            authVariant: requestVariant.name,
+            model: modelCandidate
+          });
+        } catch (error) {
+          lastError = error;
 
-          if (isAuthLikeGeminiStatus(effectiveError.statusCode) && variantIndex < requestVariants.length - 1) {
+          if (
+            allowAuthVariantFallback &&
+            isAuthLikeGeminiStatus(error.statusCode) &&
+            variantIndex < activeRequestVariants.length - 1
+          ) {
             break;
           }
 
-          if (attempt >= 3 || !isRetryableGeminiStatus(effectiveError.statusCode)) {
+          if (attempt >= maxAttempts || (!isRetryableGeminiStatus(error.statusCode) && !isNetworkLikeGeminiError(error))) {
             break;
           }
 
@@ -1475,8 +1398,9 @@ const callRemoteGemini = async ({
 const buildVideoAnalysisPrompt = ({ video, metadata }) => {
   return [
     '你是一名资深视频理解与影视拆解助手。',
-    '请对输入的整条视频做整体视频理解，并严格返回 JSON。',
+    '请对输入的整条视频做一次完整的整体视频理解，并严格返回 JSON。',
     '不要输出 Markdown，不要输出解释，不要输出额外文本。',
+    '这次返回必须一次性包含整片剧情、角色、场景资源、大片段和每个大片段下的全部小镜头信息。',
     '返回结构必须完全符合：',
     JSON.stringify(
       {
@@ -1550,19 +1474,21 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
     '15. 每个 timeAnchor 都要返回 representativeFrameTime，且该时间点必须落在 startTime 到 endTime 之间；优先选择最适合做预览、最能代表人物或场景的画面，而不是机械取中点。',
     '16. 如果同一场景在多个片段重复出现，允许每个片段返回更贴合该片段语境的 scenePrompt，但 backgroundId 必须保持一致。',
     '17. 每个 timeAnchor 内都必须返回 shots 数组，用于描述该大片段下的小镜头；shots 是后续小镜头切片与生成的唯一真值来源。',
-    '18. shots 必须优先对齐真实剪辑边界、机位变化、镜头运动变化、景别变化、构图重心变化、主体关系变化、场景切换、视线反打、人物进出画、明显动作 beat、焦点转移、对白换气节点和说话节奏断点，不要机械均分时间。',
+    '18. shots 必须尽量按真实镜头切点拆分，优先对齐真实剪辑边界、机位变化、镜头运动变化、景别变化、构图重心变化、主体关系变化、场景切换、视线反打、人物进出画、明显动作 beat、焦点转移、对白换气节点和说话节奏断点，不要机械均分时间。',
     '19. 如果同一连续动作里出现了明显的左/中/右站位变化、前后景关系变化、镜头角度变化、横移推拉变化、遮挡关系变化、表演节奏断点、口型状态切换或说话人主次变化，也应该继续拆成新的 shot。',
-    '20. 每个 shot 尽量只承载一个清晰动作阶段和一个稳定镜头意图，避免把两个以上关键动作、两个机位意图或两个构图中心混进同一个 shot。',
-    '21. shots 必须按整片绝对时间返回 startTime 和 endTime，严格落在所属 timeAnchor 范围内，按时间升序、无重叠，并尽量覆盖该大片段。',
-    '22. 每个 shot 都要返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote；sceneNames 和 characterNames 都不能为空。',
-    '23. shot.summary 不能只写发生了什么，还要简要点出镜头核心动作、主体关系或构图变化。',
-    '24. representativeFrameTime 必须选择该镜头最有代表性的画面，不允许机械取中点；优先选择最适合作为预览图和生成参考图、最能体现该镜头构图与动作状态的画面。',
-    '25. shot.prompt 必须直接服务镜头级视频生成，必须写清：角色数量、谁在前景/中景/后景、人物在画面中的左/中/右位置、远近层次、朝向与视线方向、肢体姿态、运动轨迹、进出画方式、遮挡关系、镜头景别、拍摄角度、镜头运动、光线氛围、说话状态或口型是否明显，以及与前后镜头的连续关系。',
-    '26. shot.prompt 必须同时使用至少一个 @角色名 和至少一个 #场景名 引用，不要把资源正文直接展开，也不要只重复大片段摘要。',
-    '27. 如果一个 shot 涉及多个场景，需要在 sceneNames 中全部列出，并在 prompt 中按顺序引用对应的 #场景名。',
-    '28. 如果一个 shot 涉及多个角色，需要明确每个角色各自的位置、主次关系、视线关系和表演状态，而不是只列名字；如果角色是不完整出镜、背影、手部或 POV，也必须绑定稳定的人物名。',
-    '29. 如果角色较少，也至少保证 characters 返回 1 个对象。',
-    '30. 输出必须是合法 JSON，字段名保持与示例完全一致。'
+    '20. 对 60 秒以内的视频，要尽量把观众能明显感知到的真实镜头都拆出来；不要把多个连续 cut、多个表演 beat 或多个构图中心合并成一个 shot。',
+    '21. 如果没有硬切，也要按动作阶段、视线关系、说话段落、镜头运动阶段和构图稳定区间细分 shot；除非画面长时间稳定且动作单一，否则单个 shot 尽量不要超过 4 秒。',
+    '22. shots 必须按整片绝对时间返回 startTime 和 endTime，严格落在所属 timeAnchor 范围内，按时间升序、无重叠，并尽量覆盖该大片段；timeAnchor 和 shot 的时间请尽量精确到 0.1 秒，不要只给粗略整秒。',
+    '23. 每个 shot 都要返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote；sceneNames 和 characterNames 都不能为空。',
+    '24. shot.summary 不能只写发生了什么，还要简要点出镜头核心动作、主体关系、构图变化或切分依据，让人能看出为什么这里单独成镜头。',
+    '25. representativeFrameTime 必须选择该镜头最有代表性的画面，不允许机械取中点；优先选择最适合作为预览图和生成参考图、最能体现该镜头构图、动作状态和人物表情的画面。',
+    '26. representativeFrameNote 需要说明这个时间点对应的关键画面，例如哪个动作定格、哪个表情瞬间、哪个构图最稳定。',
+    '27. shot.prompt 必须直接服务镜头级视频生成，必须写清：角色数量、谁在前景/中景/后景、人物在画面中的左/中/右位置、远近层次、朝向与视线方向、肢体姿态、运动轨迹、进出画方式、遮挡关系、镜头景别、拍摄角度、镜头运动、光线氛围、说话状态或口型是否明显，以及与前后镜头的连续关系。',
+    '28. shot.prompt 必须同时使用至少一个 @角色名 和至少一个 #场景名 引用，不要把资源正文直接展开，也不要只重复大片段摘要。',
+    '29. 如果一个 shot 涉及多个场景，需要在 sceneNames 中全部列出，并在 prompt 中按顺序引用对应的 #场景名。',
+    '30. 如果一个 shot 涉及多个角色，需要明确每个角色各自的位置、主次关系、视线关系和表演状态，而不是只列名字；如果角色是不完整出镜、背影、手部或 POV，也必须绑定稳定的人物名。',
+    '31. 如果角色较少，也至少保证 characters 返回 1 个对象。',
+    '32. 输出必须是合法 JSON，字段名保持与示例完全一致。'
   ].join('\n');
 };
 
@@ -1775,24 +1701,21 @@ const buildPromptOptimizationPrompt = ({
 
 const analyzeVideo = async ({ video, metadata, videoAbsolutePath, analysisOptions = null }) => {
   if (!canUseRemoteGemini) {
-    return {
-      ...createMockVideoAnalysis({ video, metadata }),
-      analysisOptions,
-      geminiResponse: buildGeminiResponseEnvelope({
-        provider: 'mock-gemini',
-        isMock: true,
-        fallbackReason: 'missing_remote_config',
-        remoteError: 'GEMINI_API_KEY 或 GEMINI_API_BASE_URL 未配置。',
-        rawResponse: null
-      })
-    };
+    const error = new Error('Gemini-2.5-pro 整片分析不可用：GEMINI_API_KEY 或 GEMINI_API_BASE_URL 未配置。');
+    error.statusCode = 422;
+    throw error;
   }
 
   try {
     const { authVariant, model: resolvedModel, responsePayload, responseText } = await callRemoteGemini({
       prompt: buildVideoAnalysisPrompt({ video, metadata }),
       videoAbsolutePath,
-      requestTimeoutOverrideMs: WHOLE_VIDEO_PRIMARY_UPLOAD_TIMEOUT_MS
+      requestTimeoutOverrideMs: WHOLE_VIDEO_PRIMARY_UPLOAD_TIMEOUT_MS,
+      preferCurlTransport: true,
+      model: WHOLE_VIDEO_ANALYSIS_MODEL,
+      allowModelFallback: false,
+      allowAuthVariantFallback: false,
+      maxAttempts: 1
     });
     const parsedPayload = parseJsonPayload(responseText, '整片分析模型');
     return normalizeVideoAnalysisPayload({
@@ -1801,7 +1724,7 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath, analysisOption
       analysisOptions,
       geminiResponse: buildGeminiResponseEnvelope({
         provider: 'remote-gemini',
-        model: resolvedModel || env.GEMINI_MODEL,
+        model: resolvedModel || WHOLE_VIDEO_ANALYSIS_MODEL,
         mode: env.GEMINI_API_COMPAT_MODE,
         authVariant,
         isMock: false,
@@ -1811,48 +1734,23 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath, analysisOption
       })
     });
   } catch (error) {
-    try {
-      const fallbackAnalysis = await analyzeVideoWithFrameFallback({
-        video,
-        metadata,
-        videoAbsolutePath,
-        analysisOptions,
-        primaryError: error
-      });
+    logger.warn('Gemini whole-video analysis failed without fallback.', {
+      model: WHOLE_VIDEO_ANALYSIS_MODEL,
+      message: describeGeminiTransportError(error)
+    });
 
-      logger.warn('Remote Gemini whole-video upload failed, used frame-sampling fallback instead.', {
-        message: describeGeminiTransportError(error)
-      });
-
-      return fallbackAnalysis;
-    } catch (frameFallbackError) {
-      if (shouldUseStrictRemoteGemini()) {
-        throw frameFallbackError;
-      }
-
-      logger.warn('Remote Gemini frame fallback also failed, using mock analysis instead.', {
-        primaryError: describeGeminiTransportError(error),
-        fallbackError: describeGeminiTransportError(frameFallbackError)
-      });
-
-      return {
-        ...createMockVideoAnalysis({ video, metadata }),
-        analysisOptions,
-        geminiResponse: buildGeminiResponseEnvelope({
-          provider: 'mock-gemini',
-          model: env.GEMINI_MODEL,
-          mode: env.GEMINI_API_COMPAT_MODE,
-          authVariant: frameFallbackError.authVariant || error.authVariant || '',
-          isMock: true,
-          fallbackReason: 'remote_error',
-          remoteError: [
-            `整段视频上传失败：${describeGeminiTransportError(error)}`,
-            `关键帧回退失败：${describeGeminiTransportError(frameFallbackError)}`
-          ].join('；'),
-          rawResponse: null
-        })
-      };
-    }
+    const exposedError = isGeminiTimeoutError(error)
+      ? new Error(
+          `Gemini-2.5-pro 整片分析超时：整段视频上传与理解超过 ${Math.round(
+            WHOLE_VIDEO_PRIMARY_UPLOAD_TIMEOUT_MS / 1000
+          )} 秒，请稍后重试，或调大后端 GEMINI_WHOLE_VIDEO_TIMEOUT_MS。`
+        )
+      : new Error(`Gemini-2.5-pro 整片分析失败：${describeGeminiTransportError(error)}`);
+    exposedError.statusCode =
+      Number(error?.statusCode ?? 0) >= 400 && Number(error?.statusCode ?? 0) < 500
+        ? Number(error.statusCode)
+        : 424;
+    throw exposedError;
   }
 };
 

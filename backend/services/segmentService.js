@@ -48,6 +48,23 @@ const serializeGenerationTask = (task) => {
   };
 };
 
+const isTaskMarkedMock = (task) => {
+  const taskMeta = task?.meta ?? {};
+  const engine = String(taskMeta.engine ?? '').trim().toLowerCase();
+  const fallbackReason = String(taskMeta.fallbackReason ?? '').trim().toLowerCase();
+
+  return (
+    Boolean(taskMeta.isMock) ||
+    engine.includes('mock') ||
+    fallbackReason.includes('remote_generation_failed') ||
+    fallbackReason.includes('missing_remote_config')
+  );
+};
+
+const isUsableCompletedGenerationTask = (task) => {
+  return Boolean(task?.status === 'completed' && task?.resultUrl && !isTaskMarkedMock(task));
+};
+
 const normalizeOptionalFrameTime = (value) => {
   const parsedValue = Number(value);
 
@@ -609,7 +626,7 @@ const getLatestTasksBySegmentIds = async (segmentIds) => {
       latestAttemptTaskBySegmentId.set(task.segmentId, task);
     }
 
-    if (task.status === 'completed' && !latestCompletedTaskBySegmentId.has(task.segmentId)) {
+    if (isUsableCompletedGenerationTask(task) && !latestCompletedTaskBySegmentId.has(task.segmentId)) {
       latestCompletedTaskBySegmentId.set(task.segmentId, task);
     }
   });
