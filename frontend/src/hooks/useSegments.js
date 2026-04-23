@@ -69,6 +69,9 @@ const normalizeShotGenerationTask = (taskPayload) => {
     fallback_reason: taskPayload.fallback_reason ?? '',
     provider_error: taskPayload.provider_error ?? '',
     source: taskPayload.source ?? '',
+    sent_reference_images: Array.isArray(taskPayload.sent_reference_images) ? taskPayload.sent_reference_images : [],
+    sent_reference_videos: Array.isArray(taskPayload.sent_reference_videos) ? taskPayload.sent_reference_videos : [],
+    sent_reference_audios: Array.isArray(taskPayload.sent_reference_audios) ? taskPayload.sent_reference_audios : [],
     created_at: taskPayload.created_at,
     updated_at: taskPayload.updated_at
   };
@@ -137,6 +140,9 @@ const normalizeSegment = (segment) => {
       fallback_reason: taskPayload.fallback_reason ?? '',
       provider_error: taskPayload.provider_error ?? '',
       source: taskPayload.source ?? '',
+      sent_reference_images: Array.isArray(taskPayload.sent_reference_images) ? taskPayload.sent_reference_images : [],
+      sent_reference_videos: Array.isArray(taskPayload.sent_reference_videos) ? taskPayload.sent_reference_videos : [],
+      sent_reference_audios: Array.isArray(taskPayload.sent_reference_audios) ? taskPayload.sent_reference_audios : [],
       created_at: taskPayload.created_at,
       updated_at: taskPayload.updated_at
     };

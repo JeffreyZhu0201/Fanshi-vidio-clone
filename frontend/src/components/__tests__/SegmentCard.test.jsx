@@ -43,7 +43,23 @@ const segmentFixture = {
       representativeFrameActualTime: 1,
       generatedUrl: 'https://example.com/shot-1.mp4',
       latestGenerationTask: {
-        status: 'completed'
+        status: 'completed',
+        sent_reference_images: [
+          {
+            label: '小镜头典型帧',
+            source_kind: 'shot_representative_frame'
+          },
+          {
+            label: '@主角 三视图',
+            source_kind: 'character_asset'
+          }
+        ],
+        sent_reference_videos: [
+          {
+            label: '小镜头源视频',
+            source_kind: 'source_video'
+          }
+        ]
       },
       latestCompletedGenerationTask: {
         task_id: 'shot-task-1',
@@ -60,7 +76,17 @@ const segmentFixture = {
   },
   latestGenerationTask: {
     status: 'completed',
-    progress: 100
+    progress: 100,
+    sent_reference_images: [
+      {
+        label: '@主角 三视图',
+        source_kind: 'character_asset'
+      },
+      {
+        label: '#咖啡馆内景 场景图',
+        source_kind: 'scene_asset'
+      }
+    ]
   }
 };
 
@@ -160,6 +186,8 @@ describe('SegmentCard', () => {
     expect(screen.getByText('新小镜头预览')).toBeInTheDocument();
     expect(screen.getByText('源镜头预览')).toBeInTheDocument();
     expect(screen.getByAltText('镜头 01 典型帧')).toBeInTheDocument();
+    expect(screen.getAllByText('小镜头典型帧').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('@主角 三视图').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: '生成新片段' }));
     expect(onGenerateAllShots).toHaveBeenCalledWith(1);

@@ -325,7 +325,10 @@ const serializeShotGenerationMeta = (task) => {
     remote_task_id: String(taskMeta.remoteTaskId ?? '').trim(),
     fallback_reason: String(taskMeta.fallbackReason ?? '').trim(),
     provider_error: String(taskMeta.providerError ?? '').trim(),
-    source: String(taskMeta.source ?? '').trim()
+    source: String(taskMeta.source ?? '').trim(),
+    sent_reference_images: Array.isArray(taskMeta.sentReferenceImages) ? taskMeta.sentReferenceImages : [],
+    sent_reference_videos: Array.isArray(taskMeta.sentReferenceVideos) ? taskMeta.sentReferenceVideos : [],
+    sent_reference_audios: Array.isArray(taskMeta.sentReferenceAudios) ? taskMeta.sentReferenceAudios : []
   };
 };
 
@@ -380,7 +383,16 @@ const applySeedDanceShotTaskProgress = async (task, progressPayload = {}) => {
     remoteUpdatedAt:
       Number.isFinite(Number(progressPayload.updatedAt)) && Number(progressPayload.updatedAt) > 0
         ? Number(progressPayload.updatedAt)
-        : taskMeta.remoteUpdatedAt ?? null
+        : taskMeta.remoteUpdatedAt ?? null,
+    sentReferenceImages: Array.isArray(progressPayload.sentReferenceImages)
+      ? progressPayload.sentReferenceImages
+      : taskMeta.sentReferenceImages ?? [],
+    sentReferenceVideos: Array.isArray(progressPayload.sentReferenceVideos)
+      ? progressPayload.sentReferenceVideos
+      : taskMeta.sentReferenceVideos ?? [],
+    sentReferenceAudios: Array.isArray(progressPayload.sentReferenceAudios)
+      ? progressPayload.sentReferenceAudios
+      : taskMeta.sentReferenceAudios ?? []
   };
 
   if (
@@ -961,6 +973,9 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
           isMock: Boolean(result.isMock),
           remoteTaskId: result.remoteTaskId || remoteTaskId,
           remoteUrl: result.remoteUrl || '',
+          sentReferenceImages: task.meta?.sentReferenceImages ?? [],
+          sentReferenceVideos: task.meta?.sentReferenceVideos ?? [],
+          sentReferenceAudios: task.meta?.sentReferenceAudios ?? [],
           remoteStatus: 'succeeded',
           remoteStatusLabel: '远端已完成',
           remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
@@ -1047,7 +1062,9 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
       primaryShotReferenceImage = {
         relativePath: shot.representativeFrameImagePath || '',
         url: shot.representativeFrameImageUrl || '',
-        role: 'reference_image'
+        role: 'reference_image',
+        sourceKind: 'shot_representative_frame',
+        displayLabel: '小镜头典型帧'
       };
     } else {
       const fallbackFrameSourceAbsolutePath = shotSourceAbsolutePath || segmentSourceAbsolutePath;
@@ -1065,7 +1082,9 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
         primaryShotReferenceImage = {
           relativePath: extractedShotFrame.filePath,
           url: extractedShotFrame.fileUrl,
-          role: 'reference_image'
+          role: 'reference_image',
+          sourceKind: 'shot_representative_frame',
+          displayLabel: '动态抽帧典型帧'
         };
         generationWarnings.push('小镜头典型帧缺失，已改为动态抽帧');
       } else {
@@ -1106,6 +1125,8 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
     const result = await generateWithSeedDance({
       sourceAbsolutePath,
       sourcePublicUrl,
+      sourceReferenceSourceKind: 'source_video',
+      sourceReferenceDisplayLabel: '小镜头源视频',
       prompt: seedDancePrompt,
       basename: `segment-${segment.id}-${task.shotId}-task-${task.id}`,
       ratio: normalizeGenerationRatio(task.meta?.ratio),
@@ -1121,7 +1142,9 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
               {
                 relativePath: shot.sourceAudioFilePath || '',
                 url: shotSourceAudioPublicUrl,
-                role: 'reference_audio'
+                role: 'reference_audio',
+                sourceKind: 'shot_reference_audio',
+                displayLabel: '小镜头参考音频'
               }
             ]
           : [],
@@ -1130,7 +1153,9 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
           ? {
               url: toAbsolutePublicUploadUrl(backgroundAsset.assetPath) || backgroundAsset.assetUrl,
               relativePath: backgroundAsset.assetPath || '',
-              role: 'reference_video'
+              role: 'reference_video',
+              sourceKind: 'background_asset_video',
+              displayLabel: `#${String(backgroundBinding?.backgroundName || backgroundAsset.name || '场景').trim()} 背景资产视频`
             }
           : null
       ].filter(Boolean)
@@ -1148,6 +1173,9 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
         isMock: Boolean(result.isMock),
         remoteTaskId: result.remoteTaskId || '',
         remoteUrl: result.remoteUrl || '',
+        sentReferenceImages: result.sentReferenceImages ?? task.meta?.sentReferenceImages ?? [],
+        sentReferenceVideos: result.sentReferenceVideos ?? task.meta?.sentReferenceVideos ?? [],
+        sentReferenceAudios: result.sentReferenceAudios ?? task.meta?.sentReferenceAudios ?? [],
         remoteStatus: 'succeeded',
         remoteStatusLabel: '远端已完成',
         remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,

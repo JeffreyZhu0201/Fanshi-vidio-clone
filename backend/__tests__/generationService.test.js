@@ -150,7 +150,9 @@ describe('generationService helpers', () => {
       {
         relativePath: 'resource-images/street-angle-1.png',
         url: '/uploads/resource-images/street-angle-1.png',
-        role: 'reference_image'
+        role: 'reference_image',
+        sourceKind: 'scene_asset',
+        displayLabel: '#background_2 场景图'
       }
     ]);
   });

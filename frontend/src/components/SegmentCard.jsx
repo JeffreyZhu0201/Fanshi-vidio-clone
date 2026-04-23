@@ -118,6 +118,56 @@ const shouldShowGenerationProgress = (task) => {
   return ['pending', 'processing', 'completed', 'failed'].includes(task.status);
 };
 
+const getTaskReferenceItems = (task, key) => {
+  return Array.isArray(task?.[key]) ? task[key].filter(Boolean) : [];
+};
+
+const TaskReferenceDebugPanel = ({ task }) => {
+  const imageItems = getTaskReferenceItems(task, 'sent_reference_images');
+  const videoItems = getTaskReferenceItems(task, 'sent_reference_videos');
+  const audioItems = getTaskReferenceItems(task, 'sent_reference_audios');
+  const groups = [
+    { label: '参考图', items: imageItems },
+    { label: '参考视频', items: videoItems },
+    { label: '参考音频', items: audioItems }
+  ].filter((group) => group.items.length);
+
+  if (!groups.length) {
+    return null;
+  }
+
+  return (
+    <div className="mt-2 space-y-2 rounded-[12px] border border-white/8 bg-black/15 px-3 py-2">
+      {groups.map((group) => (
+        <div key={group.label} className="space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/40">
+            {group.label} {group.items.length}
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {group.items.map((item, index) => (
+              <span
+                key={`${group.label}-${item.label || item.source_kind || index}`}
+                className="inline-flex rounded-full border border-white/10 bg-white/[0.05] px-2 py-1 text-[11px] leading-4 text-white/78"
+                title={item.resolved_url || ''}
+              >
+                {item.label || item.source_kind || `${group.label} ${index + 1}`}
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+TaskReferenceDebugPanel.propTypes = {
+  task: PropTypes.shape({
+    sent_reference_images: PropTypes.arrayOf(PropTypes.object),
+    sent_reference_videos: PropTypes.arrayOf(PropTypes.object),
+    sent_reference_audios: PropTypes.arrayOf(PropTypes.object)
+  })
+};
+
 const renderPromptTokenPreview = (value = '') => {
   return tokenizePrompt(value).map((token, index) => {
     if (token.type === 'character-mention' || token.type === 'scene-mention') {
@@ -864,6 +914,7 @@ const SegmentCard = ({
                               startedAt={shot.latestGenerationTask?.created_at || ''}
                               compact
                             />
+                            <TaskReferenceDebugPanel task={shot.latestGenerationTask} />
                           </div>
                         ) : null}
 
@@ -913,6 +964,7 @@ const SegmentCard = ({
                   label={`大片段任务 · ${getGenerationTaskStatusLabel(segment.latestGenerationTask, '大片段待生成')}`}
                   startedAt={segment.latestGenerationTask?.created_at || ''}
                 />
+                <TaskReferenceDebugPanel task={segment.latestGenerationTask} />
               </div>
             ) : null}
 
@@ -1158,6 +1210,7 @@ const SegmentCard = ({
                           startedAt={shotDraft.latestGenerationTask?.created_at || ''}
                           compact
                         />
+                        <TaskReferenceDebugPanel task={shotDraft.latestGenerationTask} />
                       </div>
                     ) : null}
 
@@ -1381,7 +1434,10 @@ SegmentCard.propTypes = {
       remote_task_id: PropTypes.string,
       fallback_reason: PropTypes.string,
       provider_error: PropTypes.string,
-      source: PropTypes.string
+      source: PropTypes.string,
+      sent_reference_images: PropTypes.arrayOf(PropTypes.object),
+      sent_reference_videos: PropTypes.arrayOf(PropTypes.object),
+      sent_reference_audios: PropTypes.arrayOf(PropTypes.object)
     })
   }).isRequired,
   overallAnalysis: PropTypes.shape({
