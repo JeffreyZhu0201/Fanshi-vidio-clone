@@ -32,8 +32,17 @@ const uploadVideoBodySchema = Joi.object({
   project_name: Joi.string().trim().max(255).allow('')
 });
 
+const analysisOptionsSchema = Joi.object({
+  extractSubtitles: Joi.boolean().default(false),
+  parseAudio: Joi.boolean().default(false)
+}).default({
+  extractSubtitles: false,
+  parseAudio: false
+});
+
 const analyzeVideoBodySchema = Joi.object({
-  video_id: Joi.number().integer().positive().required()
+  video_id: Joi.number().integer().positive().required(),
+  analysis_options: analysisOptionsSchema
 });
 
 const optimizePromptBodySchema = Joi.object({
@@ -149,6 +158,25 @@ const generateShotBatchBodySchema = Joi.object({
     .default([])
 });
 
+const subtitleLineSchema = Joi.object({
+  id: Joi.string().trim().allow(''),
+  startTime: Joi.number().min(0).required(),
+  endTime: Joi.number().greater(Joi.ref('startTime')).required(),
+  text: Joi.string().trim().allow('').required()
+});
+
+const shotSpeechSchema = Joi.object({
+  transcript: Joi.string().trim().allow(''),
+  subtitleLines: Joi.array().items(subtitleLineSchema).default([]),
+  speechStyle: Joi.string().trim().allow(''),
+  hasDialogue: Joi.boolean().default(false),
+  extractionStatus: Joi.string().trim().valid('idle', 'processing', 'completed', 'failed').default('completed'),
+  extractionError: Joi.string().trim().allow(''),
+  subtitleFilePath: Joi.string().trim().allow(''),
+  subtitleFileUrl: Joi.string().trim().allow(''),
+  sourceOfTruth: Joi.string().trim().valid('extracted', 'edited_text').default('edited_text')
+});
+
 const segmentShotDefinitionSchema = Joi.object({
   id: Joi.string().trim().allow(''),
   startTime: Joi.number().min(0).required(),
@@ -158,7 +186,8 @@ const segmentShotDefinitionSchema = Joi.object({
   sceneNames: Joi.array().items(Joi.string().trim().min(1)).default([]),
   characterNames: Joi.array().items(Joi.string().trim().min(1)).default([]),
   representativeFrameTime: Joi.number().min(0).allow(null),
-  representativeFrameNote: Joi.string().trim().allow('')
+  representativeFrameNote: Joi.string().trim().allow(''),
+  speech: shotSpeechSchema.optional()
 });
 
 const updateSegmentShotsBodySchema = Joi.object({

@@ -681,6 +681,7 @@ const createRemoteGenerationTask = async ({
   referenceImages = [],
   referenceVideos = [],
   referenceAudios = [],
+  generateAudio = env.SEED_DANCE_GENERATE_AUDIO,
   ratio,
   duration
 }) => {
@@ -694,6 +695,7 @@ const createRemoteGenerationTask = async ({
         referenceImages,
         referenceVideos,
         referenceAudios,
+        generateAudio,
         ratio,
         duration
       })
@@ -731,6 +733,7 @@ const createRemoteGenerationTaskWithImageFallback = async ({
   referenceImages = [],
   referenceVideos = [],
   referenceAudios = [],
+  generateAudio = env.SEED_DANCE_GENERATE_AUDIO,
   ratio,
   duration
 }) => {
@@ -769,6 +772,7 @@ const createRemoteGenerationTaskWithImageFallback = async ({
         referenceImages: attempt.referenceImages,
         referenceVideos,
         referenceAudios,
+        generateAudio,
         ratio,
         duration
       });
@@ -912,6 +916,7 @@ const generateSegment = async ({
   referenceImages = [],
   referenceVideos = [],
   referenceAudios = [],
+  generateAudio = env.SEED_DANCE_GENERATE_AUDIO,
   ratio,
   duration,
   onProgress
@@ -933,6 +938,7 @@ const generateSegment = async ({
         referenceImages,
         referenceVideos,
         referenceAudios,
+        generateAudio,
         ratio,
         duration: providerDuration
       });

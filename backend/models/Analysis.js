@@ -31,6 +31,11 @@ const defineAnalysisModel = (sequelize) => {
         type: DataTypes.JSON,
         allowNull: true
       },
+      analysisOptions: {
+        field: 'analysis_options',
+        type: DataTypes.JSON,
+        allowNull: true
+      },
       timeAnchors: {
         field: 'time_anchors',
         type: DataTypes.JSON,

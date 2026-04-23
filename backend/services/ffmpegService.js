@@ -231,6 +231,59 @@ const sliceVideoClip = async (
   };
 };
 
+const extractAudioClip = async (
+  absoluteSourcePath,
+  startTimeSeconds,
+  endTimeSeconds,
+  { basename = 'shot-audio', directory = 'audio', extension = '.mp3' } = {}
+) => {
+  const ffmpegAvailable = await isBinaryAvailable('ffmpeg');
+
+  if (!ffmpegAvailable) {
+    return null;
+  }
+
+  const safeStartTime = Math.max(0, Number(startTimeSeconds) || 0);
+  const safeEndTime = Math.max(safeStartTime + 0.1, Number(endTimeSeconds) || safeStartTime + 0.1);
+  const duration = Number((safeEndTime - safeStartTime).toFixed(3));
+  const relativePath = createOutputRelativePath(directory, basename, extension);
+  const absoluteTargetPath = resolveUploadPath(relativePath);
+  await ensureParentDirectory(absoluteTargetPath);
+
+  try {
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-ss',
+      String(Number(safeStartTime.toFixed(3))),
+      '-i',
+      absoluteSourcePath,
+      '-t',
+      String(duration),
+      '-vn',
+      '-acodec',
+      extension === '.wav' ? 'pcm_s16le' : 'libmp3lame',
+      absoluteTargetPath
+    ]);
+  } catch (error) {
+    logger.warn('FFmpeg audio extraction failed, skipping shot audio asset.', {
+      message: error.message,
+      absoluteSourcePath,
+      startTimeSeconds: safeStartTime,
+      endTimeSeconds: safeEndTime
+    });
+    return null;
+  }
+
+  return {
+    startTime: safeStartTime,
+    endTime: safeEndTime,
+    duration,
+    filePath: relativePath,
+    fileUrl: toPublicUploadUrl(relativePath),
+    engine: 'ffmpeg-audio-extract'
+  };
+};
+
 const extractVideoFrame = async (
   absoluteSourcePath,
   timeSeconds,
@@ -345,4 +398,4 @@ const mergeVideos = async (absoluteInputPaths, { basename = 'merged-video', onPr
   };
 };
 
-export { getVideoMetadata, splitVideo, sliceVideoClip, mergeVideos, extractVideoFrame };
+export { getVideoMetadata, splitVideo, sliceVideoClip, extractAudioClip, mergeVideos, extractVideoFrame };

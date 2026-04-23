@@ -22,6 +22,15 @@ import {
   resumeRemoteGenerationTask
 } from './seedDanceService.js';
 import { rebuildShotAssetsForSegment, shotAssetsNeedRebuild } from './shotAssetService.js';
+import {
+  buildTranscriptFromSubtitleLines,
+  isSpeechAnalysisEnabled,
+  normalizeAnalysisOptions,
+  normalizeShotSpeech
+  ,
+  rebuildShotSpeechAssetsForSegment,
+  shotSpeechAssetsNeedRebuild
+} from './shotSpeechService.js';
 
 const SHOT_TASK_EVENT = 'shot:progress';
 const SHOT_ASSEMBLY_EVENT = 'shot-assembly:progress';
@@ -102,7 +111,13 @@ const getNormalizedSegmentShots = (segment) => {
       representativeFrameActualTime:
         normalizeOptionalNumber(
           shot.representativeFrameActualTime ?? shot.representative_frame_actual_time
-        ) ?? null
+        ) ?? null,
+      sourceAudioFilePath: String(shot.sourceAudioFilePath ?? shot.source_audio_file_path ?? '').trim(),
+      sourceAudioFileUrl: String(shot.sourceAudioFileUrl ?? shot.source_audio_file_url ?? '').trim(),
+      speech: normalizeShotSpeech(shot.speech ?? null, {
+        durationSeconds: Number(Math.max(0.3, safeEndTime - shotStartTime).toFixed(2)),
+        fallbackStatus: 'idle'
+      })
     };
   });
 };
@@ -125,6 +140,21 @@ const areNumericTaskFieldsEqual = (leftValue, rightValue) => {
   return Math.abs(leftNumber - rightNumber) < 0.01;
 };
 
+const buildShotSpeechSignature = (shot) => {
+  const normalizedSpeech = normalizeShotSpeech(shot?.speech ?? null, {
+    durationSeconds: Number(shot?.durationSeconds ?? 0),
+    fallbackStatus: 'idle'
+  });
+
+  return JSON.stringify({
+    transcript: String(normalizedSpeech.transcript ?? '').trim(),
+    subtitleLines: normalizedSpeech.subtitleLines ?? [],
+    speechStyle: String(normalizedSpeech.speechStyle ?? '').trim(),
+    hasDialogue: Boolean(normalizedSpeech.hasDialogue),
+    sourceOfTruth: String(normalizedSpeech.sourceOfTruth ?? '').trim()
+  });
+};
+
 const doesShotTaskMatchGenerationRequest = ({ task, shot, prompt, ratio }) => {
   if (!task || !shot) {
     return false;
@@ -134,6 +164,7 @@ const doesShotTaskMatchGenerationRequest = ({ task, shot, prompt, ratio }) => {
     String(task.shotId ?? '').trim() === String(shot.id ?? '').trim() &&
     normalizeComparablePrompt(task.prompt) === normalizeComparablePrompt(prompt) &&
     normalizeGenerationRatio(task.meta?.ratio) === normalizeGenerationRatio(ratio) &&
+    String(task.meta?.speechSignature ?? '').trim() === buildShotSpeechSignature(shot) &&
     areNumericTaskFieldsEqual(task.startTime, shot.startTime) &&
     areNumericTaskFieldsEqual(task.endTime, shot.endTime) &&
     areNumericTaskFieldsEqual(task.durationSeconds, shot.durationSeconds)
@@ -206,6 +237,7 @@ const createCompletedReuseTaskForBatch = async ({
       source: 'shot_generation_batch_reuse',
       batchStartedAt: startedAt,
       ratio: normalizeGenerationRatio(ratio),
+      speechSignature: buildShotSpeechSignature(shot),
       reusedFromTaskId: sourceTask.id
     }
   });
@@ -238,6 +270,7 @@ const createResumedReuseTaskForBatch = async ({
       source: 'shot_generation_batch_resume',
       batchStartedAt: startedAt,
       ratio: normalizeGenerationRatio(ratio),
+      speechSignature: buildShotSpeechSignature(shot),
       reusedFromTaskId: sourceTask.id
     }
   });
@@ -514,6 +547,9 @@ const hydrateAnalysisShotsWithTasks = ({
       representativeFrameImagePath: shot.representativeFrameImagePath,
       representativeFrameImageUrl: shot.representativeFrameImageUrl,
       representativeFrameActualTime: shot.representativeFrameActualTime,
+      sourceAudioFilePath: shot.sourceAudioFilePath,
+      sourceAudioFileUrl: shot.sourceAudioFileUrl,
+      speech: shot.speech,
       latestGenerationTask: serializeShotGenerationTask(latestGenerationTask),
       latestCompletedGenerationTask: serializeShotGenerationTask(latestCompletedGenerationTask),
       generatedUrl: latestCompletedGenerationTask?.resultUrl || ''
@@ -523,20 +559,43 @@ const hydrateAnalysisShotsWithTasks = ({
 
 const ensureSegmentShotAssets = async (segment) => {
   const currentShots = Array.isArray(segment?.analysis?.shots) ? segment.analysis.shots : [];
+  const analysisOptions = normalizeAnalysisOptions(segment?.analysis?.analysisOptions);
+  let nextShots = currentShots;
+  let shouldPersist = false;
 
-  if (!currentShots.length || !shotAssetsNeedRebuild(currentShots)) {
+  if (!currentShots.length) {
     return getNormalizedSegmentShots(segment);
   }
 
-  const rebuiltShots = await rebuildShotAssetsForSegment({
-    segment,
-    shots: currentShots,
-    previousShots: currentShots,
-    cleanupExisting: false
-  });
+  if (shotAssetsNeedRebuild(currentShots)) {
+    nextShots = await rebuildShotAssetsForSegment({
+      segment,
+      shots: currentShots,
+      previousShots: currentShots,
+      cleanupExisting: false
+    });
+    shouldPersist = true;
+  }
+
+  if (shotSpeechAssetsNeedRebuild(nextShots, analysisOptions)) {
+    nextShots = await rebuildShotSpeechAssetsForSegment({
+      segment,
+      shots: nextShots,
+      previousShots: currentShots,
+      analysisOptions,
+      cleanupExisting: false
+    });
+    shouldPersist = true;
+  }
+
+  if (!shouldPersist) {
+    return getNormalizedSegmentShots(segment);
+  }
+
   const nextAnalysis = {
     ...(segment.analysis ?? {}),
-    shots: rebuiltShots
+    analysisOptions,
+    shots: nextShots
   };
 
   await segment.update({
@@ -815,11 +874,23 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
       normalizedShots.find((item) => item.id === String(task.shotId ?? '').trim()) ??
       getShotByIdFromSegment(segment, task.shotId);
     const backgroundBinding = getBackgroundBindingForSegment(segment, overallAnalysis);
+    const analysisOptions = normalizeAnalysisOptions(
+      segment?.analysis?.analysisOptions ?? overallAnalysis?.analysisOptions
+    );
+    const speechEnabled = isSpeechAnalysisEnabled(analysisOptions);
+    const shotSpeech = normalizeShotSpeech(shot?.speech ?? null, {
+      durationSeconds: shot?.durationSeconds,
+      fallbackStatus: 'idle'
+    });
+    const shouldGenerateDialogue = speechEnabled && Boolean(shotSpeech.hasDialogue);
     const segmentSourceAbsolutePath = resolveUploadPath(segment.filePath);
     const segmentSourcePublicUrl = toAbsolutePublicUploadUrl(segment.filePath) || segment.filePath;
     const shotSourceAbsolutePath = shot.sourceFilePath ? resolveUploadPath(shot.sourceFilePath) : '';
     const shotSourcePublicUrl =
       shot.sourceFileUrl || (shot.sourceFilePath ? toAbsolutePublicUploadUrl(shot.sourceFilePath) : '');
+    const shotSourceAudioAbsolutePath = shot.sourceAudioFilePath ? resolveUploadPath(shot.sourceAudioFilePath) : '';
+    const shotSourceAudioPublicUrl =
+      shot.sourceAudioFileUrl || (shot.sourceAudioFilePath ? toAbsolutePublicUploadUrl(shot.sourceAudioFilePath) : '');
     const sourceVideoAbsolutePath = segment?.video?.filePath ? resolveUploadPath(segment.video.filePath) : '';
     const generationWarnings = [];
     const sourceAbsolutePath = shotSourceAbsolutePath || segmentSourceAbsolutePath;
@@ -881,6 +952,10 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
       generationWarnings.push('小镜头源视频缺失，已回退到大片段源视频');
     }
 
+    if (shouldGenerateDialogue && !shotSourceAudioAbsolutePath) {
+      generationWarnings.push('小镜头参考音频缺失，已仅使用字幕与说话方式约束');
+    }
+
     let backgroundAsset = null;
 
     if (backgroundBinding) {
@@ -908,8 +983,19 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
     const optimizedPrompt = expandPromptMentions(task.prompt, characters, overallAnalysis?.backgrounds ?? []);
     const seedDancePrompt = buildSeedDanceReconstructionPrompt({
       prompt: optimizedPrompt,
+      plot: overallAnalysis?.plot ?? '',
+      segmentPrompt: segment?.analysis?.prompt ?? segment?.analysis?.scenePrompt ?? '',
+      shotPrompt: task.prompt,
       characterNames: [...getPromptMentionNames(task.prompt), ...(Array.isArray(shot.characterNames) ? shot.characterNames : [])],
       sceneNames: [...getPromptSceneNames(task.prompt), ...(Array.isArray(shot.sceneNames) ? shot.sceneNames : []), backgroundBinding?.backgroundName || ''],
+      speech: shouldGenerateDialogue
+        ? {
+            transcript: shotSpeech.transcript || buildTranscriptFromSubtitleLines(shotSpeech.subtitleLines),
+            subtitleLines: shotSpeech.subtitleLines,
+            speechStyle: shotSpeech.speechStyle,
+            hasDialogue: true
+          }
+        : null,
       isShot: true
     });
     let primaryShotReferenceImage = null;
@@ -984,7 +1070,18 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
       onProgress: async (progressPayload) => {
         await applySeedDanceShotTaskProgress(task, progressPayload);
       },
+      generateAudio: shouldGenerateDialogue,
       referenceImages,
+      referenceAudios:
+        shouldGenerateDialogue && (shotSourceAudioAbsolutePath || shotSourceAudioPublicUrl)
+          ? [
+              {
+                relativePath: shot.sourceAudioFilePath || '',
+                url: shotSourceAudioPublicUrl,
+                role: 'reference_audio'
+              }
+            ]
+          : [],
       referenceVideos: [
         backgroundAsset?.assetPath || backgroundAsset?.assetUrl
           ? {
@@ -1012,7 +1109,9 @@ const processShotGenerationTask = async (taskId, { attemptAssembly = true } = {}
         remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
         remoteUpdatedAt: task.meta?.remoteUpdatedAt ?? null,
         fallbackReason: [generationWarnings.join('；'), result.fallbackReason || ''].filter(Boolean).join('；'),
-        providerError: result.providerError || ''
+        providerError: result.providerError || '',
+        speechSignature: buildShotSpeechSignature(shot),
+        generateAudio: shouldGenerateDialogue
       }
     });
     broadcastShotGenerationTaskUpdate(task);
@@ -1105,7 +1204,14 @@ const startShotGeneration = async ({ segmentId, shotId, prompt, ratio }) => {
       isMock: false,
       remoteTaskId: '',
       fallbackReason: '',
-      providerError: ''
+      providerError: '',
+      speechSignature: buildShotSpeechSignature(shot),
+      generateAudio: isSpeechAnalysisEnabled(
+        normalizeAnalysisOptions(segment?.analysis?.analysisOptions ?? segment?.video?.analysis?.analysisOptions)
+      ) && Boolean(normalizeShotSpeech(shot?.speech ?? null, {
+        durationSeconds: shot?.durationSeconds,
+        fallbackStatus: 'idle'
+      }).hasDialogue)
     }
   });
   broadcastShotGenerationTaskUpdate(task);
@@ -1190,7 +1296,14 @@ const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, rat
         isMock: false,
         remoteTaskId: '',
         fallbackReason: '',
-        providerError: ''
+        providerError: '',
+        speechSignature: buildShotSpeechSignature(shot),
+        generateAudio: isSpeechAnalysisEnabled(
+          normalizeAnalysisOptions(segment?.analysis?.analysisOptions ?? segment?.video?.analysis?.analysisOptions)
+        ) && Boolean(normalizeShotSpeech(shot?.speech ?? null, {
+          durationSeconds: shot?.durationSeconds,
+          fallbackStatus: 'idle'
+        }).hasDialogue)
       }
     });
 

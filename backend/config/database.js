@@ -137,6 +137,50 @@ const getDatabaseStatus = () => {
   return { ...databaseState };
 };
 
+const normalizeTableName = (value) => {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (value && typeof value === 'object') {
+    return String(Object.values(value)[0] ?? '');
+  }
+
+  return '';
+};
+
+const ensureDatabaseCompatibility = async () => {
+  const database = await connectDatabase();
+
+  if (!database.connected) {
+    return false;
+  }
+
+  const queryInterface = sequelize.getQueryInterface();
+  const existingTables = new Set(
+    (await queryInterface.showAllTables())
+      .map((tableName) => normalizeTableName(tableName).trim().toLowerCase())
+      .filter(Boolean)
+  );
+
+  if (!existingTables.has('analyses')) {
+    return false;
+  }
+
+  const analysisTable = await queryInterface.describeTable('analyses');
+
+  if (!analysisTable.analysis_options) {
+    await queryInterface.addColumn('analyses', 'analysis_options', {
+      type: Sequelize.JSON,
+      allowNull: true
+    });
+
+    logger.info('Applied compatibility schema fix for analyses.analysis_options');
+  }
+
+  return true;
+};
+
 const closeDatabaseConnection = async () => {
   await sequelize.close();
 
@@ -151,6 +195,7 @@ export {
   connectDatabase,
   checkDatabaseHealth,
   syncDatabaseSchema,
+  ensureDatabaseCompatibility,
   getDatabaseStatus,
   closeDatabaseConnection
 };

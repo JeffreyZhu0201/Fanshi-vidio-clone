@@ -1,9 +1,13 @@
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
+import { readFile, unlink, writeFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import env from '../config/env.js';
 import logger from '../utils/logger.js';
+import { removeFileIfExists, resolveUploadPath } from './fileService.js';
+import { extractVideoFrame } from './ffmpegService.js';
 
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -13,6 +17,13 @@ const VIDEO_MIME_TYPES = Object.freeze({
   '.avi': 'video/x-msvideo'
 });
 
+const IMAGE_MIME_TYPES = Object.freeze({
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp'
+});
+
 const stripMarkdownCodeFence = (value = '') => {
   return value
     .trim()
@@ -20,6 +31,12 @@ const stripMarkdownCodeFence = (value = '') => {
     .replace(/\s*```$/u, '')
     .trim();
 };
+
+const CURL_HTTP_STATUS_MARKER = '__CURL_HTTP_STATUS__:';
+const WHOLE_VIDEO_ANALYSIS_MIN_FRAME_COUNT = 4;
+const WHOLE_VIDEO_ANALYSIS_MAX_FRAME_COUNT = 6;
+const WHOLE_VIDEO_PRIMARY_UPLOAD_TIMEOUT_MS = 20 * 1000;
+const WHOLE_VIDEO_FRAME_FALLBACK_TIMEOUT_MS = 60 * 1000;
 
 const extractJsonObject = (value = '') => {
   const cleanedValue = stripMarkdownCodeFence(value);
@@ -41,6 +58,30 @@ const parseJsonPayload = (value, fallbackLabel) => {
   } catch (error) {
     throw new Error(`${fallbackLabel} 返回了无法解析的 JSON。`);
   }
+};
+
+const describeGeminiTransportError = (error) => {
+  const primaryMessage = String(error?.message ?? '').trim();
+  const causeMessage = String(error?.cause?.message ?? '').trim();
+
+  if (primaryMessage && causeMessage && !primaryMessage.includes(causeMessage)) {
+    return `${primaryMessage} (${causeMessage})`;
+  }
+
+  return primaryMessage || causeMessage || 'Unknown Gemini transport error';
+};
+
+const isNetworkLikeGeminiError = (error) => {
+  const statusCode = Number(error?.statusCode ?? 0);
+  const normalizedMessage = describeGeminiTransportError(error);
+
+  if (statusCode > 0) {
+    return false;
+  }
+
+  return /fetch failed|connect timeout|tls connection|socket disconnected|econnreset|enotfound|eai_again|timed out/iu.test(
+    normalizedMessage
+  );
 };
 
 const renderHighlightedPrompt = (prompt = '') => {
@@ -313,6 +354,20 @@ const createMockSegmentAnalysis = ({ segment, overallAnalysis }) => {
   };
 };
 
+const createMockShotSpeechAnalysis = ({ shot }) => {
+  const transcript = '';
+
+  return {
+    transcript,
+    subtitleLines: [],
+    speechStyle: '',
+    hasDialogue: false,
+    extractionStatus: 'completed',
+    extractionError: '',
+    sourceOfTruth: 'extracted'
+  };
+};
+
 const normalizePromptOptimizationMode = (mode = '') => {
   const normalizedMode = String(mode ?? '').trim();
 
@@ -562,8 +617,10 @@ const getGeminiModelCandidates = (requestedModel) => {
     });
 };
 
-const resolveVideoMimeType = (absolutePath) => {
-  return VIDEO_MIME_TYPES[path.extname(absolutePath).toLowerCase()] || 'video/mp4';
+const resolveAssetMimeType = (absolutePath) => {
+  const extension = path.extname(absolutePath).toLowerCase();
+
+  return VIDEO_MIME_TYPES[extension] || IMAGE_MIME_TYPES[extension] || 'application/octet-stream';
 };
 
 const readAssetAsBase64 = async (absolutePath) => {
@@ -572,7 +629,7 @@ const readAssetAsBase64 = async (absolutePath) => {
 };
 
 const readAssetAsDataUrl = async (absolutePath) => {
-  const mimeType = resolveVideoMimeType(absolutePath);
+  const mimeType = resolveAssetMimeType(absolutePath);
   const base64Data = await readAssetAsBase64(absolutePath);
 
   return {
@@ -861,7 +918,7 @@ const appendKeyQuery = (endpoint, token) => {
   return url.toString();
 };
 
-const buildGooglePromptPayload = async ({ prompt, videoAbsolutePath = '' }) => {
+const buildGooglePromptPayload = async ({ prompt, videoAbsolutePath = '', imageAbsolutePaths = [] }) => {
   const parts = [];
 
   if (videoAbsolutePath) {
@@ -869,7 +926,18 @@ const buildGooglePromptPayload = async ({ prompt, videoAbsolutePath = '' }) => {
 
     parts.push({
       inline_data: {
-        mime_type: resolveVideoMimeType(videoAbsolutePath),
+        mime_type: resolveAssetMimeType(videoAbsolutePath),
+        data: assetData
+      }
+    });
+  }
+
+  for (const imageAbsolutePath of imageAbsolutePaths) {
+    const assetData = await readAssetAsBase64(imageAbsolutePath);
+
+    parts.push({
+      inline_data: {
+        mime_type: resolveAssetMimeType(imageAbsolutePath),
         data: assetData
       }
     });
@@ -922,6 +990,311 @@ const buildOpenAiPromptPayload = async ({ prompt, videoAbsolutePath = '', model 
   };
 };
 
+const getWholeVideoFrameSampleTimes = (durationSeconds = 0) => {
+  const safeDurationSeconds = Number(durationSeconds);
+
+  if (!Number.isFinite(safeDurationSeconds) || safeDurationSeconds <= 0.3) {
+    return [0, 0.8, 1.6, 2.4];
+  }
+
+  const clampedMaxTime = Math.max(0, safeDurationSeconds - 0.05);
+  const sampleCount = Math.min(
+    WHOLE_VIDEO_ANALYSIS_MAX_FRAME_COUNT,
+    Math.max(
+      WHOLE_VIDEO_ANALYSIS_MIN_FRAME_COUNT,
+      safeDurationSeconds >= 40 ? 6 : safeDurationSeconds >= 15 ? 5 : 4
+    )
+  );
+  const edgePaddingSeconds = Math.min(0.8, Math.max(0.08, safeDurationSeconds * 0.06));
+  const startTime = Math.min(edgePaddingSeconds, clampedMaxTime);
+  const endTime = Math.max(startTime, safeDurationSeconds - edgePaddingSeconds);
+
+  if (sampleCount === 1 || endTime - startTime <= 0.1) {
+    return [Number(Math.max(0, Math.min(clampedMaxTime, safeDurationSeconds / 2)).toFixed(2))];
+  }
+
+  const timeSet = new Set();
+  const sampledTimes = [];
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const ratio = sampleCount === 1 ? 0 : index / (sampleCount - 1);
+    const sampledTime = Number((startTime + (endTime - startTime) * ratio).toFixed(2));
+    const boundedTime = Number(Math.max(0, Math.min(clampedMaxTime, sampledTime)).toFixed(2));
+    const dedupeKey = boundedTime.toFixed(2);
+
+    if (timeSet.has(dedupeKey)) {
+      continue;
+    }
+
+    timeSet.add(dedupeKey);
+    sampledTimes.push(boundedTime);
+  }
+
+  if (!sampledTimes.length) {
+    return [Number(Math.max(0, Math.min(clampedMaxTime, safeDurationSeconds / 2)).toFixed(2))];
+  }
+
+  return sampledTimes;
+};
+
+const extractWholeVideoFrameSamples = async ({ videoAbsolutePath, durationSeconds, video }) => {
+  const sampleTimes = getWholeVideoFrameSampleTimes(durationSeconds);
+  const basename = String(video?.filename ?? 'analysis-video')
+    .replace(/\.[^.]+$/u, '')
+    .replace(/[^\p{L}\p{N}_-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '') || 'analysis-video';
+  const frameSamples = [];
+
+  for (let index = 0; index < sampleTimes.length; index += 1) {
+    const frameAsset = await extractVideoFrame(videoAbsolutePath, sampleTimes[index], {
+      basename: `${basename}-analysis-frame-${index + 1}`
+    });
+
+    if (!frameAsset?.filePath) {
+      continue;
+    }
+
+    frameSamples.push({
+      index,
+      label: `图片${index + 1}`,
+      timeSeconds: sampleTimes[index],
+      filePath: frameAsset.filePath,
+      fileUrl: frameAsset.fileUrl,
+      absolutePath: resolveUploadPath(frameAsset.filePath)
+    });
+  }
+
+  return frameSamples;
+};
+
+const cleanupWholeVideoFrameSamples = async (frameSamples = []) => {
+  await Promise.allSettled(
+    frameSamples
+      .map((sample) => String(sample?.filePath ?? '').trim())
+      .filter(Boolean)
+      .map((filePath) => removeFileIfExists(filePath))
+  );
+};
+
+const buildFrameFallbackVideoAnalysisPrompt = ({ video, metadata, frameSamples = [] }) => {
+  const frameTimeline = frameSamples
+    .map((sample) => `${sample.label}=${Number(sample.timeSeconds).toFixed(2)}秒`)
+    .join('；');
+
+  return [
+    '补充说明：当前不是直接上传整段视频文件，而是按时间顺序提供整片关键帧采样图片。',
+    `关键帧数量：${frameSamples.length}`,
+    `关键帧时间线：${frameTimeline || '未提供时间线'}`,
+    '这些图片严格按照整片时间顺序排列，代表同一条视频从头到尾的关键画面采样，不是独立素材图。',
+    '你需要把这些关键帧当作整片视频的时间采样来理解剧情推进、人物连续性、场景复现关系、镜头边界和动作节奏。',
+    '时间锚点与小镜头时间仍然必须填写整片绝对秒数，不能只写图片序号区间。',
+    '如果两张关键帧之间存在明显动作跳变、机位变化、场景变化或说话节奏变化，要据此尽量还原中间真实发生的切换，并合理细分片段和小镜头。',
+    buildVideoAnalysisPrompt({ video, metadata })
+  ].join('\n');
+};
+
+const normalizeVideoAnalysisPayload = ({ parsedPayload, metadata, analysisOptions, geminiResponse }) => {
+  const normalizedTimeAnchors =
+    (parsedPayload.timeAnchors ?? parsedPayload.time_anchors ?? [])
+      .map((item, index) => normalizeTimeAnchor(item, index, Number(metadata.duration) || 0))
+      .filter(Boolean) || [];
+  const normalizedBackgrounds = (parsedPayload.backgrounds ?? []).filter(Boolean);
+  const hydratedScenePayload = hydrateSceneRelationships({
+    timeAnchors: normalizedTimeAnchors,
+    backgrounds: normalizedBackgrounds
+  });
+  const derivedTimeAnchors = hydratedScenePayload.timeAnchors.length
+    ? hydratedScenePayload.timeAnchors
+    : buildMockTimeAnchors(metadata.duration || 12);
+  const derivedBackgrounds = hydratedScenePayload.backgrounds.length
+    ? hydratedScenePayload.backgrounds
+    : derivedTimeAnchors.map(buildDerivedBackgroundFromAnchor).filter(Boolean);
+
+  return {
+    plot: String(parsedPayload.plot ?? '').trim(),
+    characters: (parsedPayload.characters ?? []).map(normalizeCharacter).filter(Boolean),
+    backgrounds: derivedBackgrounds.filter(Boolean),
+    timeAnchors: derivedTimeAnchors,
+    analysisOptions,
+    geminiResponse
+  };
+};
+
+const analyzeVideoWithFrameFallback = async ({
+  video,
+  metadata,
+  videoAbsolutePath,
+  analysisOptions = null,
+  primaryError = null
+}) => {
+  const frameSamples = await extractWholeVideoFrameSamples({
+    videoAbsolutePath,
+    durationSeconds: metadata?.duration,
+    video
+  });
+
+  if (!frameSamples.length) {
+    throw new Error('关键帧回退失败：无法从原视频中提取可用的整片关键帧。');
+  }
+
+  try {
+    const { authVariant, model: resolvedModel, responsePayload, responseText } = await callRemoteGemini({
+      prompt: buildFrameFallbackVideoAnalysisPrompt({ video, metadata, frameSamples }),
+      imageAbsolutePaths: frameSamples.map((sample) => sample.absolutePath)
+    });
+    const parsedPayload = parseJsonPayload(responseText, '整片分析模型（关键帧回退）');
+
+    return normalizeVideoAnalysisPayload({
+      parsedPayload,
+      metadata,
+      analysisOptions,
+      geminiResponse: buildGeminiResponseEnvelope({
+        provider: 'remote-gemini',
+        model: resolvedModel || env.GEMINI_MODEL,
+        mode: 'google',
+        authVariant,
+        isMock: false,
+        fallbackReason: 'frame_sampling',
+        remoteError: primaryError ? describeGeminiTransportError(primaryError) : '',
+        rawResponse: {
+          transport: 'frame_sampling',
+          frameSamples: frameSamples.map((sample) => ({
+            label: sample.label,
+            timeSeconds: sample.timeSeconds,
+            fileUrl: sample.fileUrl
+          })),
+          response: responsePayload
+        }
+      })
+    });
+  } finally {
+    await cleanupWholeVideoFrameSamples(frameSamples);
+  }
+};
+
+const executeCurlRequest = async ({ url, headers = {}, requestBody, timeoutMs = env.EXTERNAL_REQUEST_TIMEOUT }) => {
+  const maxTimeSeconds = Math.max(1, Math.ceil(Number(timeoutMs) / 1000));
+  const requestBodyFilePath = path.join(
+    os.tmpdir(),
+    `fanshi-gemini-request-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`
+  );
+  const args = [
+    '--silent',
+    '--show-error',
+    '--location',
+    '--max-time',
+    String(maxTimeSeconds),
+    '--connect-timeout',
+    '15',
+    '--request',
+    'POST',
+    url,
+    '--write-out',
+    CURL_HTTP_STATUS_MARKER + '%{http_code}'
+  ];
+
+  Object.entries(headers).forEach(([headerName, headerValue]) => {
+    if (headerValue === undefined || headerValue === null || headerValue === '') {
+      return;
+    }
+
+    args.push('--header', `${headerName}: ${headerValue}`);
+  });
+
+  args.push('--data-binary', `@${requestBodyFilePath}`);
+
+  await writeFile(requestBodyFilePath, JSON.stringify(requestBody), 'utf8');
+
+  try {
+    return await new Promise((resolve, reject) => {
+      const curlProcess = spawn('curl', args, {
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      let stdout = '';
+      let stderr = '';
+
+      curlProcess.stdout.setEncoding('utf8');
+      curlProcess.stderr.setEncoding('utf8');
+      curlProcess.stdout.on('data', (chunk) => {
+        stdout += chunk;
+      });
+      curlProcess.stderr.on('data', (chunk) => {
+        stderr += chunk;
+      });
+      curlProcess.on('error', (error) => {
+        reject(error);
+      });
+      curlProcess.on('close', (code) => {
+        if (code !== 0) {
+          const curlError = new Error(
+            `Gemini curl fallback failed with exit code ${code}: ${String(stderr || stdout).trim() || 'Unknown curl error'}`
+          );
+          curlError.exitCode = code;
+          reject(curlError);
+          return;
+        }
+
+        const markerIndex = stdout.lastIndexOf(CURL_HTTP_STATUS_MARKER);
+
+        if (markerIndex === -1) {
+          reject(new Error('Gemini curl fallback did not return an HTTP status marker.'));
+          return;
+        }
+
+        const responseBody = stdout.slice(0, markerIndex);
+        const rawStatusCode = stdout.slice(markerIndex + CURL_HTTP_STATUS_MARKER.length).trim();
+        const statusCode = Number(rawStatusCode);
+
+        resolve({
+          statusCode: Number.isFinite(statusCode) ? statusCode : 0,
+          responseText: responseBody
+        });
+      });
+    });
+  } finally {
+    await unlink(requestBodyFilePath).catch(() => {});
+  }
+};
+
+const callRemoteGeminiWithCurl = async ({
+  url,
+  headers = {},
+  requestBody,
+  timeoutMs = env.EXTERNAL_REQUEST_TIMEOUT,
+  mode = env.GEMINI_API_COMPAT_MODE,
+  authVariant = '',
+  model = env.GEMINI_MODEL
+}) => {
+  const { statusCode, responseText } = await executeCurlRequest({
+    url,
+    headers,
+    requestBody,
+    timeoutMs
+  });
+
+  if (statusCode < 200 || statusCode >= 300) {
+    const error = new Error(
+      `Gemini curl request failed with status ${statusCode}: ${responseText.slice(0, 240)}`
+    );
+    error.statusCode = statusCode;
+    error.authVariant = authVariant;
+    error.model = model;
+    throw error;
+  }
+
+  const responsePayload = responseText ? JSON.parse(responseText) : {};
+
+  return {
+    authVariant,
+    model,
+    responsePayload,
+    responseText:
+      mode === 'openai'
+        ? extractOpenAiResponseText(responsePayload)
+        : extractGoogleResponseText(responsePayload)
+  };
+};
+
 const extractGoogleResponseText = (responsePayload) => {
   const candidate = responsePayload?.candidates?.[0];
   const text = candidate?.content?.parts?.map((part) => part.text ?? '').join('\n').trim();
@@ -946,11 +1319,17 @@ const extractOpenAiResponseText = (responsePayload) => {
 const callRemoteGemini = async ({
   prompt,
   videoAbsolutePath = '',
+  imageAbsolutePaths = [],
+  requestTimeoutOverrideMs = null,
   mode = env.GEMINI_API_COMPAT_MODE,
   model = env.GEMINI_MODEL
 }) => {
-  const resolvedMode = videoAbsolutePath && mode !== 'google' ? 'google' : mode;
-  const requestTimeoutMs = getGeminiRequestTimeoutMs({ videoAbsolutePath });
+  const hasMediaInput = Boolean(videoAbsolutePath || imageAbsolutePaths.length);
+  const resolvedMode = hasMediaInput && mode !== 'google' ? 'google' : mode;
+  const requestTimeoutMs =
+    Number.isFinite(Number(requestTimeoutOverrideMs)) && Number(requestTimeoutOverrideMs) > 0
+      ? Number(requestTimeoutOverrideMs)
+      : getGeminiRequestTimeoutMs({ videoAbsolutePath });
   let lastError = null;
 
   for (const modelCandidate of getGeminiModelCandidates(model)) {
@@ -958,7 +1337,7 @@ const callRemoteGemini = async ({
     const requestBody =
       resolvedMode === 'openai'
         ? await buildOpenAiPromptPayload({ prompt, videoAbsolutePath, model: modelCandidate })
-        : await buildGooglePromptPayload({ prompt, videoAbsolutePath });
+        : await buildGooglePromptPayload({ prompt, videoAbsolutePath, imageAbsolutePaths });
     const requestVariants =
       resolvedMode === 'google'
         ? [
@@ -1034,13 +1413,39 @@ const callRemoteGemini = async ({
                 : extractGoogleResponseText(responsePayload)
           };
         } catch (error) {
-          lastError = error;
+          let effectiveError = error;
 
-          if (isAuthLikeGeminiStatus(error.statusCode) && variantIndex < requestVariants.length - 1) {
+          if (isNetworkLikeGeminiError(error)) {
+            try {
+              const curlResult = await callRemoteGeminiWithCurl({
+                url: requestVariant.url,
+                headers: requestVariant.headers,
+                requestBody,
+                timeoutMs: requestTimeoutMs,
+                mode: resolvedMode,
+                authVariant: `${requestVariant.name}+curl`,
+                model: modelCandidate
+              });
+
+              logger.warn('Gemini fetch transport failed, switched to curl fallback.', {
+                model: modelCandidate,
+                authVariant: requestVariant.name,
+                message: describeGeminiTransportError(error)
+              });
+
+              return curlResult;
+            } catch (curlError) {
+              effectiveError = curlError;
+            }
+          }
+
+          lastError = effectiveError;
+
+          if (isAuthLikeGeminiStatus(effectiveError.statusCode) && variantIndex < requestVariants.length - 1) {
             break;
           }
 
-          if (attempt >= 3 || !isRetryableGeminiStatus(error.statusCode)) {
+          if (attempt >= 3 || !isRetryableGeminiStatus(effectiveError.statusCode)) {
             break;
           }
 
@@ -1132,9 +1537,9 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
     '2. characters 至少提取主要角色，name 要稳定，appearancePrompt 必须是可直接用于视频生成的人物外观设定。',
     '3. 每个 character 还必须返回 personalityPrompt，用中文概括角色的性格气质、情绪底色、行为风格或表演状态，方便后续角色资源与生成提示词复用。',
     '4. 每个 character 都要返回 representativeFrameTime，表示最能代表该角色外观的时间点（单位秒）；representativeFrameNote 简要说明为什么选择该帧。',
-    '5. backgrounds 需要概括主要场景、环境氛围、光线、天气、布景和空间信息，name 为方便前端展示的场景名称。',
+    '5. backgrounds 需要尽量多提取对后续重生成有价值的可复用场景资源，不只提大场景；同一大场景中的稳定子空间、机位常驻区域、布景核心角落、走廊、门口、窗边、吧台、沙发区等，只要能独立复用，都可以沉淀成单独场景资源。',
     '6. 每个 background 都要返回 scenePrompt，内容是可直接用于生成该场景的中文场景提示词，同时返回 representativeFrameTime 和 representativeFrameNote。',
-    '7. 先识别整片有哪些可复用场景，并把它们沉淀到 backgrounds 这个场景资源库里。',
+    '7. 先识别整片有哪些可复用场景，并把它们沉淀到 backgrounds 这个场景资源库里；如果同一大场景内部有多个视觉差异稳定且值得复用的子空间，也要拆开沉淀。',
     '8. timeAnchors 必须覆盖完整视频，startTime 和 endTime 为数字秒，严格按时间升序，不要重叠，不要遗漏关键内容。',
     '9. 片段切分必须以场景切换为硬边界；只有在同一场景内动作阶段明显不同且确实需要独立生成时，才继续细分。',
     '10. 每个 timeAnchor 代表一个后续可独立生成的大剧情片段，而不是纯观感镜头；片段边界要尽量保证动作完整、人物连续、场景切换清晰、前后文衔接稳定。',
@@ -1145,17 +1550,17 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
     '15. 每个 timeAnchor 都要返回 representativeFrameTime，且该时间点必须落在 startTime 到 endTime 之间；优先选择最适合做预览、最能代表人物或场景的画面，而不是机械取中点。',
     '16. 如果同一场景在多个片段重复出现，允许每个片段返回更贴合该片段语境的 scenePrompt，但 backgroundId 必须保持一致。',
     '17. 每个 timeAnchor 内都必须返回 shots 数组，用于描述该大片段下的小镜头；shots 是后续小镜头切片与生成的唯一真值来源。',
-    '18. shots 必须优先对齐真实剪辑边界、机位变化、镜头运动变化、景别变化、构图重心变化、主体关系变化、场景切换、视线反打、人物进出画、明显动作 beat 和焦点转移，不要机械均分时间。',
-    '19. 如果同一连续动作里出现了明显的左/中/右站位变化、前后景关系变化、镜头角度变化、横移推拉变化、遮挡关系变化或表演节奏断点，也应该继续拆成新的 shot。',
+    '18. shots 必须优先对齐真实剪辑边界、机位变化、镜头运动变化、景别变化、构图重心变化、主体关系变化、场景切换、视线反打、人物进出画、明显动作 beat、焦点转移、对白换气节点和说话节奏断点，不要机械均分时间。',
+    '19. 如果同一连续动作里出现了明显的左/中/右站位变化、前后景关系变化、镜头角度变化、横移推拉变化、遮挡关系变化、表演节奏断点、口型状态切换或说话人主次变化，也应该继续拆成新的 shot。',
     '20. 每个 shot 尽量只承载一个清晰动作阶段和一个稳定镜头意图，避免把两个以上关键动作、两个机位意图或两个构图中心混进同一个 shot。',
     '21. shots 必须按整片绝对时间返回 startTime 和 endTime，严格落在所属 timeAnchor 范围内，按时间升序、无重叠，并尽量覆盖该大片段。',
-    '22. 每个 shot 都要返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote。',
+    '22. 每个 shot 都要返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote；sceneNames 和 characterNames 都不能为空。',
     '23. shot.summary 不能只写发生了什么，还要简要点出镜头核心动作、主体关系或构图变化。',
     '24. representativeFrameTime 必须选择该镜头最有代表性的画面，不允许机械取中点；优先选择最适合作为预览图和生成参考图、最能体现该镜头构图与动作状态的画面。',
-    '25. shot.prompt 必须直接服务镜头级视频生成，必须写清：角色数量、谁在前景/中景/后景、人物在画面中的左/中/右位置、远近层次、朝向与视线方向、肢体姿态、运动轨迹、进出画方式、遮挡关系、镜头景别、拍摄角度、镜头运动、光线氛围，以及与前后镜头的连续关系。',
-    '26. shot.prompt 必须使用 @角色名 和 #场景名 引用，不要把资源正文直接展开，也不要只重复大片段摘要。',
+    '25. shot.prompt 必须直接服务镜头级视频生成，必须写清：角色数量、谁在前景/中景/后景、人物在画面中的左/中/右位置、远近层次、朝向与视线方向、肢体姿态、运动轨迹、进出画方式、遮挡关系、镜头景别、拍摄角度、镜头运动、光线氛围、说话状态或口型是否明显，以及与前后镜头的连续关系。',
+    '26. shot.prompt 必须同时使用至少一个 @角色名 和至少一个 #场景名 引用，不要把资源正文直接展开，也不要只重复大片段摘要。',
     '27. 如果一个 shot 涉及多个场景，需要在 sceneNames 中全部列出，并在 prompt 中按顺序引用对应的 #场景名。',
-    '28. 如果一个 shot 涉及多个角色，需要明确每个角色各自的位置、主次关系、视线关系和表演状态，而不是只列名字。',
+    '28. 如果一个 shot 涉及多个角色，需要明确每个角色各自的位置、主次关系、视线关系和表演状态，而不是只列名字；如果角色是不完整出镜、背影、手部或 POV，也必须绑定稳定的人物名。',
     '29. 如果角色较少，也至少保证 characters 返回 1 个对象。',
     '30. 输出必须是合法 JSON，字段名保持与示例完全一致。'
   ].join('\n');
@@ -1195,13 +1600,61 @@ const buildSegmentAnalysisPrompt = ({ segment, overallAnalysis }) => {
     '要求：',
     '1. characters 返回当前片段真正出现或应重点关注的角色名称列表。',
     '2. scenes 返回当前片段涉及到的场景资源名称，必须优先复用整片场景资源库里的原始名称，并按叙事出现顺序返回。',
-    '3. prompt 必须为后续视频生成可直接编辑的中文提示词。',
+    '3. prompt 必须为后续视频生成可直接编辑的中文提示词，只刷新大片段理解，不要重新拆分 shots。',
     '4. prompt 中涉及角色时，用 @角色名 标记，而不是展开成长描述。',
     '5. prompt 中涉及场景时，用 #场景名 标记，而不是直接展开真实场景资源提示词。',
     '6. 如果片段中出现多个场景，请在 scenes 中列全，并在 prompt 里按顺序引用对应的 #场景名。',
     '7. 当前片段必须服从已绑定的 backgroundId/backgroundAction/backgroundName，不要重新发明新的场景决策。',
     '8. 如果当前片段标记为 reuse_existing，需要在 scene 和 prompt 中强调延续同一场景资源，只变化动作、表演或镜头阶段。',
     '9. 输出必须是有效 JSON。'
+  ].join('\n');
+};
+
+const buildShotSpeechAnalysisPrompt = ({ segment, shot, analysisOptions }) => {
+  const durationSeconds = Number(shot?.durationSeconds ?? Math.max(0.3, Number(shot?.endTime) - Number(shot?.startTime)));
+  const segmentPrompt = String(segment?.analysis?.prompt ?? segment?.analysis?.scenePrompt ?? '').trim();
+  const shotPrompt = String(shot?.prompt ?? '').trim();
+
+  return [
+    '你是一名镜头级字幕与对白解析助手。',
+    '请分析输入的小镜头视频，并严格返回 JSON，不要输出 Markdown、解释或额外文本。',
+    '返回结构必须完全符合：',
+    JSON.stringify(
+      {
+        transcript: '镜头对白全文，没有对白时返回空字符串',
+        subtitleLines: [
+          {
+            id: 'subtitle_1',
+            startTime: 0,
+            endTime: 0.8,
+            text: '第一句字幕'
+          }
+        ],
+        speechStyle: '语速、停顿、情绪、语气、说话力度、口型明显程度等中文说明',
+        hasDialogue: true
+      },
+      null,
+      2
+    ),
+    `大片段提示词：${segmentPrompt || '暂无'}`,
+    `当前小镜头提示词：${shotPrompt || '暂无'}`,
+    `镜头摘要：${String(shot?.summary ?? '').trim() || '暂无'}`,
+    `镜头时长（秒）：${durationSeconds.toFixed(2)}`,
+    `镜头角色：${JSON.stringify(shot?.characterNames ?? [])}`,
+    `镜头场景：${JSON.stringify(shot?.sceneNames ?? [])}`,
+    `解析选项：${JSON.stringify({
+      extractSubtitles: Boolean(analysisOptions?.extractSubtitles),
+      parseAudio: Boolean(analysisOptions?.parseAudio)
+    })}`,
+    '要求：',
+    '1. 只根据当前小镜头真实可见可听内容提取，不要虚构未说出的台词。',
+    '2. 如果当前镜头没有清晰对白、旁白或可辨识语言内容，hasDialogue 返回 false，transcript 返回空字符串，subtitleLines 返回空数组。',
+    '3. subtitleLines 的 startTime 和 endTime 必须是相对当前小镜头本地时间，不是整片绝对时间。',
+    '4. subtitleLines 必须按时间升序返回，不重叠，尽量贴近真实说话节奏和停顿点。',
+    '5. 每条字幕 text 只保留真实说出的内容，不要加入场景解释。',
+    '6. speechStyle 用中文概括语速、停顿、情绪、语气、说话力度、说话人状态和口型明显程度，方便后续口型与音频生成。',
+    '7. 如果 parseAudio 为 false，也仍然返回基础 speechStyle，但可以更简洁。',
+    '8. 输出必须是合法 JSON。'
   ].join('\n');
 };
 
@@ -1320,10 +1773,11 @@ const buildPromptOptimizationPrompt = ({
   ].join('\n');
 };
 
-const analyzeVideo = async ({ video, metadata, videoAbsolutePath }) => {
+const analyzeVideo = async ({ video, metadata, videoAbsolutePath, analysisOptions = null }) => {
   if (!canUseRemoteGemini) {
     return {
       ...createMockVideoAnalysis({ video, metadata }),
+      analysisOptions,
       geminiResponse: buildGeminiResponseEnvelope({
         provider: 'mock-gemini',
         isMock: true,
@@ -1337,30 +1791,14 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath }) => {
   try {
     const { authVariant, model: resolvedModel, responsePayload, responseText } = await callRemoteGemini({
       prompt: buildVideoAnalysisPrompt({ video, metadata }),
-      videoAbsolutePath
+      videoAbsolutePath,
+      requestTimeoutOverrideMs: WHOLE_VIDEO_PRIMARY_UPLOAD_TIMEOUT_MS
     });
     const parsedPayload = parseJsonPayload(responseText, '整片分析模型');
-    const normalizedTimeAnchors =
-      (parsedPayload.timeAnchors ?? parsedPayload.time_anchors ?? [])
-        .map((item, index) => normalizeTimeAnchor(item, index, Number(metadata.duration) || 0))
-        .filter(Boolean) || [];
-    const normalizedBackgrounds = (parsedPayload.backgrounds ?? []).filter(Boolean);
-    const hydratedScenePayload = hydrateSceneRelationships({
-      timeAnchors: normalizedTimeAnchors,
-      backgrounds: normalizedBackgrounds
-    });
-    const derivedTimeAnchors = hydratedScenePayload.timeAnchors.length
-      ? hydratedScenePayload.timeAnchors
-      : buildMockTimeAnchors(metadata.duration || 12);
-    const derivedBackgrounds = hydratedScenePayload.backgrounds.length
-      ? hydratedScenePayload.backgrounds
-      : derivedTimeAnchors.map(buildDerivedBackgroundFromAnchor).filter(Boolean);
-
-    return {
-      plot: String(parsedPayload.plot ?? '').trim(),
-      characters: (parsedPayload.characters ?? []).map(normalizeCharacter).filter(Boolean),
-      backgrounds: derivedBackgrounds.filter(Boolean),
-      timeAnchors: derivedTimeAnchors,
+    return normalizeVideoAnalysisPayload({
+      parsedPayload,
+      metadata,
+      analysisOptions,
       geminiResponse: buildGeminiResponseEnvelope({
         provider: 'remote-gemini',
         model: resolvedModel || env.GEMINI_MODEL,
@@ -1371,27 +1809,99 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath }) => {
         remoteError: '',
         rawResponse: responsePayload
       })
+    });
+  } catch (error) {
+    try {
+      const fallbackAnalysis = await analyzeVideoWithFrameFallback({
+        video,
+        metadata,
+        videoAbsolutePath,
+        analysisOptions,
+        primaryError: error
+      });
+
+      logger.warn('Remote Gemini whole-video upload failed, used frame-sampling fallback instead.', {
+        message: describeGeminiTransportError(error)
+      });
+
+      return fallbackAnalysis;
+    } catch (frameFallbackError) {
+      if (shouldUseStrictRemoteGemini()) {
+        throw frameFallbackError;
+      }
+
+      logger.warn('Remote Gemini frame fallback also failed, using mock analysis instead.', {
+        primaryError: describeGeminiTransportError(error),
+        fallbackError: describeGeminiTransportError(frameFallbackError)
+      });
+
+      return {
+        ...createMockVideoAnalysis({ video, metadata }),
+        analysisOptions,
+        geminiResponse: buildGeminiResponseEnvelope({
+          provider: 'mock-gemini',
+          model: env.GEMINI_MODEL,
+          mode: env.GEMINI_API_COMPAT_MODE,
+          authVariant: frameFallbackError.authVariant || error.authVariant || '',
+          isMock: true,
+          fallbackReason: 'remote_error',
+          remoteError: [
+            `整段视频上传失败：${describeGeminiTransportError(error)}`,
+            `关键帧回退失败：${describeGeminiTransportError(frameFallbackError)}`
+          ].join('；'),
+          rawResponse: null
+        })
+      };
+    }
+  }
+};
+
+const analyzeShotSpeech = async ({
+  segment,
+  shot,
+  shotVideoAbsolutePath = '',
+  analysisOptions = null
+}) => {
+  if (!canUseRemoteGemini) {
+    return createMockShotSpeechAnalysis({ shot });
+  }
+
+  try {
+    const { responseText } = await callRemoteGemini({
+      prompt: buildShotSpeechAnalysisPrompt({
+        segment,
+        shot,
+        analysisOptions
+      }),
+      videoAbsolutePath: shotVideoAbsolutePath,
+      model: env.GEMINI_SEGMENT_MODEL || env.GEMINI_MODEL
+    });
+    const parsedPayload = parseJsonPayload(responseText, '镜头字幕解析模型');
+
+    return {
+      transcript: String(parsedPayload.transcript ?? '').trim(),
+      subtitleLines: Array.isArray(parsedPayload.subtitleLines ?? parsedPayload.subtitle_lines)
+        ? parsedPayload.subtitleLines ?? parsedPayload.subtitle_lines
+        : [],
+      speechStyle: String(parsedPayload.speechStyle ?? parsedPayload.speech_style ?? '').trim(),
+      hasDialogue: Boolean(parsedPayload.hasDialogue ?? parsedPayload.has_dialogue),
+      extractionStatus: 'completed',
+      extractionError: '',
+      sourceOfTruth: 'extracted'
     };
   } catch (error) {
     if (shouldUseStrictRemoteGemini()) {
       throw error;
     }
 
-    logger.warn('Remote Gemini analyzeVideo failed, using mock analysis instead.', {
-      message: error.message
+    logger.warn('Remote Gemini analyzeShotSpeech failed, using mock speech extraction instead.', {
+      message: describeGeminiTransportError(error)
     });
+
     return {
-      ...createMockVideoAnalysis({ video, metadata }),
-      geminiResponse: buildGeminiResponseEnvelope({
-        provider: 'mock-gemini',
-        model: env.GEMINI_MODEL,
-        mode: env.GEMINI_API_COMPAT_MODE,
-        authVariant: error.authVariant || '',
-        isMock: true,
-        fallbackReason: 'remote_error',
-        remoteError: error.message,
-        rawResponse: null
-      })
+      ...createMockShotSpeechAnalysis({ shot }),
+      extractionStatus: 'failed',
+      extractionError: describeGeminiTransportError(error)
     };
   }
 };
@@ -1417,7 +1927,7 @@ const analyzeSegment = async ({ segment, overallAnalysis, segmentAbsolutePath = 
     }
 
     logger.warn('Remote Gemini analyzeSegment failed, using mock segment analysis instead.', {
-      message: error.message
+      message: describeGeminiTransportError(error)
     });
     return createMockSegmentAnalysis({ segment, overallAnalysis });
   }
@@ -1473,7 +1983,7 @@ const optimizePrompt = async ({
     }
 
     logger.warn('Remote Gemini optimizePrompt failed, using mock prompt optimization instead.', {
-      message: error.message
+      message: describeGeminiTransportError(error)
     });
     return createMockOptimizedPrompt({
       prompt,
@@ -1488,4 +1998,4 @@ const optimizePrompt = async ({
   }
 };
 
-export { analyzeVideo, analyzeSegment, optimizePrompt };
+export { analyzeVideo, analyzeSegment, analyzeShotSpeech, optimizePrompt };

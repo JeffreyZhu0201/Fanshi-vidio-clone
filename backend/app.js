@@ -8,7 +8,11 @@ import swaggerUi from 'swagger-ui-express';
 
 import env from './config/env.js';
 import swaggerSpec from './config/swagger.js';
-import { closeDatabaseConnection, connectDatabase } from './config/database.js';
+import {
+  closeDatabaseConnection,
+  connectDatabase,
+  ensureDatabaseCompatibility
+} from './config/database.js';
 import { API_PREFIX, APP_NAME, UPLOAD_DIRECTORIES } from './config/constants.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { requestMetrics } from './middleware/requestMetrics.js';
@@ -116,7 +120,12 @@ const startServers = async (app) => {
   const servers = [];
 
   await ensureUploadDirectories();
-  await connectDatabase({ force: true });
+  const database = await connectDatabase({ force: true });
+
+  if (database.connected) {
+    await ensureDatabaseCompatibility();
+  }
+
   queueMicrotask(() => {
     void recoverInFlightTasks();
   });

@@ -1,12 +1,13 @@
 # Pipeline
 
-更新时间：2026-04-22
+更新时间：2026-04-23
 
 这份文档只写当前仓库里真实存在、并且这次已经重新联调过的流水线。
 
 本轮联调重点覆盖了：
 
 - 上传原视频
+- 一键出片自动编排
 - 整片理解
 - 大片段与小镜头切分
 - 小镜头源预览与典型帧
@@ -30,6 +31,7 @@
 
 这次确认并修掉的问题：
 
+- 前端点击“整片分析”时，后端会因为旧库缺少 `analyses.analysis_options` 列而直接报错；现在已经补上迁移，并在启动时自动做 schema 兼容修复
 - 小镜头典型帧丢失时的自愈判断不完整，导致部分帧 404
 - Seedance 对参考视频的像素总数门槛没有过滤，导致远端拒收
 - Seedance 对过短生成时长有限制，现已自动向上兼容并在下载后裁回原时长
@@ -60,6 +62,29 @@
 - 以 hash 文件名保存到 `backend/uploads/videos`
 - 写入 `videos`
 
+### 2.1.1 一键出片
+
+- 前端入口：上传区右上角 `一键出片`
+- 当前实现：前端自动编排，不新增后端总控接口
+
+自动顺序：
+
+1. `POST /api/analysis/analyze`
+2. `POST /api/analysis/optimize-prompt`
+3. `POST /api/resource-images/generate`
+4. `POST /api/segments/split`
+5. `POST /api/analysis/optimize-prompt` 优化大片段和小镜头
+6. `PUT /api/segments/:id/shots`
+7. `POST /api/generation/shots/generate-batch`
+8. 等待镜头自动拼回大片段
+9. `POST /api/merge/start`
+
+当前规则：
+
+- 必须同时有可用的 Gemini 生图和 Seedance
+- 任何一步失败，自动流程会直接停下并显示当前错误
+- 资源图生成完成后，主页资源区会自动刷新
+
 ### 2.2 整片理解
 
 - 前端入口：`开始分析 / 重新分析`
@@ -80,6 +105,7 @@
 - 小镜头真值来自整片理解，不再由片段分析二次重写
 - 大片段时间和小镜头时间都用整片绝对秒数
 - Gemini 主模型失败时会继续尝试备用文本模型，不会立刻掉回 mock
+- 后端启动时会自动检查 `analyses.analysis_options` 列是否存在，避免旧数据库在点击“整片分析”时直接 500
 
 ### 2.3 大片段切分
 
