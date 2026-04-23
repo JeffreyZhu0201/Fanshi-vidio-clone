@@ -4,14 +4,15 @@ import { readFile, writeFile } from 'node:fs/promises';
 import env from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
 import logger from '../utils/logger.js';
+import { downloadExternalBinary, requestExternalJson, requestExternalText } from './externalHttpService.js';
 import { getVideoMetadata, sliceVideoClip } from './ffmpegService.js';
 import {
   createOutputRelativePath,
-  duplicateToUploadPath,
   ensureParentDirectory,
   publicUrlToRelativePath,
   removeFileIfExists,
   resolveUploadPath,
+  toAbsolutePublicUploadUrl,
   toPublicUploadUrl
 } from './fileService.js';
 
@@ -52,14 +53,32 @@ const MIN_REFERENCE_VIDEO_DURATION_SECONDS = 1.8;
 const MIN_REFERENCE_VIDEO_DIMENSION = 300;
 const MIN_REFERENCE_VIDEO_PIXEL_COUNT = 409600;
 const MIN_SEED_DANCE_GENERATION_DURATION_SECONDS = 4;
+const MAX_SEED_DANCE_GENERATION_DURATION_SECONDS = 15;
 const SEED_DANCE_SENSITIVE_IMAGE_ERROR_PATTERN = /InputImageSensitiveContentDetected(?:\.[A-Za-z]+)?/u;
+const REFERENCE_VIDEO_URL_CHECK_TIMEOUT_MS = 8000;
+const referenceVideoUrlReachabilityCache = new Map();
+const SEED_DANCE_PROVIDER_SAFETY_REPLACEMENTS = [
+  [/身体不适/gu, '身体有些疲惫'],
+  [/不适/gu, '疲惫'],
+  [/痛苦/gu, '神情紧张'],
+  [/难受/gu, '疲惫'],
+  [/胸口/gu, '上衣前侧'],
+  [/心绞痛|心梗|心脏病/gu, '身体疲惫'],
+  [/心脏/gu, '身体状态'],
+  [/药盒/gu, '小白盒'],
+  [/药品|药物|药片|吃药|服药/gu, '随身小盒子'],
+  [/病情|病症|疾病|生病/gu, '身体状态']
+];
 
 const shouldAllowSeedDanceMockFallback = () => {
-  return Boolean(env.SEED_DANCE_ALLOW_MOCK_FALLBACK);
+  return false;
 };
 
-const shouldUseStrictRemoteSeedDance = () => {
-  return canUseRemoteSeedDance && env.SEED_DANCE_STRICT_REMOTE;
+const buildProviderSafeSeedDancePrompt = (prompt = '') => {
+  return SEED_DANCE_PROVIDER_SAFETY_REPLACEMENTS.reduce(
+    (currentPrompt, [pattern, replacement]) => currentPrompt.replace(pattern, replacement),
+    String(prompt ?? '')
+  );
 };
 
 const isWebUrl = (value = '') => /^https?:\/\//iu.test(String(value).trim());
@@ -147,6 +166,18 @@ const resolveSeedDanceProviderDuration = (duration) => {
   return Math.max(
     MIN_SEED_DANCE_GENERATION_DURATION_SECONDS,
     Math.ceil(normalizeRequestedSeedDanceDuration(duration))
+  );
+};
+
+const assertSeedDanceRequestedDurationSupported = (duration, contextLabel = '当前镜头') => {
+  const requestedDuration = normalizeRequestedSeedDanceDuration(duration);
+
+  if (requestedDuration <= MAX_SEED_DANCE_GENERATION_DURATION_SECONDS) {
+    return requestedDuration;
+  }
+
+  throw new Error(
+    `Seedance 单次最长只支持 ${MAX_SEED_DANCE_GENERATION_DURATION_SECONDS} 秒生成，${contextLabel}当前为 ${requestedDuration.toFixed(2)} 秒，请先把片段切得更细后再生成。`
   );
 };
 
@@ -279,11 +310,38 @@ const resolveReferenceEntryAbsolutePath = (entry) => {
   return resolveLocalReferenceAbsolutePath(String(entry?.url ?? '').trim());
 };
 
-const getReferenceVideoEntryIssues = async (entry) => {
+const resolveReferenceEntryPublicUrl = (entry) => {
+  const directUrl = String(entry?.url ?? '').trim();
+
+  if (isRemoteHttpUrl(directUrl) || isDataUrl(directUrl)) {
+    return directUrl;
+  }
+
+  if (isPublicUploadUrl(directUrl)) {
+    return toAbsolutePublicUploadUrl(publicUrlToRelativePath(directUrl));
+  }
+
+  if (/^(?:\.{1,2}\/)?uploads\//u.test(directUrl)) {
+    return toAbsolutePublicUploadUrl(directUrl.replace(/^(?:\.{1,2}\/)?uploads\//u, ''));
+  }
+
+  const relativePath = String(entry?.relativePath ?? '').trim();
+
+  if (relativePath) {
+    return toAbsolutePublicUploadUrl(relativePath);
+  }
+
+  return '';
+};
+
+const getReferenceVideoEntryMetadata = async (entry) => {
   const absolutePath = resolveReferenceEntryAbsolutePath(entry);
 
   if (!absolutePath) {
-    return [];
+    return {
+      durationSeconds: null,
+      issues: []
+    };
   }
 
   const metadata = await getVideoMetadata(absolutePath);
@@ -315,10 +373,19 @@ const getReferenceVideoEntryIssues = async (entry) => {
     issues.push(`pixelCount<${MIN_REFERENCE_VIDEO_PIXEL_COUNT}`);
   }
 
-  return issues;
+  return {
+    durationSeconds,
+    issues
+  };
 };
 
 const resolveReferenceEntryUrl = async (entry, mediaType) => {
+  const publicUrl = resolveReferenceEntryPublicUrl(entry);
+
+  if (publicUrl) {
+    return publicUrl;
+  }
+
   if (entry.url) {
     if (isRemoteHttpUrl(entry.url) || isDataUrl(entry.url)) {
       return entry.url;
@@ -327,6 +394,10 @@ const resolveReferenceEntryUrl = async (entry, mediaType) => {
     const localReferencePath = resolveLocalReferenceAbsolutePath(entry.url);
 
     if (localReferencePath) {
+      if (mediaType === 'video') {
+        return '';
+      }
+
       return resolveSeedDanceDataUrl(localReferencePath, mediaType);
     }
 
@@ -339,7 +410,42 @@ const resolveReferenceEntryUrl = async (entry, mediaType) => {
     return '';
   }
 
+  if (mediaType === 'video') {
+    return '';
+  }
+
   return resolveSeedDanceDataUrl(absolutePath, mediaType);
+};
+
+const isReferenceVideoUrlReachable = async (url) => {
+  const normalizedUrl = String(url ?? '').trim();
+
+  if (!normalizedUrl || !isWebUrl(normalizedUrl)) {
+    return false;
+  }
+
+  if (referenceVideoUrlReachabilityCache.has(normalizedUrl)) {
+    return referenceVideoUrlReachabilityCache.get(normalizedUrl);
+  }
+
+  const reachabilityPromise = requestExternalText(normalizedUrl, {
+    method: 'HEAD',
+    timeoutMs: REFERENCE_VIDEO_URL_CHECK_TIMEOUT_MS
+  })
+    .then(({ response }) => {
+      return Boolean(response && response.status >= 200 && response.status < 400);
+    })
+    .catch((error) => {
+      logger.warn('Skipping Seedance reference video because the public URL is not reachable from the current runtime.', {
+        url: normalizedUrl,
+        message: error.message,
+        cause: error.cause?.message || ''
+      });
+      return false;
+    });
+
+  referenceVideoUrlReachabilityCache.set(normalizedUrl, reachabilityPromise);
+  return reachabilityPromise;
 };
 
 const buildSeedDanceContentItems = async ({
@@ -348,7 +454,8 @@ const buildSeedDanceContentItems = async ({
   sourceAbsolutePath = '',
   referenceImages = [],
   referenceVideos = [],
-  referenceAudios = []
+  referenceAudios = [],
+  maxReferenceVideoDurationSeconds = env.SEED_DANCE_REFERENCE_VIDEO_MAX_DURATION_SECONDS
 }) => {
   const content = [
     {
@@ -362,21 +469,27 @@ const buildSeedDanceContentItems = async ({
   ).slice(0, REFERENCE_IMAGE_LIMIT);
   const normalizedReferenceVideos = dedupeReferenceEntries(
     [
-      ...(isWebUrl(sourcePublicUrl)
-        ? [
-            {
-              url: String(sourcePublicUrl || '').trim(),
-              absolutePath: String(sourceAbsolutePath || '').trim(),
-              role: 'reference_video'
-            }
-          ]
-        : []),
+      ...[
+        normalizeReferenceEntry(
+          {
+            url: String(sourcePublicUrl || '').trim(),
+            absolutePath: String(sourceAbsolutePath || '').trim(),
+            role: 'reference_video'
+          },
+          'reference_video'
+        )
+      ].filter(Boolean),
       ...referenceVideos.map((entry) => normalizeReferenceEntry(entry, 'reference_video')).filter(Boolean)
     ]
   );
   const normalizedReferenceAudios = dedupeReferenceEntries(
     referenceAudios.map((entry) => normalizeReferenceEntry(entry, 'reference_audio')).filter(Boolean)
   );
+  const referenceVideoMaxDurationSeconds =
+    Number.isFinite(Number(maxReferenceVideoDurationSeconds)) && Number(maxReferenceVideoDurationSeconds) > 0
+      ? Number(maxReferenceVideoDurationSeconds)
+      : Number(env.SEED_DANCE_REFERENCE_VIDEO_MAX_DURATION_SECONDS);
+  let acceptedReferenceVideoDurationSeconds = 0;
 
   for (const referenceImage of normalizedReferenceImages) {
     const resolvedUrl = await resolveReferenceEntryUrl(referenceImage, 'image');
@@ -395,7 +508,10 @@ const buildSeedDanceContentItems = async ({
   }
 
   for (const referenceVideo of normalizedReferenceVideos) {
-    const referenceVideoIssues = await getReferenceVideoEntryIssues(referenceVideo);
+    const {
+      durationSeconds: referenceVideoDurationSeconds,
+      issues: referenceVideoIssues
+    } = await getReferenceVideoEntryMetadata(referenceVideo);
 
     if (referenceVideoIssues.length) {
       logger.warn('Skipping Seedance reference video because it does not satisfy provider minimum requirements.', {
@@ -410,9 +526,38 @@ const buildSeedDanceContentItems = async ({
       continue;
     }
 
-    const resolvedUrl = String(referenceVideo.url || '').trim();
+    if (
+      Number.isFinite(Number(referenceVideoDurationSeconds)) &&
+      Number(referenceVideoDurationSeconds) > 0 &&
+      acceptedReferenceVideoDurationSeconds + Number(referenceVideoDurationSeconds) > referenceVideoMaxDurationSeconds
+    ) {
+      logger.warn('Skipping Seedance reference video because total reference video duration would exceed provider limit.', {
+        url: String(referenceVideo.url || '').trim(),
+        relativePath: String(referenceVideo.relativePath || '').trim(),
+        absolutePath: String(referenceVideo.absolutePath || '').trim(),
+        currentTotalDurationSeconds: Number(acceptedReferenceVideoDurationSeconds.toFixed(3)),
+        skippedDurationSeconds: Number(referenceVideoDurationSeconds.toFixed(3)),
+        maxTotalDurationSeconds: referenceVideoMaxDurationSeconds
+      });
+      continue;
+    }
+
+    const resolvedUrl = await resolveReferenceEntryUrl(referenceVideo, 'video');
 
     if (!isWebUrl(resolvedUrl)) {
+      continue;
+    }
+
+    const shouldCheckReferenceVideoReachability =
+      Boolean(String(env.PUBLIC_ASSET_BASE_URL || '').trim()) &&
+      resolvedUrl.startsWith(String(env.PUBLIC_ASSET_BASE_URL).replace(/\/+$/u, ''));
+
+    if (shouldCheckReferenceVideoReachability && !(await isReferenceVideoUrlReachable(resolvedUrl))) {
+      logger.warn('Skipping Seedance reference video because the public asset URL is unavailable or returned a non-success status.', {
+        url: resolvedUrl,
+        relativePath: String(referenceVideo.relativePath || '').trim(),
+        absolutePath: String(referenceVideo.absolutePath || '').trim()
+      });
       continue;
     }
 
@@ -423,6 +568,10 @@ const buildSeedDanceContentItems = async ({
       },
       role: referenceVideo.role || 'reference_video'
     });
+
+    if (Number.isFinite(Number(referenceVideoDurationSeconds)) && Number(referenceVideoDurationSeconds) > 0) {
+      acceptedReferenceVideoDurationSeconds += Number(referenceVideoDurationSeconds);
+    }
   }
 
   for (const referenceAudio of normalizedReferenceAudios) {
@@ -468,7 +617,8 @@ const buildSeedDanceRequestBody = async ({
       sourceAbsolutePath,
       referenceImages,
       referenceVideos,
-      referenceAudios
+      referenceAudios,
+      maxReferenceVideoDurationSeconds: env.SEED_DANCE_REFERENCE_VIDEO_MAX_DURATION_SECONDS
     }),
     ratio,
     duration: providerDuration,
@@ -478,24 +628,42 @@ const buildSeedDanceRequestBody = async ({
   };
 };
 
+const isExternalTimeoutError = (error) => {
+  const message = String(error?.message ?? '').trim();
+  return /aborted due to timeout|timeout/iu.test(message);
+};
+
 const fetchSeedDanceJson = async (url, init = {}) => {
-  const response = await fetch(url, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${env.SEED_DANCE_API_KEY}`,
-      ...(init.headers ?? {})
-    },
-    signal: AbortSignal.timeout(env.EXTERNAL_REQUEST_TIMEOUT)
-  });
+  try {
+    const { response, responseText } = await requestExternalJson(url, {
+      method: init.method ?? 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${env.SEED_DANCE_API_KEY}`,
+        ...(init.headers ?? {})
+      },
+      body: init.body,
+      timeoutMs: init.timeoutMs ?? env.EXTERNAL_REQUEST_TIMEOUT
+    });
 
-  const responseText = await response.text();
+    if (!response.ok) {
+      throw new Error(`Seed Dance request failed with status ${response.status}: ${responseText.slice(0, 240)}`);
+    }
 
-  if (!response.ok) {
-    throw new Error(`Seed Dance request failed with status ${response.status}: ${responseText.slice(0, 240)}`);
+    return responseText ? JSON.parse(responseText) : {};
+  } catch (error) {
+    if (isExternalTimeoutError(error)) {
+      logger.warn('Seedance request timed out before the provider returned a response.', {
+        url,
+        method: init.method ?? 'GET',
+        timeoutMs: init.timeoutMs ?? env.EXTERNAL_REQUEST_TIMEOUT,
+        requestMeta: init.requestMeta ?? {}
+      });
+      throw new Error('Seed Dance 创建任务超时，通常是参考素材较多或网络较慢，请稍后重试。');
+    }
+
+    throw error;
   }
-
-  return responseText ? JSON.parse(responseText) : {};
 };
 
 const unwrapSeedDancePayload = (payload) => {
@@ -624,15 +792,14 @@ const downloadRemoteVideoToUploads = async (remoteUrl, basename) => {
   const absolutePath = resolveUploadPath(relativePath);
   await ensureParentDirectory(absolutePath);
 
-  const response = await fetch(resolvedUrl, {
-    signal: AbortSignal.timeout(env.EXTERNAL_REQUEST_TIMEOUT)
+  const { response, fileBuffer } = await downloadExternalBinary(resolvedUrl, {
+    timeoutMs: env.SEED_DANCE_DOWNLOAD_TIMEOUT_MS
   });
 
   if (!response.ok) {
     throw new Error(`下载 Seed Dance 生成结果失败，状态码 ${response.status}。`);
   }
 
-  const fileBuffer = Buffer.from(await response.arrayBuffer());
   await writeFile(absolutePath, fileBuffer);
 
   return {
@@ -681,23 +848,44 @@ const createRemoteGenerationTask = async ({
   referenceImages = [],
   referenceVideos = [],
   referenceAudios = [],
+  generateAudio = env.SEED_DANCE_GENERATE_AUDIO,
   ratio,
   duration
 }) => {
+  const requestBody = await buildSeedDanceRequestBody({
+    prompt,
+    sourcePublicUrl,
+    sourceAbsolutePath,
+    referenceImages,
+    referenceVideos,
+    referenceAudios,
+    generateAudio,
+    ratio,
+    duration
+  });
+  const requestText = JSON.stringify(requestBody);
+
   return fetchSeedDanceJson(resolveSeedDanceCreateEndpoint(), {
     method: 'POST',
-    body: JSON.stringify(
-      await buildSeedDanceRequestBody({
-        prompt,
-        sourcePublicUrl,
-        sourceAbsolutePath,
-        referenceImages,
-        referenceVideos,
-        referenceAudios,
-        ratio,
-        duration
-      })
-    )
+    body: requestText,
+    timeoutMs: env.SEED_DANCE_CREATE_TIMEOUT_MS,
+    requestMeta: {
+      promptLength: String(prompt ?? '').length,
+      contentCount: Array.isArray(requestBody.content) ? requestBody.content.length : 0,
+      imageCount: Array.isArray(requestBody.content)
+        ? requestBody.content.filter((item) => item.type === 'image_url').length
+        : 0,
+      videoCount: Array.isArray(requestBody.content)
+        ? requestBody.content.filter((item) => item.type === 'video_url').length
+        : 0,
+      audioCount: Array.isArray(requestBody.content)
+        ? requestBody.content.filter((item) => item.type === 'audio_url').length
+        : 0,
+      bodyLength: requestText.length,
+      ratio: requestBody.ratio,
+      duration: requestBody.duration,
+      generateAudio: requestBody.generate_audio
+    }
   });
 };
 
@@ -731,6 +919,7 @@ const createRemoteGenerationTaskWithImageFallback = async ({
   referenceImages = [],
   referenceVideos = [],
   referenceAudios = [],
+  generateAudio = env.SEED_DANCE_GENERATE_AUDIO,
   ratio,
   duration
 }) => {
@@ -769,6 +958,7 @@ const createRemoteGenerationTaskWithImageFallback = async ({
         referenceImages: attempt.referenceImages,
         referenceVideos,
         referenceAudios,
+        generateAudio,
         ratio,
         duration
       });
@@ -912,14 +1102,16 @@ const generateSegment = async ({
   referenceImages = [],
   referenceVideos = [],
   referenceAudios = [],
+  generateAudio = env.SEED_DANCE_GENERATE_AUDIO,
   ratio,
   duration,
   onProgress
 }) => {
-  const extension = path.extname(sourceAbsolutePath) || '.mp4';
-  const allowMockFallback = shouldAllowSeedDanceMockFallback();
-  const requestedDuration = normalizeRequestedSeedDanceDuration(duration);
+  const requestedDuration = assertSeedDanceRequestedDurationSupported(duration, '当前片段');
   const providerDuration = resolveSeedDanceProviderDuration(duration);
+  const providerSafePrompt = buildProviderSafeSeedDancePrompt(prompt);
+  const promptSafetyFallbackReason =
+    providerSafePrompt !== String(prompt ?? '') ? 'seedance_provider_safe_prompt_rewrite' : '';
 
   if (canUseRemoteSeedDance) {
     try {
@@ -927,12 +1119,13 @@ const generateSegment = async ({
         createResult,
         fallbackReason: imageFallbackReason
       } = await createRemoteGenerationTaskWithImageFallback({
-        prompt,
+        prompt: providerSafePrompt,
         sourcePublicUrl,
         sourceAbsolutePath,
         referenceImages,
         referenceVideos,
         referenceAudios,
+        generateAudio,
         ratio,
         duration: providerDuration
       });
@@ -969,6 +1162,7 @@ const generateSegment = async ({
         ...finalizedResult,
         fallbackReason: [
           !isWebUrl(sourcePublicUrl) ? 'seedance_skipped_non_public_reference_video' : '',
+          promptSafetyFallbackReason,
           imageFallbackReason
         ]
           .filter(Boolean)
@@ -976,29 +1170,15 @@ const generateSegment = async ({
         providerError: ''
       };
     } catch (error) {
-      if (shouldUseStrictRemoteSeedDance() || !allowMockFallback) {
-        throw error;
-      }
-
-      logger.warn('Remote Seed Dance generation failed, using local mock generation instead.', {
+      logger.warn('Remote Seed Dance generation failed; no local mock fallback will be used.', {
         message: error.message
       });
+      throw error;
     }
-  } else if (!allowMockFallback) {
-    assertSeedDanceReady();
   }
 
-  const relativePath = createOutputRelativePath('outputs', basename, extension);
-  await duplicateToUploadPath(sourceAbsolutePath, relativePath);
-
-  return {
-    filePath: relativePath,
-    fileUrl: toPublicUploadUrl(relativePath),
-    engine: 'mock-copy',
-    isMock: true,
-    fallbackReason: canUseRemoteSeedDance ? 'remote_generation_failed' : 'missing_remote_config',
-    providerError: canUseRemoteSeedDance ? 'Seed Dance 远端生成失败，已使用本地 mock 回退。' : getSeedDanceProviderStatus().reason
-  };
+  assertSeedDanceReady();
+  throw new Error('Seedance 未创建真实远端任务，已禁止使用原视频或本地复制结果充数。');
 };
 
 export {

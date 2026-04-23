@@ -158,10 +158,13 @@ const uploadVideo = async (file, options = {}) => {
   return response.data;
 };
 
-const analyzeVideo = async (videoId) => {
+const analyzeVideo = async (videoId, analysisOptions = {}) => {
   const response = await api.post(
     '/analysis/analyze',
-    { video_id: videoId },
+    {
+      video_id: videoId,
+      analysis_options: analysisOptions
+    },
     {
       timeout: Math.max(API_TIMEOUT, ANALYSIS_TIMEOUT)
     }

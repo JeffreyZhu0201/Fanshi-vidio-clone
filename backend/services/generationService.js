@@ -45,6 +45,23 @@ const serializeGenerationTask = (task) => ({
   updated_at: task.updatedAt
 });
 
+const isTaskMarkedMock = (task) => {
+  const taskMeta = task?.meta ?? {};
+  const engine = String(taskMeta.engine ?? '').trim().toLowerCase();
+  const fallbackReason = String(taskMeta.fallbackReason ?? '').trim().toLowerCase();
+
+  return (
+    Boolean(taskMeta.isMock) ||
+    engine.includes('mock') ||
+    fallbackReason.includes('remote_generation_failed') ||
+    fallbackReason.includes('missing_remote_config')
+  );
+};
+
+const isUsableCompletedGenerationTask = (task) => {
+  return Boolean(task?.status === TASK_STATUS.completed && task?.resultUrl && !isTaskMarkedMock(task));
+};
+
 const broadcastGenerationTaskUpdate = (task) => {
   broadcastRealtimeEvent('generation:progress', serializeGenerationTask(task));
 };
@@ -767,16 +784,34 @@ const doesSegmentTaskMatchGenerationRequest = ({ task, prompt, ratio }) => {
 
 const buildSeedDanceReconstructionPrompt = ({
   prompt = '',
+  plot = '',
+  segmentPrompt = '',
+  shotPrompt = '',
   characterNames = [],
   sceneNames = [],
+  speech = null,
   isShot = false
 }) => {
   const normalizedCharacterNames = dedupeNameList(characterNames, normalizeCharacterIdentity);
   const normalizedSceneNames = dedupeNameList(sceneNames, normalizeSceneIdentity);
   const basePrompt = String(prompt ?? '').trim();
+  const hasDialogue = Boolean(speech?.hasDialogue);
+  const speechTranscript = String(speech?.transcript ?? '').trim();
+  const speechStyle = String(speech?.speechStyle ?? '').trim();
+  const speechSubtitleLines = Array.isArray(speech?.subtitleLines) ? speech.subtitleLines : [];
+  const speechTimingSummary = speechSubtitleLines.length
+    ? speechSubtitleLines
+        .map((line) => {
+          return `${Number(line.startTime ?? 0).toFixed(2)}-${Number(line.endTime ?? 0).toFixed(2)}秒：${String(line.text ?? '').trim()}`;
+        })
+        .join(' | ')
+    : '';
 
   return [
-    basePrompt,
+    plot ? `整片剧情目标：${plot}` : '',
+    segmentPrompt ? `大片段最终提示词：${segmentPrompt}` : '',
+    isShot && shotPrompt ? `小镜头最终提示词：${shotPrompt}` : '',
+    basePrompt ? `资源展开后的生成真值：${basePrompt}` : '',
     isShot ? '严格还原原片当前小镜头，不要把多个镜头语义混成一个新镜头。' : '严格延续原片当前片段的剧情、镜头语言和表演逻辑。',
     isShot
       ? '第一张参考图是该小镜头的典型帧，必须优先用它锁定构图、景别、机位朝向、人物站位、前后景关系、视线方向和动作瞬间。'
@@ -789,6 +824,12 @@ const buildSeedDanceReconstructionPrompt = ({
       : '如果提供了场景参考图，必须优先用它们锁定空间结构、布景、材质、布光和色彩。',
     '保持原片相同或最接近的景别、拍摄高度、视角方向、人物左右位置、前中后景层次、遮挡关系、进出画路径、视线方向、镜头运动和动作节奏。',
     '不要新增原片没有的角色、场景切换、道具焦点、情节动作或夸张镜头运动。',
+    isShot && hasDialogue ? '当前镜头必须有人物说话和明显口型同步，并且生成对应音频。' : '',
+    isShot && hasDialogue && speechTranscript ? `对白文本真值：${speechTranscript}` : '',
+    isShot && hasDialogue && speechTimingSummary ? `字幕节奏参考：${speechTimingSummary}` : '',
+    isShot && hasDialogue && speechStyle ? `说话方式：${speechStyle}` : '',
+    isShot && hasDialogue ? '对白和字幕只用于口型、表演、语速、停顿和生成音频，不要把任何字幕文字直接显示到画面里。' : '',
+    isShot && !hasDialogue ? '当前镜头不要对白、不要唱词、不要明显说话嘴部动作，只生成纯视频画面。' : '',
     '画面里不要任何字幕、台词字卡、贴纸文案、Logo、水印、角标、UI 浮层或其它可见文字。'
   ]
     .filter(Boolean)
@@ -851,6 +892,7 @@ const processGenerationTask = async (taskId) => {
           engine: result.engine || '',
           isMock: Boolean(result.isMock),
           remoteTaskId: result.remoteTaskId || remoteTaskId,
+          remoteUrl: result.remoteUrl || '',
           remoteStatus: 'succeeded',
           remoteStatusLabel: '远端已完成',
           remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
@@ -899,6 +941,8 @@ const processGenerationTask = async (taskId) => {
     const optimizedPrompt = expandPromptMentions(task.prompt, characters, overallAnalysis?.backgrounds ?? []);
     const seedDancePrompt = buildSeedDanceReconstructionPrompt({
       prompt: optimizedPrompt,
+      plot: overallAnalysis?.plot ?? '',
+      segmentPrompt: task.prompt,
       characterNames: [...getPromptMentionNames(task.prompt), ...getSegmentCharacterNames(task.segment)],
       sceneNames: [
         ...getPromptSceneNames(task.prompt),
@@ -969,6 +1013,7 @@ const processGenerationTask = async (taskId) => {
         engine: result.engine || '',
         isMock: Boolean(result.isMock),
         remoteTaskId: result.remoteTaskId || '',
+        remoteUrl: result.remoteUrl || '',
         remoteStatus: 'succeeded',
         remoteStatusLabel: '远端已完成',
         remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
@@ -1015,7 +1060,7 @@ const startGeneration = async ({ segmentId, prompt, ratio }) => {
     order: [['createdAt', 'DESC']]
   });
   const latestAttemptTask = latestTasks[0] ?? null;
-  const latestCompletedTask = latestTasks.find((task) => task.status === TASK_STATUS.completed) ?? null;
+  const latestCompletedTask = latestTasks.find((task) => isUsableCompletedGenerationTask(task)) ?? null;
 
   if (
     latestAttemptTask &&
@@ -1035,7 +1080,7 @@ const startGeneration = async ({ segmentId, prompt, ratio }) => {
   }
 
   if (
-    latestCompletedTask?.resultUrl &&
+    isUsableCompletedGenerationTask(latestCompletedTask) &&
     doesSegmentTaskMatchGenerationRequest({
       task: latestCompletedTask,
       prompt,

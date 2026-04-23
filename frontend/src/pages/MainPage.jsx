@@ -2,11 +2,24 @@ import { useState } from 'react';
 
 import AnalysisDisplay from '../components/AnalysisDisplay.jsx';
 import ModalSheet from '../components/ModalSheet.jsx';
+import ProgressBar from '../components/ProgressBar.jsx';
 import SegmentCard from '../components/SegmentCard.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import UploadArea from '../components/UploadArea.jsx';
 import VideoMerge from '../components/VideoMerge.jsx';
 import { useAnalysis, useAppHealth, useGeneration, useSegments, useVideoUpload } from '../hooks/index.js';
+import {
+  generateResourceImages as generateResourceImagesRequest,
+  optimizePrompt as optimizePromptRequest
+} from '../services/api.js';
+import { useGenerationStore } from '../store/generationStore.js';
+import { sleep } from '../utils/sleep.js';
+import {
+  buildAutoCharacterResources,
+  buildAutoSceneResources,
+  buildCharacterViewPrompts,
+  buildSceneAnglePrompts
+} from '../utils/autoProduction.js';
 import { formatDateTime } from '../utils/formatDateTime.js';
 
 const resolveStepCardClassName = (status) => {
@@ -44,10 +57,22 @@ const CompactStat = ({ label, value, note }) => {
 };
 
 const VIDEO_RATIO_OPTIONS = ['16:9', '9:16', '1:1', '4:3', '3:4'];
+const AUTO_PRODUCE_STEP_TIMEOUT_MS = 25 * 60 * 1000;
+const AUTO_PRODUCE_POLL_INTERVAL_MS = 3000;
+const createInitialAutoProduceState = () => ({
+  status: 'idle',
+  progress: 0,
+  message: '上传完成后，可一键自动执行整片理解、资源出图、镜头生成和成片拼接。',
+  error: '',
+  startedAt: '',
+  completedAt: ''
+});
 
 const MainPage = () => {
   const [systemModalOpen, setSystemModalOpen] = useState(false);
   const [exportDockOpen, setExportDockOpen] = useState(false);
+  const [resourceRefreshKey, setResourceRefreshKey] = useState(0);
+  const [autoProduceState, setAutoProduceState] = useState(createInitialAutoProduceState);
   const { backendStatus, errorMessage, lastCheckedAt, realtimeStatus, providerStatuses } = useAppHealth();
   const {
     currentVideo,
@@ -60,8 +85,8 @@ const MainPage = () => {
     uploadLimit,
     uploadSelectedFile
   } = useVideoUpload();
-  const { analysis, loading, error, progress, status, statusMessage, runAnalysis } = useAnalysis();
-  const { segments, splitProgress, segmentsLoading, segmentsError, splitFromAnalysis } = useSegments();
+  const { analysis, analysisOptions, loading, error, progress, status, statusMessage, runAnalysis, setAnalysisOptions } = useAnalysis();
+  const { segments, splitProgress, segmentsLoading, segmentsError, splitFromAnalysis, refreshSegments } = useSegments();
   const {
     backgroundAssets,
     backgroundAssetsLoading,
@@ -212,7 +237,7 @@ const MainPage = () => {
     {
       id: 'merge',
       label: '导出成片',
-      description: '优先使用已生成片段，缺失部分自动回退原片。',
+      description: '只使用真实生成片段，缺失部分直接提示。',
       status: mergeStageStatus,
       meta:
         mergeProgress.status === 'completed'
@@ -243,6 +268,341 @@ const MainPage = () => {
       : `Gemini 生图未就绪：${providerStatuses.geminiImage.reason || '缺少必要配置。'}`,
     analysis?.is_mock ? '当前整片分析回退到了 mock 结果，请关注系统状态中的调用说明。' : ''
   ].filter(Boolean);
+  const isAutoProducing = autoProduceState.status === 'processing';
+  const autoProduceBlockedReason = !currentVideo?.id
+    ? '请先上传视频。'
+    : uploadStatus === 'uploading'
+      ? '视频上传中，请等待上传完成。'
+      : backendStatus === 'offline'
+        ? '后端当前离线，无法开始一键出片。'
+        : !providerStatuses.geminiImage.ready
+          ? `Gemini 生图未就绪：${providerStatuses.geminiImage.reason || '缺少必要配置。'}`
+          : !providerStatuses.seedance.ready
+            ? `Seedance 未就绪：${providerStatuses.seedance.reason || '缺少必要配置。'}`
+            : '';
+  const canStartAutoProduce = !isAutoProducing && !autoProduceBlockedReason;
+
+  const updateAutoProduceState = (partialState) => {
+    setAutoProduceState((currentState) => ({
+      ...currentState,
+      ...partialState
+    }));
+  };
+
+  const buildShotSavePayload = (shot, promptOverride = '') => ({
+    id: shot.id,
+    startTime: shot.startTime,
+    endTime: shot.endTime,
+    summary: shot.summary ?? '',
+    prompt: String(promptOverride ?? '').trim() || String(shot.prompt ?? shot.summary ?? '').trim(),
+    sceneNames: Array.isArray(shot.sceneNames) ? shot.sceneNames : [],
+    characterNames: Array.isArray(shot.characterNames) ? shot.characterNames : [],
+    representativeFrameTime: shot.representativeFrameTime ?? null,
+    representativeFrameNote: shot.representativeFrameNote ?? ''
+  });
+
+  const waitForSegmentAssembly = async (segmentId) => {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < AUTO_PRODUCE_STEP_TIMEOUT_MS) {
+      await refreshSegments();
+      const latestSegment = useGenerationStore.getState().segments.find((segment) => segment.id === segmentId) ?? null;
+      const assemblySummary = latestSegment?.latestShotAssemblyTask ?? latestSegment?.shotGenerationSummary ?? null;
+
+      if (assemblySummary?.status === 'completed' && (assemblySummary.result_url || latestSegment?.generatedUrl)) {
+        return latestSegment;
+      }
+
+      if (assemblySummary?.status === 'failed') {
+        throw new Error(assemblySummary.error_message || `片段 ${segmentId} 的小镜头批量生成失败。`);
+      }
+
+      await sleep(AUTO_PRODUCE_POLL_INTERVAL_MS);
+    }
+
+    throw new Error(`片段 ${segmentId} 的镜头拼回超时，请稍后查看当前片段状态。`);
+  };
+
+  const optimizeAndGenerateResources = async (analysisPayload) => {
+    const characterResources = buildAutoCharacterResources(analysisPayload);
+    const sceneResources = buildAutoSceneResources(analysisPayload);
+    const allResources = [...characterResources, ...sceneResources];
+
+    if (!allResources.length) {
+      return;
+    }
+
+    for (let resourceIndex = 0; resourceIndex < allResources.length; resourceIndex += 1) {
+      const resource = allResources[resourceIndex];
+      const phaseProgress = 20 + Math.round(((resourceIndex + 1) / allResources.length) * 18);
+
+      updateAutoProduceState({
+        progress: phaseProgress,
+        message: `正在优化并生成${resource.resourceType === 'character' ? '角色' : '场景'}资源：${resource.resourceName}`
+      });
+
+      const optimizeMode = resource.resourceType === 'character' ? 'character_resource' : 'scene_resource';
+      const optimizedPayload = await optimizePromptRequest(
+        resource.sourcePrompt,
+        resource.resourceType === 'character'
+          ? [
+              {
+                id: resource.resourceId,
+                name: resource.resourceName,
+                appearancePrompt: resource.appearancePrompt || '',
+                personalityPrompt: resource.personalityPrompt || ''
+              }
+            ]
+          : [],
+        resource.resourceType === 'scene'
+          ? [
+              {
+                id: resource.resourceId,
+                name: resource.resourceName,
+                description: resource.description || '',
+                scenePrompt: resource.sourcePrompt
+              }
+            ]
+          : [],
+        {
+          mode: optimizeMode
+        }
+      );
+
+      const optimizedPrompt = String(optimizedPayload?.optimized_prompt ?? '').trim() || resource.sourcePrompt;
+      const variantPrompts =
+        resource.resourceType === 'character'
+          ? buildCharacterViewPrompts({
+              resourceName: resource.resourceName,
+              prompt: optimizedPrompt,
+              appearancePrompt: resource.appearancePrompt || '',
+              personalityPrompt: resource.personalityPrompt || ''
+            })
+          : buildSceneAnglePrompts({
+              resourceName: resource.resourceName,
+              prompt: optimizedPrompt
+            });
+
+      const generationPayload = await generateResourceImagesRequest({
+        video_id: Number(currentVideo.id),
+        resource_type: resource.resourceType,
+        resource_id: resource.resourceId,
+        resource_name: resource.resourceName,
+        source_prompt: optimizedPrompt,
+        representative_frame_time: resource.frameTime ?? null,
+        variants: variantPrompts.map((variant, index) => ({
+          id: variant.id,
+          label: variant.label,
+          prompt: variant.prompt,
+          sortOrder: index
+        }))
+      });
+
+      if (generationPayload?.error_summary) {
+        throw new Error(generationPayload.error_summary);
+      }
+    }
+
+    setResourceRefreshKey((currentValue) => currentValue + 1);
+  };
+
+  const optimizeAndGenerateSegments = async () => {
+    let latestSegments = useGenerationStore.getState().segments ?? [];
+
+    if (!latestSegments.length) {
+      await refreshSegments();
+      latestSegments = useGenerationStore.getState().segments ?? [];
+    }
+
+    if (!latestSegments.length) {
+      throw new Error('切分完成后没有拿到任何片段，无法继续一键出片。');
+    }
+
+    for (let segmentIndex = 0; segmentIndex < latestSegments.length; segmentIndex += 1) {
+      const currentSegment =
+        useGenerationStore.getState().segments.find((segment) => segment.id === latestSegments[segmentIndex].id) ??
+        latestSegments[segmentIndex];
+      const segmentLabel = `片段 ${String((currentSegment.segmentIndex ?? segmentIndex) + 1).padStart(2, '0')}`;
+
+      updateAutoProduceState({
+        progress: 42 + Math.round(((segmentIndex + 1) / latestSegments.length) * 40),
+        message: `正在优化并生成 ${segmentLabel}`
+      });
+
+      const optimizedSegmentPayload = await optimizeSegmentPrompt(
+        currentSegment.id,
+        currentSegment.prompt || currentSegment.scenePrompt || currentSegment.sceneSummary || ''
+      );
+      const optimizedSegmentPrompt =
+        String(optimizedSegmentPayload?.optimized_prompt ?? '').trim() ||
+        currentSegment.prompt ||
+        currentSegment.scenePrompt ||
+        currentSegment.sceneSummary ||
+        '';
+
+      if (optimizedSegmentPrompt) {
+        setSegmentPrompt(currentSegment.id, optimizedSegmentPrompt);
+      }
+
+      const latestSegment =
+        useGenerationStore.getState().segments.find((segment) => segment.id === currentSegment.id) ?? currentSegment;
+      const optimizedShotPayloads = [];
+
+      for (const shot of latestSegment.shots ?? []) {
+        const optimizedShotPayload = await optimizeShotPrompt({
+          segmentId: latestSegment.id,
+          shotId: shot.id,
+          promptOverride: shot.prompt || shot.summary || '',
+          segmentPromptOverride: optimizedSegmentPrompt,
+          sceneNames: shot.sceneNames ?? [],
+          characterNames: shot.characterNames ?? []
+        });
+        const optimizedShotPrompt =
+          String(optimizedShotPayload?.optimized_prompt ?? '').trim() || shot.prompt || shot.summary || '';
+
+        setShotPrompt(latestSegment.id, shot.id, optimizedShotPrompt);
+        optimizedShotPayloads.push(buildShotSavePayload(shot, optimizedShotPrompt));
+      }
+
+      if (!optimizedShotPayloads.length) {
+        throw new Error(`${segmentLabel} 还没有可生成的小镜头。`);
+      }
+
+      const savedSegmentPayload = await saveSegmentShotDefinitions(latestSegment.id, optimizedShotPayloads);
+
+      if (!savedSegmentPayload) {
+        throw new Error(`${segmentLabel} 的镜头提示词保存失败。`);
+      }
+
+      const persistedSegment =
+        useGenerationStore.getState().segments.find((segment) => segment.id === latestSegment.id) ?? latestSegment;
+      const batchPayload = await generateAllShotsForSegment(latestSegment.id, persistedSegment.shots ?? []);
+
+      if (!batchPayload) {
+        throw new Error(`${segmentLabel} 的小镜头批量生成启动失败。`);
+      }
+
+      await waitForSegmentAssembly(latestSegment.id);
+    }
+  };
+
+  const runAutoProduce = async () => {
+    if (autoProduceBlockedReason) {
+      updateAutoProduceState({
+        status: 'failed',
+        progress: 0,
+        message: '一键出片未启动',
+        error: autoProduceBlockedReason,
+        startedAt: '',
+        completedAt: ''
+      });
+      return null;
+    }
+
+    updateAutoProduceState({
+      status: 'processing',
+      progress: 4,
+      message: '正在启动一键出片流程',
+      error: '',
+      startedAt: new Date().toISOString(),
+      completedAt: ''
+    });
+
+    try {
+      updateAutoProduceState({
+        progress: 8,
+        message: '步骤 1/5：整片理解中'
+      });
+      const analysisPayload = await runAnalysis();
+
+      if (!analysisPayload) {
+        throw new Error('整片分析没有返回结果，请稍后重试。');
+      }
+
+      updateAutoProduceState({
+        progress: 18,
+        message: '步骤 2/5：优化角色/场景提示词并生成资源图'
+      });
+      await optimizeAndGenerateResources(analysisPayload);
+
+      updateAutoProduceState({
+        progress: 38,
+        message: '步骤 3/5：根据整片理解自动切分大片段与小镜头'
+      });
+      const splitPayload = await splitFromAnalysis();
+
+      if (!splitPayload || splitPayload.status === 'failed') {
+        throw new Error(splitPayload?.error_message || '视频切分失败，请检查整片分析结果。');
+      }
+
+      updateAutoProduceState({
+        progress: 44,
+        message: '步骤 4/5：优化片段提示词并批量生成新镜头'
+      });
+      await optimizeAndGenerateSegments();
+
+      updateAutoProduceState({
+        progress: 92,
+        message: '步骤 5/5：自动拼接成片'
+      });
+      const mergePayload = await startMerge();
+
+      if (!mergePayload || mergePayload.status === 'failed') {
+        throw new Error(mergePayload?.error_message || mergePayload?.message || '成片拼接失败。');
+      }
+
+      setExportDockOpen(true);
+      updateAutoProduceState({
+        status: 'completed',
+        progress: 100,
+        message: '一键出片完成，成片已进入导出区。',
+        error: '',
+        completedAt: new Date().toISOString()
+      });
+
+      return mergePayload;
+    } catch (productionError) {
+      updateAutoProduceState({
+        status: 'failed',
+        message: '一键出片失败',
+        error: productionError?.message || '自动流程执行失败，请查看当前步骤状态。',
+        completedAt: new Date().toISOString()
+      });
+      setExportDockOpen(true);
+      return null;
+    }
+  };
+
+  const autoProduceFooterContent =
+    isAutoProducing || autoProduceState.error || autoProduceState.status === 'completed' ? (
+      <div className="rounded-[22px] border border-white/10 bg-black/25 px-4 py-4 text-white">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-[0.24em] text-white/40">Auto Pipeline</p>
+            <h3 className="mt-2 text-sm font-semibold">一键出片进度</h3>
+            <p className="mt-1 text-xs leading-5 text-white/60">
+              {autoProduceState.message}
+            </p>
+          </div>
+          <StatusBadge status={autoProduceState.status} label={autoProduceState.status === 'completed' ? '已完成' : autoProduceState.status === 'failed' ? '失败' : '执行中'} />
+        </div>
+
+        <div className="mt-3">
+          <ProgressBar
+            value={autoProduceState.progress}
+            status={autoProduceState.status === 'failed' ? 'failed' : autoProduceState.status === 'completed' ? 'completed' : 'processing'}
+            label={autoProduceState.message}
+            startedAt={autoProduceState.startedAt}
+          />
+        </div>
+
+        {autoProduceState.error ? (
+          <div className="mt-3 rounded-[18px] border border-accent-500/20 bg-accent-500/10 px-3 py-2 text-xs leading-5 text-rose-200">
+            {autoProduceState.error}
+          </div>
+        ) : null}
+      </div>
+    ) : null;
 
   return (
     <>
@@ -371,11 +731,25 @@ const MainPage = () => {
                 onUpload={uploadSelectedFile}
                 compactMode
                 className="compact-surface"
+                extraActions={
+                  <button
+                    type="button"
+                    className="inline-flex items-center justify-center rounded-full border border-emerald-500/25 bg-emerald-500/12 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-500/40 hover:bg-emerald-500/18 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={() => void runAutoProduce()}
+                    disabled={!canStartAutoProduce}
+                    title={autoProduceBlockedReason || '自动执行整片理解、资源出图、小镜头生成和成片拼接。'}
+                  >
+                    {isAutoProducing ? '一键出片进行中...' : '一键出片'}
+                  </button>
+                }
+                footerContent={autoProduceFooterContent}
               />
 
               <AnalysisDisplay
                 video={currentVideo}
                 analysis={analysis}
+                resourceRefreshKey={resourceRefreshKey}
+                analysisOptions={analysisOptions}
                 backgroundAssets={backgroundAssets}
                 backgroundAssetsLoading={backgroundAssetsLoading}
                 backgroundAssetsError={backgroundAssetsError}
@@ -386,6 +760,7 @@ const MainPage = () => {
                 statusMessage={statusMessage}
                 splitProgress={splitProgress}
                 onAnalyze={runAnalysis}
+                onAnalysisOptionsChange={setAnalysisOptions}
                 onSplit={splitFromAnalysis}
                 compactMode
                 className="compact-surface compact-analysis-panel"

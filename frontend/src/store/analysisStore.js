@@ -2,6 +2,10 @@ import { create } from 'zustand';
 
 const createInitialAnalysisState = () => ({
   analysis: null,
+  analysisOptions: {
+    extractSubtitles: false,
+    parseAudio: false
+  },
   loading: false,
   error: '',
   progress: 0,
@@ -19,6 +23,10 @@ const useAnalysisStore = create((set) => ({
   setAnalysis: (analysis) =>
     set({
       analysis,
+      analysisOptions: {
+        extractSubtitles: Boolean(analysis?.analysis_options?.extractSubtitles ?? analysis?.analysis_options?.extract_subtitles),
+        parseAudio: Boolean(analysis?.analysis_options?.parseAudio ?? analysis?.analysis_options?.parse_audio)
+      },
       loading: false,
       error: '',
       progress: 100,
@@ -30,6 +38,15 @@ const useAnalysisStore = create((set) => ({
     set((state) => ({
       loading,
       status: loading ? 'processing' : state.status
+    })),
+  setAnalysisOptions: (analysisOptions) =>
+    set((state) => ({
+      analysisOptions: {
+        ...state.analysisOptions,
+        extractSubtitles: Boolean(analysisOptions?.extractSubtitles),
+        parseAudio: Boolean(analysisOptions?.parseAudio)
+      },
+      lastUpdatedAt: new Date().toISOString()
     })),
   setError: (error) =>
     set({

@@ -18,6 +18,8 @@ const UploadArea = ({
   uploadLimit,
   className = '',
   compactMode = false,
+  extraActions = null,
+  footerContent = null,
   onUpload
 }) => {
   const inputRef = useRef(null);
@@ -90,13 +92,16 @@ const UploadArea = ({
                     支持 MP4 / MOV / AVI，单文件大小不超过 {formatBytes(uploadLimit)}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-brand-500 to-accent-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:scale-[1.01]"
-                  onClick={() => inputRef.current?.click()}
-                >
-                  选择视频
-                </button>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {extraActions}
+                  <button
+                    type="button"
+                    className="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-brand-500 to-accent-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:scale-[1.01]"
+                    onClick={() => inputRef.current?.click()}
+                  >
+                    选择视频
+                  </button>
+                </div>
               </div>
 
               {(uploadStatus === 'uploading' || uploadStatus === 'completed') && (
@@ -151,6 +156,8 @@ const UploadArea = ({
           </div>
         </div>
 
+        {footerContent ? <div>{footerContent}</div> : null}
+
         {videos.length ? (
           <div className="rounded-[22px] border border-white/10 bg-white/[0.04] px-4 py-3">
             <div className="mb-2 flex items-center justify-between gap-3">
@@ -199,6 +206,8 @@ UploadArea.propTypes = {
   uploadLimit: PropTypes.number.isRequired,
   className: PropTypes.string,
   compactMode: PropTypes.bool,
+  extraActions: PropTypes.node,
+  footerContent: PropTypes.node,
   onUpload: PropTypes.func.isRequired
 };
 

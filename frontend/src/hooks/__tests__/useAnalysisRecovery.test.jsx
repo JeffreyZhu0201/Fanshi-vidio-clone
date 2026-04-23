@@ -90,6 +90,10 @@ const resetStores = () => {
 
   useAnalysisStore.setState({
     analysis: null,
+    analysisOptions: {
+      extractSubtitles: false,
+      parseAudio: false
+    },
     loading: false,
     error: '',
     progress: 0,
@@ -138,7 +142,10 @@ describe('useAnalysis recovery flow', () => {
       await result.current.runAnalysis();
     });
 
-    expect(analyzeVideo).toHaveBeenCalledWith(501);
+    expect(analyzeVideo).toHaveBeenCalledWith(501, {
+      extractSubtitles: false,
+      parseAudio: false
+    });
     expect(getAnalysis).toHaveBeenCalledWith(501);
     expect(sleep).toHaveBeenCalled();
     expect(useAnalysisStore.getState().analysis).toEqual(analysisPayload);

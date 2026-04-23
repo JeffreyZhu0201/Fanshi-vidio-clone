@@ -42,7 +42,9 @@ const useAnalysis = () => {
   const progress = useAnalysisStore((state) => state.progress);
   const status = useAnalysisStore((state) => state.status);
   const statusMessage = useAnalysisStore((state) => state.statusMessage);
+  const analysisOptions = useAnalysisStore((state) => state.analysisOptions);
   const setAnalysis = useAnalysisStore((state) => state.setAnalysis);
+  const setAnalysisOptions = useAnalysisStore((state) => state.setAnalysisOptions);
   const setError = useAnalysisStore((state) => state.setError);
   const setProgressState = useAnalysisStore((state) => state.setProgressState);
   const clearAnalysis = useAnalysisStore((state) => state.clearAnalysis);
@@ -244,7 +246,7 @@ const useAnalysis = () => {
     });
 
     try {
-      const analysisPayload = await analyzeVideo(currentVideo.id);
+      const analysisPayload = await analyzeVideo(currentVideo.id, analysisOptions);
 
       if (isAnalysisRequestCancelled(requestToken, currentVideoId)) {
         return null;
@@ -289,12 +291,14 @@ const useAnalysis = () => {
 
   return {
     analysis,
+    analysisOptions,
     loading,
     error,
     progress,
     status,
     statusMessage,
-    runAnalysis
+    runAnalysis,
+    setAnalysisOptions
   };
 };
 

@@ -402,8 +402,7 @@ const SegmentCard = ({
     segment.backgroundName || timeAnchor?.backgroundName || timeAnchor?.background_name || '未绑定场景';
   const backgroundAction =
     segment.backgroundAction || timeAnchor?.backgroundAction || timeAnchor?.background_action || 'create_new';
-  const assembledSegmentUrl =
-    shotGenerationSummary?.result_url || segment.latestShotAssemblyTask?.result_url || segment.generatedUrl || '';
+  const assembledSegmentUrl = segment.generatedUrl || '';
   const canStartGeneration = Boolean(seedDanceProvider?.ready);
   const seedDanceUnavailableReason = canStartGeneration
     ? ''

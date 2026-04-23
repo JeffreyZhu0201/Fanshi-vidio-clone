@@ -388,6 +388,7 @@ const buildSceneAnglePrompts = ({ resourceName, prompt }) => {
 const AnalysisDisplay = ({
   video = null,
   analysis = null,
+  resourceRefreshKey = 0,
   backgroundAssets = [],
   backgroundAssetsLoading = false,
   backgroundAssetsError = '',
@@ -766,7 +767,7 @@ const AnalysisDisplay = ({
     setResourceImageAssets([]);
     setResourceImageAssetsError('');
     setResourceGeneratingKeys([]);
-  }, [video?.id]);
+  }, [resourceRefreshKey, video?.id]);
 
   useEffect(() => {
     if (!video?.id) {
@@ -1964,6 +1965,7 @@ AnalysisDisplay.propTypes = {
     fallback_reason: PropTypes.string,
     remote_error: PropTypes.string
   }),
+  resourceRefreshKey: PropTypes.number,
   backgroundAssets: PropTypes.arrayOf(PropTypes.object),
   backgroundAssetsLoading: PropTypes.bool,
   backgroundAssetsError: PropTypes.string,

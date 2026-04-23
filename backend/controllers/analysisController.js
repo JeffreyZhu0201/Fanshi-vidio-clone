@@ -5,7 +5,7 @@ import {
 } from '../services/analysisService.js';
 
 const analyzeVideo = async (request, response) => {
-  const analysis = await analyzeVideoById(request.body.video_id);
+  const analysis = await analyzeVideoById(request.body.video_id, request.body.analysis_options);
   response.status(200).json(analysis);
 };
 

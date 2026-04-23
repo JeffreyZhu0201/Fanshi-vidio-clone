@@ -2,12 +2,15 @@ import path from 'node:path';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { jest } from '@jest/globals';
 
+const requestExternalJsonMock = jest.fn();
+
 await jest.unstable_mockModule('../config/env.js', () => ({
   default: Object.freeze({
     GEMINI_API_KEY: 'test-token',
     GEMINI_API_BASE_URL: 'https://yunwu.ai',
     GEMINI_MODEL: 'gemini-2.5-pro',
     GEMINI_SEGMENT_MODEL: 'gemini-2.5-flash',
+    GEMINI_WHOLE_VIDEO_TIMEOUT_MS: 600000,
     GEMINI_API_COMPAT_MODE: 'google',
     GEMINI_STRICT_REMOTE: true,
     EXTERNAL_REQUEST_TIMEOUT: 30000
@@ -23,6 +26,10 @@ await jest.unstable_mockModule('../utils/logger.js', () => ({
   }
 }));
 
+await jest.unstable_mockModule('../services/externalHttpService.js', () => ({
+  requestExternalJson: requestExternalJsonMock
+}));
+
 const { analyzeSegment, analyzeVideo, optimizePrompt } = await import('../services/geminiService.js');
 
 const backendRoot = path.resolve(process.cwd());
@@ -34,61 +41,108 @@ describe('geminiService', () => {
     await mkdir(tempDir, { recursive: true });
     await writeFile(sampleVideoPath, Buffer.from('fake-mp4-binary'));
 
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      text: async () =>
-        JSON.stringify({
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    text: JSON.stringify({
-                      plot: '剧情摘要',
-                      characters: [
-                        {
-                          id: 'character_1',
-                          name: '主角',
-                          appearancePrompt: '角色外观',
-                          personalityPrompt: '冷静克制，观察力强',
-                          representativeFrameTime: 1.2,
-                          representativeFrameNote: '人物正面稳定镜头'
-                        }
-                      ],
-                      backgrounds: [
-                        {
-                          id: 'background_1',
-                          name: '咖啡馆内景',
-                          description: '背景描述',
-                          scenePrompt: '电影感咖啡馆内景提示词',
-                          representativeFrameTime: 2.1
-                        }
-                      ],
-                      timeAnchors: [
-                        {
-                          startTime: 0,
-                          endTime: 3,
-                          sceneSummary: '镜头摘要',
-                          scenePrompt: '镜头场景提示词',
-                          representativeFrameTime: 1.5,
-                          backgroundId: 'background_1',
-                          backgroundAction: 'create_new',
-                          backgroundName: '咖啡馆内景'
-                        }
-                      ]
-                    })
-                  }
-                ]
-              }
+    requestExternalJsonMock.mockReset();
+    requestExternalJsonMock.mockResolvedValue({
+      response: {
+        status: 200
+      },
+      responseText: JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    plot: '剧情摘要',
+                    characters: [
+                      {
+                        id: 'character_1',
+                        name: '主角',
+                        appearancePrompt: '角色外观',
+                        personalityPrompt: '冷静克制，观察力强',
+                        representativeFrameTime: 1.2,
+                        representativeFrameNote: '人物正面稳定镜头'
+                      }
+                    ],
+                    backgrounds: [
+                      {
+                        id: 'background_1',
+                        name: '咖啡馆内景',
+                        description: '背景描述',
+                        scenePrompt: '电影感咖啡馆内景提示词',
+                        representativeFrameTime: 2.1
+                      }
+                    ],
+                    timeAnchors: [
+                      {
+                        startTime: 0,
+                        endTime: 3,
+                        sceneSummary: '镜头摘要',
+                        scenePrompt: '镜头场景提示词',
+                        representativeFrameTime: 1.5,
+                        backgroundId: 'background_1',
+                        backgroundAction: 'create_new',
+                        backgroundName: '咖啡馆内景'
+                      }
+                    ]
+                  })
+                }
+              ]
             }
-          ]
-        })
+          }
+        ]
+      }),
+      responsePayload: {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    plot: '剧情摘要',
+                    characters: [
+                      {
+                        id: 'character_1',
+                        name: '主角',
+                        appearancePrompt: '角色外观',
+                        personalityPrompt: '冷静克制，观察力强',
+                        representativeFrameTime: 1.2,
+                        representativeFrameNote: '人物正面稳定镜头'
+                      }
+                    ],
+                    backgrounds: [
+                      {
+                        id: 'background_1',
+                        name: '咖啡馆内景',
+                        description: '背景描述',
+                        scenePrompt: '电影感咖啡馆内景提示词',
+                        representativeFrameTime: 2.1
+                      }
+                    ],
+                    timeAnchors: [
+                      {
+                        startTime: 0,
+                        endTime: 3,
+                        sceneSummary: '镜头摘要',
+                        scenePrompt: '镜头场景提示词',
+                        representativeFrameTime: 1.5,
+                        backgroundId: 'background_1',
+                        backgroundAction: 'create_new',
+                        backgroundName: '咖啡馆内景'
+                      }
+                    ]
+                  })
+                }
+              ]
+            }
+          }
+        ]
+      }
     });
   });
 
   afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true });
-    delete global.fetch;
   });
 
   test('sends yunwu generateContent payload with inline_data before text prompt', async () => {
@@ -102,16 +156,17 @@ describe('geminiService', () => {
       videoAbsolutePath: sampleVideoPath
     });
 
-    expect(global.fetch).toHaveBeenCalledTimes(1);
-    expect(global.fetch.mock.calls[0][0]).toBe(
+    expect(requestExternalJsonMock).toHaveBeenCalledTimes(1);
+    expect(requestExternalJsonMock.mock.calls[0][0]).toBe(
       'https://yunwu.ai/v1beta/models/gemini-2.5-pro:generateContent?key=test-token'
     );
 
-    const requestOptions = global.fetch.mock.calls[0][1];
+    const requestOptions = requestExternalJsonMock.mock.calls[0][1];
     const requestBody = JSON.parse(requestOptions.body);
     const parts = requestBody.contents[0].parts;
 
     expect(requestOptions.method).toBe('POST');
+    expect(requestOptions.timeoutMs).toBe(600000);
     expect(requestOptions.headers).toMatchObject({
       Authorization: 'Bearer test-token',
       'Content-Type': 'application/json'
@@ -132,253 +187,205 @@ describe('geminiService', () => {
     expect(parts[1].text).toContain('前景/中景/后景');
     expect(parts[1].text).toContain('视线反打');
     expect(parts[1].text).toContain('进出画方式');
+    expect(parts[1].text).toContain('一次性包含整片剧情、角色、场景资源、大片段和每个大片段下的全部小镜头信息');
+    expect(parts[1].text).toContain('观众能明显感知到的真实镜头都拆出来');
+    expect(parts[1].text).toContain('时间请尽量精确到 0.1 秒');
+    expect(parts[1].text).toContain('representativeFrameNote 需要说明这个时间点对应的关键画面');
     expect(requestBody.generationConfig).toMatchObject({
       temperature: 0.2,
       responseMimeType: 'application/json'
     });
   });
 
-  test('falls back to query-key auth when bearer auth gets rejected', async () => {
-    global.fetch = jest
-      .fn()
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        text: async () => JSON.stringify({ error: { message: 'Unauthorized' } })
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        text: async () =>
-          JSON.stringify({
-            candidates: [
-              {
-                content: {
-                  parts: [
-                    {
-                      text: JSON.stringify({
-                        plot: '剧情摘要',
-                        characters: [
-                          {
-                            id: 'character_1',
-                            name: '主角',
-                            appearancePrompt: '角色外观',
-                            personalityPrompt: '冷静克制，观察力强',
-                            representativeFrameTime: 1.2
-                          }
-                        ],
-                        backgrounds: [
-                          {
-                            id: 'background_1',
-                            description: '背景描述',
-                            scenePrompt: '电影感背景提示词'
-                          }
-                        ],
-                        timeAnchors: [
-                          {
-                            startTime: 0,
-                            endTime: 3,
-                            sceneSummary: '镜头摘要',
-                            scenePrompt: '镜头场景提示词',
-                            representativeFrameTime: 1.5,
-                            backgroundId: 'background_1',
-                            backgroundAction: 'create_new',
-                            backgroundName: '咖啡馆内景'
-                          }
-                        ]
-                      })
-                    }
-                  ]
-                }
-              }
-            ]
-          })
+  test('does not fall back to another auth variant during whole-video analysis', async () => {
+    requestExternalJsonMock.mockReset();
+    requestExternalJsonMock.mockResolvedValueOnce({
+      response: {
+        status: 401
+      },
+      responseText: JSON.stringify({ error: { message: 'Unauthorized' } }),
+      responsePayload: {
+        error: {
+          message: 'Unauthorized'
+        }
+      }
       });
 
-    const result = await analyzeVideo({
-      video: {
-        filename: 'sample.mp4'
-      },
-      metadata: {
-        duration: 3
-      },
-      videoAbsolutePath: sampleVideoPath
-    });
+    await expect(
+      analyzeVideo({
+        video: {
+          filename: 'sample.mp4'
+        },
+        metadata: {
+          duration: 3
+        },
+        videoAbsolutePath: sampleVideoPath
+      })
+    ).rejects.toThrow('Gemini-2.5-pro 整片分析失败');
 
-    expect(global.fetch).toHaveBeenCalledTimes(2);
-    expect(global.fetch.mock.calls[0][0]).toBe(
+    expect(requestExternalJsonMock).toHaveBeenCalledTimes(1);
+    expect(requestExternalJsonMock.mock.calls[0][0]).toBe(
       'https://yunwu.ai/v1beta/models/gemini-2.5-pro:generateContent?key=test-token'
     );
-    expect(global.fetch.mock.calls[1][0]).toBe(
-      'https://yunwu.ai/v1beta/models/gemini-2.5-pro:generateContent?key=test-token'
-    );
-    expect(global.fetch.mock.calls[1][1].headers).toEqual({
-      'Content-Type': 'application/json'
-    });
-
-    const geminiMeta = JSON.parse(result.geminiResponse);
-
-    expect(geminiMeta.authVariant).toBe('query-key');
-    expect(geminiMeta.isMock).toBe(false);
   });
 
-  test('falls back to gemini-2.5-flash when primary model is unavailable', async () => {
-    global.fetch = jest
-      .fn()
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 429,
-        text: async () =>
-          JSON.stringify({
-            error: {
-              message: '当前分组上游负载已饱和，请稍后再试',
-              code: 'model_not_found'
-            }
-          })
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 429,
-        text: async () =>
-          JSON.stringify({
-            error: {
-              message: '当前分组上游负载已饱和，请稍后再试',
-              code: 'model_not_found'
-            }
-          })
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 429,
-        text: async () =>
-          JSON.stringify({
-            error: {
-              message: '当前分组上游负载已饱和，请稍后再试',
-              code: 'model_not_found'
-            }
-          })
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        text: async () =>
-          JSON.stringify({
-            candidates: [
-              {
-                content: {
-                  parts: [
-                    {
-                      text: JSON.stringify({
-                        plot: '剧情摘要',
-                        characters: [
-                          {
-                            id: 'character_1',
-                            name: '主角',
-                            appearancePrompt: '角色外观',
-                            personalityPrompt: '冷静克制，观察力强'
-                          }
-                        ],
-                        backgrounds: [
-                          {
-                            id: 'background_1',
-                            name: '咖啡馆内景',
-                            description: '背景描述',
-                            scenePrompt: '电影感背景提示词'
-                          }
-                        ],
-                        timeAnchors: [
-                          {
-                            startTime: 0,
-                            endTime: 3,
-                            sceneSummary: '镜头摘要',
-                            scenePrompt: '镜头场景提示词',
-                            backgroundId: 'background_1',
-                            backgroundAction: 'create_new',
-                            backgroundName: '咖啡馆内景'
-                          }
-                        ]
-                      })
-                    }
-                  ]
-                }
-              }
-            ]
-          })
+  test('does not fall back to another model during whole-video analysis', async () => {
+    requestExternalJsonMock.mockReset();
+    requestExternalJsonMock.mockResolvedValueOnce({
+      response: {
+        status: 429
+      },
+      responseText: JSON.stringify({
+        error: {
+          message: '当前分组上游负载已饱和，请稍后再试',
+          code: 'model_not_found'
+        }
+      }),
+      responsePayload: {
+        error: {
+          message: '当前分组上游负载已饱和，请稍后再试',
+          code: 'model_not_found'
+        }
+      }
       });
 
-    const result = await analyzeVideo({
-      video: {
-        filename: 'sample.mp4'
-      },
-      metadata: {
-        duration: 3
-      },
-      videoAbsolutePath: sampleVideoPath
-    });
+    await expect(
+      analyzeVideo({
+        video: {
+          filename: 'sample.mp4'
+        },
+        metadata: {
+          duration: 3
+        },
+        videoAbsolutePath: sampleVideoPath
+      })
+    ).rejects.toThrow('Gemini-2.5-pro 整片分析失败');
 
-    expect(global.fetch).toHaveBeenCalledTimes(4);
-    expect(global.fetch.mock.calls[0][0]).toBe(
+    expect(requestExternalJsonMock).toHaveBeenCalledTimes(1);
+    expect(requestExternalJsonMock.mock.calls[0][0]).toBe(
       'https://yunwu.ai/v1beta/models/gemini-2.5-pro:generateContent?key=test-token'
     );
-    expect(global.fetch.mock.calls[3][0]).toBe(
-      'https://yunwu.ai/v1beta/models/gemini-2.5-flash:generateContent?key=test-token'
+  });
+
+  test('surfaces a clear timeout error for whole-video analysis', async () => {
+    requestExternalJsonMock.mockReset();
+    requestExternalJsonMock.mockRejectedValueOnce(new Error('The operation was aborted due to timeout'));
+
+    await expect(
+      analyzeVideo({
+        video: {
+          filename: 'sample.mp4'
+        },
+        metadata: {
+          duration: 3
+        },
+        videoAbsolutePath: sampleVideoPath
+      })
+    ).rejects.toThrow(
+      'Gemini-2.5-pro 整片分析超时：整段视频上传与理解超过 600 秒，请稍后重试，或调大后端 GEMINI_WHOLE_VIDEO_TIMEOUT_MS。'
     );
-
-    const geminiMeta = JSON.parse(result.geminiResponse);
-
-    expect(geminiMeta.model).toBe('gemini-2.5-flash');
-    expect(geminiMeta.isMock).toBe(false);
   });
 
   test('backfills background bindings and reuse action when Gemini omits explicit linkage', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      text: async () =>
-        JSON.stringify({
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    text: JSON.stringify({
-                      plot: '剧情摘要',
-                        characters: [
-                          {
-                            id: 'character_1',
-                            name: '主角',
-                            appearancePrompt: '角色外观',
-                            personalityPrompt: '冷静克制，观察力强',
-                            representativeFrameTime: 1.2
-                          }
-                        ],
-                      backgrounds: [
-                        {
-                          id: 'background_cafe',
-                          name: '咖啡馆内景',
-                          description: '暖色灯光的咖啡馆',
-                          scenePrompt: '电影感咖啡馆内景提示词',
-                          representativeFrameTime: 2.1
-                        }
-                      ],
-                      timeAnchors: [
-                        {
-                          startTime: 0,
-                          endTime: 3,
-                          sceneSummary: '第一段咖啡馆动作',
-                          scenePrompt: '咖啡馆靠窗座位，暖色灯光'
-                        },
-                        {
-                          startTime: 3,
-                          endTime: 6,
-                          sceneSummary: '第二段咖啡馆动作',
-                          scenePrompt: '咖啡馆靠窗座位，暖色灯光'
-                        }
-                      ]
-                    })
-                  }
-                ]
-              }
+    requestExternalJsonMock.mockReset();
+    requestExternalJsonMock.mockResolvedValue({
+      response: {
+        status: 200
+      },
+      responseText: JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    plot: '剧情摘要',
+                    characters: [
+                      {
+                        id: 'character_1',
+                        name: '主角',
+                        appearancePrompt: '角色外观',
+                        personalityPrompt: '冷静克制，观察力强',
+                        representativeFrameTime: 1.2
+                      }
+                    ],
+                    backgrounds: [
+                      {
+                        id: 'background_cafe',
+                        name: '咖啡馆内景',
+                        description: '暖色灯光的咖啡馆',
+                        scenePrompt: '电影感咖啡馆内景提示词',
+                        representativeFrameTime: 2.1
+                      }
+                    ],
+                    timeAnchors: [
+                      {
+                        startTime: 0,
+                        endTime: 3,
+                        sceneSummary: '第一段咖啡馆动作',
+                        scenePrompt: '咖啡馆靠窗座位，暖色灯光'
+                      },
+                      {
+                        startTime: 3,
+                        endTime: 6,
+                        sceneSummary: '第二段咖啡馆动作',
+                        scenePrompt: '咖啡馆靠窗座位，暖色灯光'
+                      }
+                    ]
+                  })
+                }
+              ]
             }
-          ]
-        })
+          }
+        ]
+      }),
+      responsePayload: {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    plot: '剧情摘要',
+                    characters: [
+                      {
+                        id: 'character_1',
+                        name: '主角',
+                        appearancePrompt: '角色外观',
+                        personalityPrompt: '冷静克制，观察力强',
+                        representativeFrameTime: 1.2
+                      }
+                    ],
+                    backgrounds: [
+                      {
+                        id: 'background_cafe',
+                        name: '咖啡馆内景',
+                        description: '暖色灯光的咖啡馆',
+                        scenePrompt: '电影感咖啡馆内景提示词',
+                        representativeFrameTime: 2.1
+                      }
+                    ],
+                    timeAnchors: [
+                      {
+                        startTime: 0,
+                        endTime: 3,
+                        sceneSummary: '第一段咖啡馆动作',
+                        scenePrompt: '咖啡馆靠窗座位，暖色灯光'
+                      },
+                      {
+                        startTime: 3,
+                        endTime: 6,
+                        sceneSummary: '第二段咖啡馆动作',
+                        scenePrompt: '咖啡馆靠窗座位，暖色灯光'
+                      }
+                    ]
+                  })
+                }
+              ]
+            }
+          }
+        ]
+      }
     });
 
     const result = await analyzeVideo({
@@ -406,28 +413,49 @@ describe('geminiService', () => {
   });
 
   test('requests and parses segment scene mentions', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      text: async () =>
-        JSON.stringify({
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    text: JSON.stringify({
-                      characters: ['主角'],
-                      scenes: ['咖啡馆内景', '街道夜景'],
-                      scene: '角色从咖啡馆转到街道',
-                      action: '推门离开并走向街道',
-                      prompt: '@主角 从 #咖啡馆内景 走到 #街道夜景，镜头跟拍转场。'
-                    })
-                  }
-                ]
-              }
+    requestExternalJsonMock.mockReset();
+    requestExternalJsonMock.mockResolvedValue({
+      response: {
+        status: 200
+      },
+      responseText: JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    characters: ['主角'],
+                    scenes: ['咖啡馆内景', '街道夜景'],
+                    scene: '角色从咖啡馆转到街道',
+                    action: '推门离开并走向街道',
+                    prompt: '@主角 从 #咖啡馆内景 走到 #街道夜景，镜头跟拍转场。'
+                  })
+                }
+              ]
             }
-          ]
-        })
+          }
+        ]
+      }),
+      responsePayload: {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    characters: ['主角'],
+                    scenes: ['咖啡馆内景', '街道夜景'],
+                    scene: '角色从咖啡馆转到街道',
+                    action: '推门离开并走向街道',
+                    prompt: '@主角 从 #咖啡馆内景 走到 #街道夜景，镜头跟拍转场。'
+                  })
+                }
+              ]
+            }
+          }
+        ]
+      }
     });
 
     const result = await analyzeSegment({
@@ -452,7 +480,7 @@ describe('geminiService', () => {
       segmentAbsolutePath: sampleVideoPath
     });
 
-    const requestBody = JSON.parse(global.fetch.mock.calls[0][1].body);
+    const requestBody = JSON.parse(requestExternalJsonMock.mock.calls[0][1].body);
     const promptText = requestBody.contents[0].parts[1].text;
 
     expect(promptText).toContain('"scenes"');
@@ -463,24 +491,41 @@ describe('geminiService', () => {
   });
 
   test('includes scene resources when optimizing prompts', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      text: async () =>
-        JSON.stringify({
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    text: JSON.stringify({
-                      optimizedPrompt: '@主角 在 #咖啡馆内景 中完成更稳定的表演调度。'
-                    })
-                  }
-                ]
-              }
+    requestExternalJsonMock.mockReset();
+    requestExternalJsonMock.mockResolvedValue({
+      response: {
+        status: 200
+      },
+      responseText: JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    optimizedPrompt: '@主角 在 #咖啡馆内景 中完成更稳定的表演调度。'
+                  })
+                }
+              ]
             }
-          ]
-        })
+          }
+        ]
+      }),
+      responsePayload: {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    optimizedPrompt: '@主角 在 #咖啡馆内景 中完成更稳定的表演调度。'
+                  })
+                }
+              ]
+            }
+          }
+        ]
+      }
     });
 
     const result = await optimizePrompt({
@@ -489,7 +534,7 @@ describe('geminiService', () => {
       backgrounds: [{ name: '咖啡馆内景', scenePrompt: '暖黄咖啡馆内景' }]
     });
 
-    const requestBody = JSON.parse(global.fetch.mock.calls[0][1].body);
+    const requestBody = JSON.parse(requestExternalJsonMock.mock.calls[0][1].body);
     const promptText = requestBody.contents[0].parts[0].text;
 
     expect(promptText).toContain('场景资源库');
@@ -498,25 +543,43 @@ describe('geminiService', () => {
   });
 
   test('optimizes character resources without scene mentions and with white background constraints', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      text: async () =>
-        JSON.stringify({
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    text: JSON.stringify({
-                      optimizedPrompt:
-                        '外表描述：黑色短发，米色风衣；性格气质：冷静克制，观察力强；纯白无缝背景，单人全身角色三视图设定。'
-                    })
-                  }
-                ]
-              }
+    requestExternalJsonMock.mockReset();
+    requestExternalJsonMock.mockResolvedValue({
+      response: {
+        status: 200
+      },
+      responseText: JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    optimizedPrompt:
+                      '外表描述：黑色短发，米色风衣；性格气质：冷静克制，观察力强；纯白无缝背景，单人全身角色三视图设定。'
+                  })
+                }
+              ]
             }
-          ]
-        })
+          }
+        ]
+      }),
+      responsePayload: {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    optimizedPrompt:
+                      '外表描述：黑色短发，米色风衣；性格气质：冷静克制，观察力强；纯白无缝背景，单人全身角色三视图设定。'
+                  })
+                }
+              ]
+            }
+          }
+        ]
+      }
     });
 
     const result = await optimizePrompt({
@@ -532,7 +595,7 @@ describe('geminiService', () => {
       mode: 'character_resource'
     });
 
-    const requestBody = JSON.parse(global.fetch.mock.calls[0][1].body);
+    const requestBody = JSON.parse(requestExternalJsonMock.mock.calls[0][1].body);
     const promptText = requestBody.contents[0].parts[0].text;
 
     expect(promptText).toContain('角色资源提示词优化助手');
@@ -543,25 +606,43 @@ describe('geminiService', () => {
   });
 
   test('optimizes shot generation prompts with blocking and camera detail requirements', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      text: async () =>
-        JSON.stringify({
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    text: JSON.stringify({
-                      optimizedPrompt:
-                        '@主角 位于画面左侧前景，在 #咖啡馆内景 中朝右前方快步推进，保持中近景、侧前方机位、稳定跟拍和明确视线关系。'
-                    })
-                  }
-                ]
-              }
+    requestExternalJsonMock.mockReset();
+    requestExternalJsonMock.mockResolvedValue({
+      response: {
+        status: 200
+      },
+      responseText: JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    optimizedPrompt:
+                      '@主角 位于画面左侧前景，在 #咖啡馆内景 中朝右前方快步推进，保持中近景、侧前方机位、稳定跟拍和明确视线关系。'
+                  })
+                }
+              ]
             }
-          ]
-        })
+          }
+        ]
+      }),
+      responsePayload: {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    optimizedPrompt:
+                      '@主角 位于画面左侧前景，在 #咖啡馆内景 中朝右前方快步推进，保持中近景、侧前方机位、稳定跟拍和明确视线关系。'
+                  })
+                }
+              ]
+            }
+          }
+        ]
+      }
     });
 
     const result = await optimizePrompt({
@@ -575,7 +656,7 @@ describe('geminiService', () => {
       characterNames: ['主角']
     });
 
-    const requestBody = JSON.parse(global.fetch.mock.calls[0][1].body);
+    const requestBody = JSON.parse(requestExternalJsonMock.mock.calls[0][1].body);
     const promptText = requestBody.contents[0].parts[0].text;
 
     expect(promptText).toContain('镜头级视频生成提示词优化助手');

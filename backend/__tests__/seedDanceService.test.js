@@ -19,7 +19,11 @@ await jest.unstable_mockModule('../config/env.js', () => ({
     SEED_DANCE_MAX_WAIT_MS: 30000,
     SEED_DANCE_STRICT_REMOTE: true,
     SEED_DANCE_ALLOW_MOCK_FALLBACK: false,
-    EXTERNAL_REQUEST_TIMEOUT: 30000
+    EXTERNAL_REQUEST_TIMEOUT: 30000,
+    SEED_DANCE_CREATE_TIMEOUT_MS: 120000,
+    SEED_DANCE_DOWNLOAD_TIMEOUT_MS: 300000,
+    SEED_DANCE_REFERENCE_VIDEO_MAX_DURATION_SECONDS: 15.2,
+    PUBLIC_ASSET_BASE_URL: ''
   })
 }));
 
@@ -41,6 +45,7 @@ await jest.unstable_mockModule('../services/fileService.js', () => ({
   publicUrlToRelativePath: jest.fn((publicUrl) => String(publicUrl).replace(/^\/?uploads\//u, '')),
   removeFileIfExists: jest.fn(),
   resolveUploadPath: jest.fn((relativePath) => path.join(tempDir, String(relativePath))),
+  toAbsolutePublicUploadUrl: jest.fn(() => ''),
   toPublicUploadUrl: jest.fn((relativePath) => `/uploads/${String(relativePath).replace(/^\/+/, '')}`)
 }));
 
@@ -75,6 +80,24 @@ await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
       };
     }
 
+    if (normalizedPath.includes('near-limit-reference')) {
+      return {
+        duration: 13.7,
+        durationSecondsExact: 13.7,
+        width: 1280,
+        height: 720
+      };
+    }
+
+    if (normalizedPath.includes('background-five-seconds')) {
+      return {
+        duration: 5.04,
+        durationSecondsExact: 5.04,
+        width: 1280,
+        height: 720
+      };
+    }
+
     return {
       duration: 3,
       durationSecondsExact: 3,
@@ -92,6 +115,50 @@ await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
   }))
 }));
 
+await jest.unstable_mockModule('../services/externalHttpService.js', () => ({
+  requestExternalJson: jest.fn(async (url, init = {}) => {
+    const response = await globalThis.fetch(url, {
+      method: init.method ?? 'GET',
+      headers: init.headers ?? {},
+      body: init.body
+    });
+    const responseText = await response.text();
+
+    return {
+      response,
+      responseText,
+      responsePayload: responseText ? JSON.parse(responseText) : {}
+    };
+  }),
+  downloadExternalBinary: jest.fn(async (url, init = {}) => {
+    const response = await globalThis.fetch(url, {
+      method: init.method ?? 'GET',
+      headers: init.headers ?? {},
+      body: init.body
+    });
+    const fileBuffer = Buffer.from(await response.arrayBuffer());
+
+    return {
+      response,
+      fileBuffer
+    };
+  }),
+  requestExternalText: jest.fn(async (url, init = {}) => {
+    const response = await globalThis.fetch(url, {
+      method: init.method ?? 'GET',
+      headers: init.headers ?? {},
+      body: init.body
+    });
+    const responseText = await response.text();
+
+    return {
+      response,
+      responseText
+    };
+  }),
+  getExternalDispatcher: jest.fn(() => undefined)
+}));
+
 const {
   buildSeedDanceContentItems,
   buildSeedDanceRequestBody,
@@ -104,6 +171,7 @@ const {
 } = await import(
   '../services/seedDanceService.js'
 );
+const { duplicateToUploadPath } = await import('../services/fileService.js');
 
 describe('seedDanceService', () => {
   const sampleVideoPath = path.join(tempDir, 'segment.mp4');
@@ -222,6 +290,102 @@ describe('seedDanceService', () => {
     expect(requestBody).toMatchObject({
       duration: 4
     });
+  });
+
+  test('rejects overlong generation durations before creating a remote task', async () => {
+    const fetchSpy = jest.spyOn(globalThis, 'fetch');
+
+    await expect(
+      generateSegment({
+        sourceAbsolutePath: sampleVideoPath,
+        sourcePublicUrl: 'https://example.com/source-segment.mp4',
+        prompt: '过长镜头需要先重新切分',
+        basename: 'overlong-shot',
+        duration: 59.5
+      })
+    ).rejects.toThrow(/最长只支持 15 秒生成/u);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(duplicateToUploadPath).not.toHaveBeenCalled();
+  });
+
+  test('rewrites provider-sensitive medical wording before creating a Seedance task', async () => {
+    await mkdir(path.join(tempDir, 'outputs'), { recursive: true });
+
+    const fetchSpy = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'remote-safe-prompt-task',
+            status: 'queued'
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'remote-safe-prompt-task',
+            status: 'succeeded',
+            content: {
+              video_url: 'https://example.com/generated-safe-prompt.mp4'
+            }
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from('fake-remote-video-binary'), {
+          status: 200,
+          headers: {
+            'Content-Type': 'video/mp4'
+          }
+        })
+      );
+
+    const result = await generateSegment({
+      sourceAbsolutePath: sampleVideoPath,
+      sourcePublicUrl: 'https://example.com/source-segment.mp4',
+      prompt: '人物身体不适，神情痛苦，手捂住胸口，桌上出现药盒。',
+      basename: 'provider-safe-prompt',
+      duration: 4
+    });
+    const firstCreateRequestBody = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body ?? '{}'));
+    const textPrompt = firstCreateRequestBody.content[0].text;
+
+    expect(textPrompt).toContain('身体有些疲惫');
+    expect(textPrompt).toContain('神情紧张');
+    expect(textPrompt).toContain('上衣前侧');
+    expect(textPrompt).toContain('小白盒');
+    expect(textPrompt).not.toContain('身体不适');
+    expect(textPrompt).not.toContain('药盒');
+    expect(result.fallbackReason).toContain('seedance_provider_safe_prompt_rewrite');
+  });
+
+  test('never falls back to copying the source video when remote Seedance generation fails', async () => {
+    jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: 'provider exploded'
+          }
+        }),
+        { status: 500 }
+      )
+    );
+
+    await expect(
+      generateSegment({
+        sourceAbsolutePath: sampleVideoPath,
+        sourcePublicUrl: 'https://example.com/source-segment.mp4',
+        prompt: '必须真实调用 Seedance',
+        basename: 'no-mock-fallback',
+        duration: 4
+      })
+    ).rejects.toThrow(/Seed Dance request failed with status 500|provider exploded/u);
+
+    expect(duplicateToUploadPath).not.toHaveBeenCalled();
   });
 
   test('reports Seedance provider readiness for health checks', () => {
@@ -457,5 +621,25 @@ describe('seedDanceService', () => {
       .map((item) => item.video_url.url);
 
     expect(videoUrls).toEqual(['https://example.com/long-reference.mp4']);
+  });
+
+  test('keeps source reference video first and skips extra videos when total duration exceeds provider limit', async () => {
+    const content = await buildSeedDanceContentItems({
+      prompt: '长镜头优先保留小镜头源视频',
+      sourceAbsolutePath: path.join(tempDir, 'near-limit-reference.mp4'),
+      sourcePublicUrl: 'https://example.com/near-limit-reference.mp4',
+      referenceVideos: [
+        {
+          url: 'https://example.com/background-five-seconds.mp4',
+          absolutePath: path.join(tempDir, 'background-five-seconds.mp4')
+        }
+      ]
+    });
+
+    const videoUrls = content
+      .filter((item) => item.type === 'video_url')
+      .map((item) => item.video_url.url);
+
+    expect(videoUrls).toEqual(['https://example.com/near-limit-reference.mp4']);
   });
 });

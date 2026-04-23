@@ -5,6 +5,14 @@ const resolveVideoAbsolutePath = jest.fn();
 const analyzeSegmentContent = jest.fn();
 const getAnalysisRecordByVideoId = jest.fn();
 const extractVideoFrame = jest.fn();
+const extractAudioClip = jest.fn(async (_sourcePath, startTime, endTime, options = {}) => ({
+  filePath: `audio/${options.basename || 'shot-audio'}.mp3`,
+  fileUrl: `/uploads/audio/${options.basename || 'shot-audio'}.mp3`,
+  startTime,
+  endTime,
+  duration: Number((Number(endTime) - Number(startTime)).toFixed(2)),
+  engine: 'ffmpeg-audio-extract'
+}));
 const sliceVideoClip = jest.fn(async (_sourcePath, startTime, endTime, options = {}) => ({
   filePath: `shots/${options.basename || 'shot'}.mp4`,
   fileUrl: `/uploads/shots/${options.basename || 'shot'}.mp4`,
@@ -79,6 +87,7 @@ await jest.unstable_mockModule('../services/taskService.js', () => ({
 }));
 
 await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
+  extractAudioClip,
   extractVideoFrame,
   getVideoMetadata: jest.fn(),
   mergeVideos: jest.fn(),
@@ -391,24 +400,45 @@ describe('segmentService', () => {
       endTime: 4,
       filePath: 'segments/source/demo-0.mp4',
       analysis: {
+        analysisOptions: {
+          extractSubtitles: false,
+          parseAudio: false
+        },
         shots: [
           {
             id: 'shot_saved_1',
             startTime: 0,
             endTime: 2,
+            durationSeconds: 2,
             summary: '主角推门进入咖啡馆',
             prompt: '@主角 推门进入 #咖啡馆内景',
             sceneNames: ['咖啡馆内景'],
             characterNames: ['主角'],
             representativeFrameTime: 1.1,
             representativeFrameNote: '主角进门时的代表帧',
-            sourceFilePath: 'shots/existing-shot.mp4',
-            sourceFileUrl: '/uploads/shots/existing-shot.mp4',
-            representativeFrameImagePath: 'frames/existing-shot.jpg',
-            representativeFrameImageUrl: '/uploads/frames/existing-shot.jpg',
-            representativeFrameActualTime: 1.1
+            sourceFilePath: 'shots/segment-201-shot_saved_1-source.mp4',
+            sourceFileUrl: '/uploads/shots/segment-201-shot_saved_1-source.mp4',
+            sourceLocalStartTime: 0,
+            sourceLocalEndTime: 2,
+            sourceAudioFilePath: '',
+            sourceAudioFileUrl: '',
+            representativeFrameImagePath: 'frames/segment-201-shot_saved_1-representative-frame.jpg',
+            representativeFrameImageUrl: '/uploads/frames/segment-201-shot_saved_1-representative-frame.jpg',
+            representativeFrameActualTime: 1.1,
+            speech: {
+              transcript: '',
+              subtitleLines: [],
+              speechStyle: '',
+              hasDialogue: false,
+              extractionStatus: 'completed',
+              extractionError: '',
+              subtitleFilePath: '',
+              subtitleFileUrl: '',
+              sourceOfTruth: 'extracted'
+            }
           }
         ],
+        shotAssembly: null,
         shotAssemblyInvalidatedAt: ''
       },
       update: segmentUpdate
@@ -435,8 +465,8 @@ describe('segmentService', () => {
     expect(extractVideoFrame).not.toHaveBeenCalled();
     expect(segment.analysis.shots[0]).toMatchObject({
       id: 'shot_saved_1',
-      sourceFilePath: 'shots/existing-shot.mp4',
-      representativeFrameImagePath: 'frames/existing-shot.jpg'
+      sourceFilePath: 'shots/segment-201-shot_saved_1-source.mp4',
+      representativeFrameImagePath: 'frames/segment-201-shot_saved_1-representative-frame.jpg'
     });
   });
 });

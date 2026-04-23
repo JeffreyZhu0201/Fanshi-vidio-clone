@@ -13,6 +13,13 @@ import {
 import { completeTask, createTask, failTask, updateTask } from './taskService.js';
 import { splitVideo } from './ffmpegService.js';
 import { rebuildShotAssetsForSegment, shotAssetsNeedRebuild } from './shotAssetService.js';
+import {
+  normalizeAnalysisOptions,
+  normalizeShotSpeech,
+  persistShotSpeechEditsForSegment,
+  rebuildShotSpeechAssetsForSegment,
+  shotSpeechAssetsNeedRebuild
+} from './shotSpeechService.js';
 import { getVideoRecordById, resolveVideoAbsolutePath } from './videoService.js';
 
 const serializeGenerationTask = (task) => {
@@ -41,6 +48,23 @@ const serializeGenerationTask = (task) => {
   };
 };
 
+const isTaskMarkedMock = (task) => {
+  const taskMeta = task?.meta ?? {};
+  const engine = String(taskMeta.engine ?? '').trim().toLowerCase();
+  const fallbackReason = String(taskMeta.fallbackReason ?? '').trim().toLowerCase();
+
+  return (
+    Boolean(taskMeta.isMock) ||
+    engine.includes('mock') ||
+    fallbackReason.includes('remote_generation_failed') ||
+    fallbackReason.includes('missing_remote_config')
+  );
+};
+
+const isUsableCompletedGenerationTask = (task) => {
+  return Boolean(task?.status === 'completed' && task?.resultUrl && !isTaskMarkedMock(task));
+};
+
 const normalizeOptionalFrameTime = (value) => {
   const parsedValue = Number(value);
 
@@ -57,11 +81,14 @@ const normalizeShotDefinitions = (shots, segmentStartTime, segmentEndTime) => {
     const endTime = Number(shot.endTime ?? shot.end_time ?? segmentEndTime);
     const safeStartTime = Number.isFinite(startTime) ? Math.max(segmentStartTime, startTime) : segmentStartTime;
     const safeEndTime = Number.isFinite(endTime) && endTime > safeStartTime ? endTime : safeStartTime + 0.3;
+    const boundedEndTime = Number(Math.min(segmentEndTime, safeEndTime).toFixed(2));
+    const durationSeconds = Number(Math.max(0.3, boundedEndTime - safeStartTime).toFixed(2));
 
     return {
       id: String(shot.id ?? `shot_${shotIndex + 1}`),
       startTime: Number(safeStartTime.toFixed(2)),
-      endTime: Number(Math.min(segmentEndTime, safeEndTime).toFixed(2)),
+      endTime: boundedEndTime,
+      durationSeconds,
       summary: String(shot.summary ?? shot.sceneSummary ?? shot.scene_summary ?? `镜头 ${shotIndex + 1}`).trim(),
       prompt: String(
         shot.prompt ??
@@ -83,7 +110,26 @@ const normalizeShotDefinitions = (shots, segmentStartTime, segmentEndTime) => {
           shot.representativeFrameReason ??
           shot.representative_frame_reason ??
           ''
-      ).trim()
+      ).trim(),
+      sourceFilePath: String(shot.sourceFilePath ?? shot.source_file_path ?? '').trim(),
+      sourceFileUrl: String(shot.sourceFileUrl ?? shot.source_file_url ?? '').trim(),
+      sourceLocalStartTime: normalizeOptionalFrameTime(shot.sourceLocalStartTime ?? shot.source_local_start_time),
+      sourceLocalEndTime: normalizeOptionalFrameTime(shot.sourceLocalEndTime ?? shot.source_local_end_time),
+      representativeFrameImagePath: String(
+        shot.representativeFrameImagePath ?? shot.representative_frame_image_path ?? ''
+      ).trim(),
+      representativeFrameImageUrl: String(
+        shot.representativeFrameImageUrl ?? shot.representative_frame_image_url ?? ''
+      ).trim(),
+      representativeFrameActualTime: normalizeOptionalFrameTime(
+        shot.representativeFrameActualTime ?? shot.representative_frame_actual_time
+      ),
+      sourceAudioFilePath: String(shot.sourceAudioFilePath ?? shot.source_audio_file_path ?? '').trim(),
+      sourceAudioFileUrl: String(shot.sourceAudioFileUrl ?? shot.source_audio_file_url ?? '').trim(),
+      speech: normalizeShotSpeech(shot.speech ?? null, {
+        durationSeconds,
+        fallbackStatus: 'idle'
+      })
     };
   });
 };
@@ -146,6 +192,7 @@ const buildPersistedShotDefinitions = (shots, segmentStartTime, segmentEndTime) 
       id: !rawId || rawId.startsWith('temp-shot-') ? `shot_${randomUUID()}` : rawId,
       startTime: Number(startTime.toFixed(2)),
       endTime: Number(endTime.toFixed(2)),
+      durationSeconds: Number((endTime - startTime).toFixed(2)),
       summary: summary || `镜头 ${shotIndex + 1}`,
       prompt: prompt || summary || `镜头 ${shotIndex + 1}`,
       sceneNames,
@@ -154,7 +201,11 @@ const buildPersistedShotDefinitions = (shots, segmentStartTime, segmentEndTime) 
         representativeFrameTime !== null
           ? representativeFrameTime
           : Number(((startTime + endTime) / 2).toFixed(2)),
-      representativeFrameNote: String(shot?.representativeFrameNote ?? '').trim()
+      representativeFrameNote: String(shot?.representativeFrameNote ?? '').trim(),
+      speech: normalizeShotSpeech(shot?.speech ?? null, {
+        durationSeconds: Number((endTime - startTime).toFixed(2)),
+        fallbackStatus: 'completed'
+      })
     };
   });
 
@@ -184,6 +235,53 @@ const arePersistedShotDefinitionsEqual = (leftShots = [], rightShots = []) => {
     }
 
     return JSON.stringify(leftShot) === JSON.stringify(rightShot);
+  });
+};
+
+const getShotPersistenceComparablePayload = (shots = []) => {
+  return shots.map((shot) => ({
+    id: shot.id,
+    startTime: shot.startTime,
+    endTime: shot.endTime,
+    summary: shot.summary,
+    prompt: shot.prompt,
+    sceneNames: shot.sceneNames,
+    characterNames: shot.characterNames,
+    representativeFrameTime: shot.representativeFrameTime,
+    representativeFrameNote: shot.representativeFrameNote,
+    speech: normalizeShotSpeech(shot.speech, {
+      durationSeconds: shot.durationSeconds,
+      fallbackStatus: 'completed'
+    })
+  }));
+};
+
+const getShotRebuildComparablePayload = (shots = []) => {
+  return shots.map((shot) => ({
+    id: shot.id,
+    startTime: shot.startTime,
+    endTime: shot.endTime,
+    representativeFrameTime: shot.representativeFrameTime
+  }));
+};
+
+const mergeShotPersistedAssets = (shots = [], currentShots = []) => {
+  return shots.map((shot) => {
+    const currentShot =
+      currentShots.find((item) => String(item?.id ?? '').trim() === String(shot?.id ?? '').trim()) ?? null;
+
+    return {
+      ...shot,
+      sourceFilePath: String(currentShot?.sourceFilePath ?? '').trim(),
+      sourceFileUrl: String(currentShot?.sourceFileUrl ?? '').trim(),
+      sourceLocalStartTime: currentShot?.sourceLocalStartTime ?? null,
+      sourceLocalEndTime: currentShot?.sourceLocalEndTime ?? null,
+      representativeFrameImagePath: String(currentShot?.representativeFrameImagePath ?? '').trim(),
+      representativeFrameImageUrl: String(currentShot?.representativeFrameImageUrl ?? '').trim(),
+      representativeFrameActualTime: currentShot?.representativeFrameActualTime ?? null,
+      sourceAudioFilePath: String(currentShot?.sourceAudioFilePath ?? '').trim(),
+      sourceAudioFileUrl: String(currentShot?.sourceAudioFileUrl ?? '').trim()
+    };
   });
 };
 
@@ -242,21 +340,55 @@ const serializeSegment = (
 
 const ensurePersistentShotAssets = async (segment) => {
   const currentShots = Array.isArray(segment?.analysis?.shots) ? segment.analysis.shots : [];
+  const analysisOptions = normalizeAnalysisOptions(segment?.analysis?.analysisOptions);
+  let nextShots = currentShots;
+  let shouldPersist = false;
 
-  if (!currentShots.length || !shotAssetsNeedRebuild(currentShots)) {
+  if (!currentShots.length) {
     return segment;
   }
 
-  const rebuiltShots = await rebuildShotAssetsForSegment({
-    segment,
-    shots: currentShots,
-    previousShots: currentShots,
-    cleanupExisting: false
-  });
+  if (shotAssetsNeedRebuild(currentShots)) {
+    nextShots = await rebuildShotAssetsForSegment({
+      segment,
+      shots: currentShots,
+      previousShots: currentShots,
+      cleanupExisting: false
+    });
+    shouldPersist = true;
+  }
+
+  if (shotSpeechAssetsNeedRebuild(nextShots, analysisOptions)) {
+    nextShots = await rebuildShotSpeechAssetsForSegment({
+      segment,
+      shots: nextShots,
+      previousShots: currentShots,
+      analysisOptions,
+      cleanupExisting: false
+    });
+    shouldPersist = true;
+  } else if (!analysisOptions.extractSubtitles && !analysisOptions.parseAudio) {
+    const speechFreeShots = await persistShotSpeechEditsForSegment({
+      segment,
+      shots: mergeShotPersistedAssets(nextShots, currentShots),
+      previousShots: currentShots,
+      analysisOptions
+    });
+
+    if (JSON.stringify(nextShots) !== JSON.stringify(speechFreeShots)) {
+      nextShots = speechFreeShots;
+      shouldPersist = true;
+    }
+  }
+
+  if (!shouldPersist) {
+    return segment;
+  }
 
   const nextAnalysis = {
     ...(segment.analysis ?? {}),
-    shots: rebuiltShots
+    analysisOptions,
+    shots: nextShots
   };
 
   await segment.update({
@@ -329,6 +461,9 @@ const normalizeSceneNameList = (value) => {
 };
 
 const buildBaseSegmentAnalysis = ({ segment, timeAnchor = {}, overallAnalysis, previousAnalysis = {} }) => {
+  const analysisOptions = normalizeAnalysisOptions(
+    previousAnalysis.analysisOptions ?? previousAnalysis.analysis_options ?? overallAnalysis?.analysisOptions
+  );
   const backgroundLibrary = getBackgroundLibraryById(overallAnalysis);
   const backgroundId =
     String(
@@ -369,6 +504,7 @@ const buildBaseSegmentAnalysis = ({ segment, timeAnchor = {}, overallAnalysis, p
   );
 
   return {
+    analysisOptions,
     sceneSummary,
     scenePrompt,
     backgroundId,
@@ -420,7 +556,11 @@ const buildBaseSegmentAnalysis = ({ segment, timeAnchor = {}, overallAnalysis, p
                 timeAnchor.representative_frame_note ??
                 previousAnalysis.representativeFrameNote ??
                 ''
-            ).trim()
+            ).trim(),
+            speech: normalizeShotSpeech(previousAnalysis?.shots?.[0]?.speech ?? null, {
+              durationSeconds: Number(segment.endTime) - Number(segment.startTime),
+              fallbackStatus: 'idle'
+            })
           }
         ],
     shotAssembly: previousAnalysis.shotAssembly ?? null
@@ -445,6 +585,7 @@ const mergeSegmentAnalysis = ({ baseAnalysis, nextSegmentAnalysis = {} }) => {
       baseAnalysis.prompt ||
       baseAnalysis.scenePrompt ||
       baseAnalysis.backgroundPrompt,
+    analysisOptions: baseAnalysis.analysisOptions ?? normalizeAnalysisOptions(),
     shots: Array.isArray(baseAnalysis.shots) ? baseAnalysis.shots : [],
     shotAssembly: baseAnalysis.shotAssembly ?? null
   };
@@ -485,7 +626,7 @@ const getLatestTasksBySegmentIds = async (segmentIds) => {
       latestAttemptTaskBySegmentId.set(task.segmentId, task);
     }
 
-    if (task.status === 'completed' && !latestCompletedTaskBySegmentId.has(task.segmentId)) {
+    if (isUsableCompletedGenerationTask(task) && !latestCompletedTaskBySegmentId.has(task.segmentId)) {
       latestCompletedTaskBySegmentId.set(task.segmentId, task);
     }
   });
@@ -506,6 +647,7 @@ const processSplitTask = async (taskId, videoId, timeAnchors) => {
 
     const video = await getVideoRecordById(videoId);
     const overallAnalysis = await getAnalysisRecordByVideoId(videoId);
+    const analysisOptions = normalizeAnalysisOptions(overallAnalysis?.analysisOptions);
     const providedAnchors = normalizeTimeAnchors(timeAnchors);
     const normalizedAnchors =
       providedAnchors.length > 0
@@ -560,6 +702,11 @@ const processSplitTask = async (taskId, videoId, timeAnchors) => {
         segment: segmentInfo,
         shots: segmentAnalysis.shots ?? []
       });
+      const speechReadyShots = await rebuildShotSpeechAssetsForSegment({
+        segment: segmentInfo,
+        shots: nextShots,
+        analysisOptions
+      });
 
       const segment = await Segment.create({
         videoId,
@@ -569,7 +716,8 @@ const processSplitTask = async (taskId, videoId, timeAnchors) => {
         filePath: segmentInfo.filePath,
         analysis: {
           ...segmentAnalysis,
-          shots: nextShots
+          analysisOptions,
+          shots: speechReadyShots
         }
       });
 
@@ -724,8 +872,14 @@ const updateSegmentShotsById = async (segmentId, shots) => {
   const segmentEndTime = Number(segment.endTime);
   const persistedShots = buildPersistedShotDefinitions(shots, segmentStartTime, segmentEndTime);
   const currentPersistedShots = normalizeShotDefinitions(segment.analysis?.shots ?? [], segmentStartTime, segmentEndTime);
+  const analysisOptions = normalizeAnalysisOptions(segment.analysis?.analysisOptions);
 
-  if (arePersistedShotDefinitionsEqual(currentPersistedShots, persistedShots)) {
+  if (
+    arePersistedShotDefinitionsEqual(
+      getShotPersistenceComparablePayload(currentPersistedShots),
+      getShotPersistenceComparablePayload(persistedShots)
+    )
+  ) {
     const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestTasksBySegmentIds([segment.id]);
     const shotDefinitionInvalidatedAt = getShotDefinitionInvalidatedAt(segment);
     const {
@@ -745,14 +899,35 @@ const updateSegmentShotsById = async (segmentId, shots) => {
   }
 
   const invalidatedAt = new Date().toISOString();
-  const rebuiltShots = await rebuildShotAssetsForSegment({
-    segment,
-    shots: persistedShots,
-    previousShots: segment.analysis?.shots ?? []
-  });
+  const rebuildRequired =
+    !arePersistedShotDefinitionsEqual(
+      getShotRebuildComparablePayload(currentPersistedShots),
+      getShotRebuildComparablePayload(persistedShots)
+    ) ||
+    shotAssetsNeedRebuild(currentPersistedShots) ||
+    shotSpeechAssetsNeedRebuild(currentPersistedShots, analysisOptions);
+  const nextShots = rebuildRequired
+    ? await rebuildShotSpeechAssetsForSegment({
+        segment,
+        shots: await rebuildShotAssetsForSegment({
+          segment,
+          shots: persistedShots,
+          previousShots: segment.analysis?.shots ?? []
+        }),
+        previousShots: segment.analysis?.shots ?? [],
+        analysisOptions,
+        cleanupExisting: true
+      })
+    : await persistShotSpeechEditsForSegment({
+        segment,
+        shots: mergeShotPersistedAssets(persistedShots, currentPersistedShots),
+        previousShots: segment.analysis?.shots ?? [],
+        analysisOptions
+      });
   const nextAnalysis = {
     ...(segment.analysis ?? {}),
-    shots: rebuiltShots,
+    analysisOptions,
+    shots: nextShots,
     shotAssembly: null,
     shotAssemblyInvalidatedAt: invalidatedAt
   };

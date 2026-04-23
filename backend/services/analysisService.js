@@ -3,6 +3,7 @@ import { AppError } from '../middleware/errorHandler.js';
 import { VIDEO_STATUS } from '../config/constants.js';
 import { analyzeSegment, analyzeVideo as analyzeVideoWithGemini, optimizePrompt as optimizePromptWithGemini } from './geminiService.js';
 import { broadcastRealtimeEvent } from './realtimeService.js';
+import { normalizeAnalysisOptions } from './shotSpeechService.js';
 import { getVideoRecordById, resolveVideoAbsolutePath } from './videoService.js';
 
 const parseGeminiMeta = (geminiResponse) => {
@@ -44,6 +45,7 @@ const serializeAnalysis = (analysis, status = 'completed') => {
     plot: analysis.plot,
     characters: analysis.characters ?? [],
     backgrounds: analysis.backgrounds ?? [],
+    analysis_options: normalizeAnalysisOptions(analysis.analysisOptions),
     time_anchors: analysis.timeAnchors ?? [],
     provider: geminiMeta.provider,
     model: geminiMeta.model,
@@ -55,7 +57,7 @@ const serializeAnalysis = (analysis, status = 'completed') => {
   };
 };
 
-const analyzeVideoById = async (videoId) => {
+const analyzeVideoById = async (videoId, analysisOptions = null) => {
   const video = await getVideoRecordById(videoId, {
     include: [
       {
@@ -81,7 +83,8 @@ const analyzeVideoById = async (videoId) => {
       metadata: {
         duration: video.duration
       },
-      videoAbsolutePath: resolveVideoAbsolutePath(video)
+      videoAbsolutePath: resolveVideoAbsolutePath(video),
+      analysisOptions: normalizeAnalysisOptions(analysisOptions)
     });
 
     let analysisRecord = video.analysis;
