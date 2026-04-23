@@ -280,6 +280,111 @@ describe('seedDanceService', () => {
     });
   });
 
+  test('returns the actual sent reference summaries for the final Seedance request', async () => {
+    await mkdir(path.join(tempDir, 'outputs'), { recursive: true });
+
+    jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'remote-task-with-debug',
+            status: 'queued'
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'remote-task-with-debug',
+            status: 'succeeded',
+            content: {
+              video_url: 'https://example.com/generated-debug.mp4'
+            }
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from('fake-remote-video-binary'), {
+          status: 200,
+          headers: {
+            'Content-Type': 'video/mp4'
+          }
+        })
+      );
+
+    const result = await generateSegment({
+      sourceAbsolutePath: sampleVideoPath,
+      sourcePublicUrl: 'https://example.com/source-segment.mp4',
+      sourceReferenceDisplayLabel: '小镜头源视频',
+      prompt: '使用参考图调试清单',
+      basename: 'request-debug',
+      duration: 4,
+      referenceImages: [
+        {
+          url: 'https://example.com/shot-frame.jpg',
+          sourceKind: 'shot_representative_frame',
+          displayLabel: '小镜头典型帧'
+        },
+        {
+          url: 'https://example.com/character-front.png',
+          sourceKind: 'character_asset',
+          displayLabel: '@主角 三视图'
+        }
+      ],
+      referenceVideos: [
+        {
+          url: 'https://example.com/background-reference.mp4',
+          absolutePath: sampleVideoPath,
+          sourceKind: 'background_asset_video',
+          displayLabel: '#咖啡馆内景 背景资产视频'
+        }
+      ],
+      referenceAudios: [
+        {
+          absolutePath: sampleAudioPath,
+          sourceKind: 'shot_reference_audio',
+          displayLabel: '小镜头参考音频'
+        }
+      ]
+    });
+
+    expect(result.sentReferenceImages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source_kind: 'shot_representative_frame',
+          label: '小镜头典型帧'
+        }),
+        expect.objectContaining({
+          source_kind: 'character_asset',
+          label: '@主角 三视图'
+        })
+      ])
+    );
+    expect(result.sentReferenceVideos).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source_kind: 'source_video',
+          label: '小镜头源视频'
+        }),
+        expect.objectContaining({
+          source_kind: 'background_asset_video',
+          label: '#咖啡馆内景 背景资产视频'
+        })
+      ])
+    );
+    expect(result.sentReferenceAudios).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source_kind: 'shot_reference_audio',
+          label: '小镜头参考音频'
+        })
+      ])
+    );
+  });
+
   test('normalizes too-short generation durations to the provider minimum', async () => {
     const requestBody = await buildSeedDanceRequestBody({
       prompt: '短镜头也需要满足 provider 最小时长',

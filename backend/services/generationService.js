@@ -27,7 +27,10 @@ const serializeGenerationMeta = (task) => {
     remote_task_id: String(taskMeta.remoteTaskId ?? '').trim(),
     fallback_reason: String(taskMeta.fallbackReason ?? '').trim(),
     provider_error: String(taskMeta.providerError ?? '').trim(),
-    source: String(taskMeta.source ?? '').trim()
+    source: String(taskMeta.source ?? '').trim(),
+    sent_reference_images: Array.isArray(taskMeta.sentReferenceImages) ? taskMeta.sentReferenceImages : [],
+    sent_reference_videos: Array.isArray(taskMeta.sentReferenceVideos) ? taskMeta.sentReferenceVideos : [],
+    sent_reference_audios: Array.isArray(taskMeta.sentReferenceAudios) ? taskMeta.sentReferenceAudios : []
   };
 };
 
@@ -93,7 +96,16 @@ const applySeedDanceTaskProgress = async (task, progressPayload = {}) => {
     remoteUpdatedAt:
       Number.isFinite(Number(progressPayload.updatedAt)) && Number(progressPayload.updatedAt) > 0
         ? Number(progressPayload.updatedAt)
-        : taskMeta.remoteUpdatedAt ?? null
+        : taskMeta.remoteUpdatedAt ?? null,
+    sentReferenceImages: Array.isArray(progressPayload.sentReferenceImages)
+      ? progressPayload.sentReferenceImages
+      : taskMeta.sentReferenceImages ?? [],
+    sentReferenceVideos: Array.isArray(progressPayload.sentReferenceVideos)
+      ? progressPayload.sentReferenceVideos
+      : taskMeta.sentReferenceVideos ?? [],
+    sentReferenceAudios: Array.isArray(progressPayload.sentReferenceAudios)
+      ? progressPayload.sentReferenceAudios
+      : taskMeta.sentReferenceAudios ?? []
   };
 
   if (
@@ -422,7 +434,9 @@ const buildCharacterFrameReference = async ({
 
   return {
     relativePath: extractedFrame.filePath,
-    role: 'reference_image'
+    role: 'reference_image',
+    sourceKind: 'character_frame_fallback',
+    displayLabel: `@${String(character?.name ?? character?.id ?? '角色').trim() || '角色'} 原片人物帧`
   };
 };
 
@@ -449,7 +463,9 @@ const buildSceneFrameReference = async ({
 
   return {
     relativePath: extractedFrame.filePath,
-    role: 'reference_image'
+    role: 'reference_image',
+    sourceKind: 'scene_frame_fallback',
+    displayLabel: `#${String(background?.name ?? background?.id ?? '场景').trim() || '场景'} 原片场景帧`
   };
 };
 
@@ -472,7 +488,9 @@ const collectCharacterReferenceImages = async ({
     currentAssets.push({
       relativePath: asset.asset_path || '',
       url: asset.asset_url || '',
-      role: 'reference_image'
+      role: 'reference_image',
+      sourceKind: 'character_asset',
+      displayLabel: `@${String(asset.name ?? asset.resource_id ?? '角色').trim() || '角色'} 三视图`
     });
     accumulator.set(asset.resource_id, currentAssets);
     return accumulator;
@@ -494,7 +512,13 @@ const collectCharacterReferenceImages = async ({
       character,
       CHARACTER_REFERENCE_IMAGE_FIELDS,
       'reference_image'
-    ).slice(0, 3);
+    )
+      .map((entry) => ({
+        ...entry,
+        sourceKind: 'character_asset',
+        displayLabel: `@${String(character?.name ?? character?.id ?? '角色').trim() || '角色'} 三视图`
+      }))
+      .slice(0, 3);
 
     if (explicitReferenceImages.length) {
       referenceImages.push(...explicitReferenceImages);
@@ -601,7 +625,9 @@ const collectSceneReferenceImages = async ({
       currentAssets.push({
         relativePath: asset.asset_path || '',
         url: asset.asset_url || '',
-        role: 'reference_image'
+        role: 'reference_image',
+        sourceKind: 'scene_asset',
+        displayLabel: `#${String(asset.name ?? asset.resource_id ?? '场景').trim() || '场景'} 场景图`
       });
       persistedSceneAssetMap.set(asset.resource_id, currentAssets);
     });
@@ -624,7 +650,13 @@ const collectSceneReferenceImages = async ({
       background,
       SCENE_REFERENCE_IMAGE_FIELDS,
       'reference_image'
-    ).slice(0, 2);
+    )
+      .map((entry) => ({
+        ...entry,
+        sourceKind: 'scene_asset',
+        displayLabel: `#${String(background?.name ?? background?.id ?? '场景').trim() || '场景'} 场景图`
+      }))
+      .slice(0, 2);
 
     if (explicitReferenceImages.length) {
       referenceImages.push(...explicitReferenceImages);
@@ -893,6 +925,9 @@ const processGenerationTask = async (taskId) => {
           isMock: Boolean(result.isMock),
           remoteTaskId: result.remoteTaskId || remoteTaskId,
           remoteUrl: result.remoteUrl || '',
+          sentReferenceImages: task.meta?.sentReferenceImages ?? [],
+          sentReferenceVideos: task.meta?.sentReferenceVideos ?? [],
+          sentReferenceAudios: task.meta?.sentReferenceAudios ?? [],
           remoteStatus: 'succeeded',
           remoteStatusLabel: '远端已完成',
           remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
@@ -983,6 +1018,8 @@ const processGenerationTask = async (taskId) => {
     const result = await generateWithSeedDance({
       sourceAbsolutePath,
       sourcePublicUrl,
+      sourceReferenceSourceKind: 'source_video',
+      sourceReferenceDisplayLabel: '大片段源视频',
       prompt: seedDancePrompt,
       basename: `segment-${task.segmentId}-task-${task.id}`,
       ratio: normalizeGenerationRatio(task.meta?.ratio),
@@ -996,7 +1033,9 @@ const processGenerationTask = async (taskId) => {
           ? {
               url: toAbsolutePublicUploadUrl(backgroundAsset.assetPath) || backgroundAsset.assetUrl,
               relativePath: backgroundAsset.assetPath || '',
-              role: 'reference_video'
+              role: 'reference_video',
+              sourceKind: 'background_asset_video',
+              displayLabel: `#${String(backgroundBinding?.backgroundName || backgroundAsset.name || '场景').trim()} 背景资产视频`
             }
           : null
       ].filter(Boolean)
@@ -1014,6 +1053,9 @@ const processGenerationTask = async (taskId) => {
         isMock: Boolean(result.isMock),
         remoteTaskId: result.remoteTaskId || '',
         remoteUrl: result.remoteUrl || '',
+        sentReferenceImages: result.sentReferenceImages ?? task.meta?.sentReferenceImages ?? [],
+        sentReferenceVideos: result.sentReferenceVideos ?? task.meta?.sentReferenceVideos ?? [],
+        sentReferenceAudios: result.sentReferenceAudios ?? task.meta?.sentReferenceAudios ?? [],
         remoteStatus: 'succeeded',
         remoteStatusLabel: '远端已完成',
         remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,

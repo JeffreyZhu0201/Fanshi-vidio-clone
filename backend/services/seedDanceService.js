@@ -232,7 +232,63 @@ const normalizeReferenceEntry = (entry, defaultRole) => {
     url,
     absolutePath,
     relativePath,
-    role: String(entry.role || defaultRole).trim() || defaultRole
+    role: String(entry.role || defaultRole).trim() || defaultRole,
+    sourceKind: String(entry.sourceKind ?? entry.source_kind ?? '').trim(),
+    displayLabel: String(entry.displayLabel ?? entry.display_label ?? entry.label ?? '').trim()
+  };
+};
+
+const summarizeReferenceUrlForDebug = (url = '') => {
+  const normalizedUrl = String(url ?? '').trim();
+
+  if (!normalizedUrl) {
+    return '';
+  }
+
+  if (isDataUrl(normalizedUrl)) {
+    const commaIndex = normalizedUrl.indexOf(',');
+    return commaIndex >= 0 ? normalizedUrl.slice(0, commaIndex) : normalizedUrl.slice(0, 48);
+  }
+
+  return normalizedUrl;
+};
+
+const inferReferenceLabel = (entry = {}, mediaType = 'image') => {
+  const explicitLabel = String(entry.displayLabel ?? '').trim();
+
+  if (explicitLabel) {
+    return explicitLabel;
+  }
+
+  switch (String(entry.sourceKind ?? '').trim()) {
+    case 'shot_representative_frame':
+      return '小镜头典型帧';
+    case 'character_asset':
+      return '角色参考图';
+    case 'scene_asset':
+      return '场景参考图';
+    case 'character_frame_fallback':
+      return '原片人物参考帧';
+    case 'scene_frame_fallback':
+      return '原片场景参考帧';
+    case 'source_video':
+      return '当前源视频参考';
+    case 'background_asset_video':
+      return '背景资产视频';
+    case 'shot_reference_audio':
+      return '小镜头参考音频';
+    default:
+      return mediaType === 'video' ? '参考视频' : mediaType === 'audio' ? '参考音频' : '参考图';
+  }
+};
+
+const createReferenceDebugSummary = (entry = {}, resolvedUrl = '', mediaType = 'image') => {
+  return {
+    role: String(entry.role || '').trim(),
+    media_type: mediaType,
+    source_kind: String(entry.sourceKind ?? '').trim(),
+    label: inferReferenceLabel(entry, mediaType),
+    resolved_url: summarizeReferenceUrlForDebug(resolvedUrl)
   };
 };
 
@@ -448,10 +504,12 @@ const isReferenceVideoUrlReachable = async (url) => {
   return reachabilityPromise;
 };
 
-const buildSeedDanceContentItems = async ({
+const buildSeedDanceContentPackage = async ({
   prompt,
   sourcePublicUrl = '',
   sourceAbsolutePath = '',
+  sourceReferenceSourceKind = 'source_video',
+  sourceReferenceDisplayLabel = '当前源视频参考',
   referenceImages = [],
   referenceVideos = [],
   referenceAudios = [],
@@ -463,6 +521,9 @@ const buildSeedDanceContentItems = async ({
       text: prompt
     }
   ];
+  const sentReferenceImages = [];
+  const sentReferenceVideos = [];
+  const sentReferenceAudios = [];
 
   const normalizedReferenceImages = dedupeReferenceEntries(
     referenceImages.map((entry) => normalizeReferenceEntry(entry, 'reference_image')).filter(Boolean)
@@ -474,7 +535,9 @@ const buildSeedDanceContentItems = async ({
           {
             url: String(sourcePublicUrl || '').trim(),
             absolutePath: String(sourceAbsolutePath || '').trim(),
-            role: 'reference_video'
+            role: 'reference_video',
+            sourceKind: sourceReferenceSourceKind,
+            displayLabel: sourceReferenceDisplayLabel
           },
           'reference_video'
         )
@@ -505,6 +568,7 @@ const buildSeedDanceContentItems = async ({
       },
       role: referenceImage.role || 'reference_image'
     });
+    sentReferenceImages.push(createReferenceDebugSummary(referenceImage, resolvedUrl, 'image'));
   }
 
   for (const referenceVideo of normalizedReferenceVideos) {
@@ -568,6 +632,7 @@ const buildSeedDanceContentItems = async ({
       },
       role: referenceVideo.role || 'reference_video'
     });
+    sentReferenceVideos.push(createReferenceDebugSummary(referenceVideo, resolvedUrl, 'video'));
 
     if (Number.isFinite(Number(referenceVideoDurationSeconds)) && Number(referenceVideoDurationSeconds) > 0) {
       acceptedReferenceVideoDurationSeconds += Number(referenceVideoDurationSeconds);
@@ -588,15 +653,28 @@ const buildSeedDanceContentItems = async ({
       },
       role: referenceAudio.role || 'reference_audio'
     });
+    sentReferenceAudios.push(createReferenceDebugSummary(referenceAudio, resolvedUrl, 'audio'));
   }
 
-  return content;
+  return {
+    content,
+    sentReferenceImages,
+    sentReferenceVideos,
+    sentReferenceAudios
+  };
 };
 
-const buildSeedDanceRequestBody = async ({
+const buildSeedDanceContentItems = async (options = {}) => {
+  const contentPackage = await buildSeedDanceContentPackage(options);
+  return contentPackage.content;
+};
+
+const buildSeedDanceRequestPayload = async ({
   prompt,
   sourcePublicUrl = '',
   sourceAbsolutePath = '',
+  sourceReferenceSourceKind = 'source_video',
+  sourceReferenceDisplayLabel = '当前源视频参考',
   referenceImages = [],
   referenceVideos = [],
   referenceAudios = [],
@@ -608,24 +686,37 @@ const buildSeedDanceRequestBody = async ({
   watermark = env.SEED_DANCE_WATERMARK
 }) => {
   const providerDuration = resolveSeedDanceProviderDuration(duration);
+  const contentPackage = await buildSeedDanceContentPackage({
+    prompt,
+    sourcePublicUrl,
+    sourceAbsolutePath,
+    sourceReferenceSourceKind,
+    sourceReferenceDisplayLabel,
+    referenceImages,
+    referenceVideos,
+    referenceAudios,
+    maxReferenceVideoDurationSeconds: env.SEED_DANCE_REFERENCE_VIDEO_MAX_DURATION_SECONDS
+  });
 
   return {
-    model,
-    content: await buildSeedDanceContentItems({
-      prompt,
-      sourcePublicUrl,
-      sourceAbsolutePath,
-      referenceImages,
-      referenceVideos,
-      referenceAudios,
-      maxReferenceVideoDurationSeconds: env.SEED_DANCE_REFERENCE_VIDEO_MAX_DURATION_SECONDS
-    }),
-    ratio,
-    duration: providerDuration,
-    resolution,
-    generate_audio: generateAudio,
-    watermark
+    requestBody: {
+      model,
+      content: contentPackage.content,
+      ratio,
+      duration: providerDuration,
+      resolution,
+      generate_audio: generateAudio,
+      watermark
+    },
+    sentReferenceImages: contentPackage.sentReferenceImages,
+    sentReferenceVideos: contentPackage.sentReferenceVideos,
+    sentReferenceAudios: contentPackage.sentReferenceAudios
   };
+};
+
+const buildSeedDanceRequestBody = async (options = {}) => {
+  const requestPayload = await buildSeedDanceRequestPayload(options);
+  return requestPayload.requestBody;
 };
 
 const isExternalTimeoutError = (error) => {
@@ -845,6 +936,8 @@ const createRemoteGenerationTask = async ({
   prompt,
   sourcePublicUrl = '',
   sourceAbsolutePath = '',
+  sourceReferenceSourceKind = 'source_video',
+  sourceReferenceDisplayLabel = '当前源视频参考',
   referenceImages = [],
   referenceVideos = [],
   referenceAudios = [],
@@ -852,10 +945,17 @@ const createRemoteGenerationTask = async ({
   ratio,
   duration
 }) => {
-  const requestBody = await buildSeedDanceRequestBody({
+  const {
+    requestBody,
+    sentReferenceImages,
+    sentReferenceVideos,
+    sentReferenceAudios
+  } = await buildSeedDanceRequestPayload({
     prompt,
     sourcePublicUrl,
     sourceAbsolutePath,
+    sourceReferenceSourceKind,
+    sourceReferenceDisplayLabel,
     referenceImages,
     referenceVideos,
     referenceAudios,
@@ -864,8 +964,7 @@ const createRemoteGenerationTask = async ({
     duration
   });
   const requestText = JSON.stringify(requestBody);
-
-  return fetchSeedDanceJson(resolveSeedDanceCreateEndpoint(), {
+  const createResult = await fetchSeedDanceJson(resolveSeedDanceCreateEndpoint(), {
     method: 'POST',
     body: requestText,
     timeoutMs: env.SEED_DANCE_CREATE_TIMEOUT_MS,
@@ -887,6 +986,14 @@ const createRemoteGenerationTask = async ({
       generateAudio: requestBody.generate_audio
     }
   });
+
+  return {
+    createResult,
+    requestBody,
+    sentReferenceImages,
+    sentReferenceVideos,
+    sentReferenceAudios
+  };
 };
 
 const isSeedDanceSensitiveImageError = (error) => {
@@ -916,6 +1023,8 @@ const createRemoteGenerationTaskWithImageFallback = async ({
   prompt,
   sourcePublicUrl = '',
   sourceAbsolutePath = '',
+  sourceReferenceSourceKind = 'source_video',
+  sourceReferenceDisplayLabel = '当前源视频参考',
   referenceImages = [],
   referenceVideos = [],
   referenceAudios = [],
@@ -951,10 +1060,17 @@ const createRemoteGenerationTaskWithImageFallback = async ({
     const attempt = attempts[attemptIndex];
 
     try {
-      const createResult = await createRemoteGenerationTask({
+      const {
+        createResult,
+        sentReferenceImages,
+        sentReferenceVideos,
+        sentReferenceAudios
+      } = await createRemoteGenerationTask({
         prompt,
         sourcePublicUrl,
         sourceAbsolutePath,
+        sourceReferenceSourceKind,
+        sourceReferenceDisplayLabel,
         referenceImages: attempt.referenceImages,
         referenceVideos,
         referenceAudios,
@@ -965,6 +1081,9 @@ const createRemoteGenerationTaskWithImageFallback = async ({
 
       return {
         createResult,
+        sentReferenceImages,
+        sentReferenceVideos,
+        sentReferenceAudios,
         fallbackReason: attempts
           .slice(1, attemptIndex + 1)
           .map((item) => item.fallbackReason)
@@ -1097,6 +1216,8 @@ const resumeRemoteGenerationTask = async ({
 const generateSegment = async ({
   sourceAbsolutePath,
   sourcePublicUrl = '',
+  sourceReferenceSourceKind = 'source_video',
+  sourceReferenceDisplayLabel = '当前源视频参考',
   prompt,
   basename = 'generated-segment',
   referenceImages = [],
@@ -1117,11 +1238,16 @@ const generateSegment = async ({
     try {
       const {
         createResult,
+        sentReferenceImages,
+        sentReferenceVideos,
+        sentReferenceAudios,
         fallbackReason: imageFallbackReason
       } = await createRemoteGenerationTaskWithImageFallback({
         prompt: providerSafePrompt,
         sourcePublicUrl,
         sourceAbsolutePath,
+        sourceReferenceSourceKind,
+        sourceReferenceDisplayLabel,
         referenceImages,
         referenceVideos,
         referenceAudios,
@@ -1144,6 +1270,9 @@ const generateSegment = async ({
           pollCount: 0,
           currentProgress: 0
         }),
+        sentReferenceImages,
+        sentReferenceVideos,
+        sentReferenceAudios,
         createdAt: null,
         updatedAt: null
       });
@@ -1160,6 +1289,9 @@ const generateSegment = async ({
 
       return {
         ...finalizedResult,
+        sentReferenceImages,
+        sentReferenceVideos,
+        sentReferenceAudios,
         fallbackReason: [
           !isWebUrl(sourcePublicUrl) ? 'seedance_skipped_non_public_reference_video' : '',
           promptSafetyFallbackReason,
