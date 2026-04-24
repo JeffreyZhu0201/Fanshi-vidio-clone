@@ -47,7 +47,8 @@
 
 - 前端点击“整片分析”会直接报错，根因是数据库 `analyses` 表缺少 `analysis_options` 列；现在已经补上迁移，并且服务启动时会自动做兼容修复
 - `sakura frp` 穿透前端端口时，之前会返回 `502 EOF`，根因是 frp 外层已经做了 HTTPS，而本地 Vite 也在跑自签 HTTPS；现在前端开发服务默认改回本地 HTTP，并允许 `frp-fox.com` 这个 Host 访问
-- 角色三视图 / 场景图之前经常直接报 `fetch failed`，根因是 Node 原生 `fetch` 没有正确走当前代理；现在已经统一改成 Node.js `undici` 代理请求层 + 模型候选回退 + 网络重试
+- 角色三视图 / 场景图之前经常直接报 `fetch failed`，根因是外部请求链路不稳定；现在已经统一改成 Node.js `undici` 请求层 + 模型候选回退 + 网络重试
+- `yunwu.ai` 在当前代理环境下会出现 `Client network socket disconnected before secure TLS connection was established`；现在外部请求层会先走 `undici`，如果命中这类 TLS 握手失败，再自动切到 Node 原生 `http/https` 直连回退
 - 上传完成后新增了“一键出片”按钮，会自动串起整片理解、资源提示词优化、角色三视图/场景图生成、小镜头批量生成和成片拼接
 - `AnalysisDisplay` 之前会无限刷新，控制台报 `Maximum update depth exceeded`
 - 资源卡按钮会被右侧区域挡住，显示得到但点不中
@@ -149,9 +150,9 @@
 
 这次针对“前端显示远端错误 fetch failed”的实际修复点是：
 
-- Node 原生 `fetch` 不会自动吃当前环境里的代理配置
-- 后端已经把 Gemini、Gemini 生图、Seedance 统一改成 Node.js `undici` 请求层
-- 统一请求层会读取系统代理配置，当前环境可通过 `HTTP_PROXY / HTTPS_PROXY / ALL_PROXY` 出网
+- 后端已经把 Gemini、Gemini 生图、Seedance 统一改成 Node.js 外部请求层
+- 统一请求层默认先走 `undici`，会读取系统代理配置，当前环境可通过 `HTTP_PROXY / HTTPS_PROXY / ALL_PROXY` 出网
+- 如果 `undici` 在 TLS 握手阶段报 `ECONNRESET / before secure TLS connection was established`，统一请求层会自动回退到 Node 原生 `http/https` 直连，避免整片分析直接 `fetch failed`
 - 整片分析主路径现在固定为单次 `Gemini-2.5-pro` 请求，不再做模型、鉴权变体、关键帧和 mock 回退
 - 整片分析 prompt 已经加强成“更细镜头拆分 + 更精确时间点”，要求尽量按真实镜头切点返回 `shots`
 - 整片分析后端超时现在默认放宽到 `600000ms`，可通过 `GEMINI_WHOLE_VIDEO_TIMEOUT_MS` 调整
