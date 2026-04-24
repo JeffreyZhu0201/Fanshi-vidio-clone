@@ -26,7 +26,8 @@
 - Gemini 整片理解可以返回真实结果，不再只会掉回 mock
 - 整片理解现在固定只调用一次 `Gemini-2.5-pro`
 - 角色三视图 / 场景图的 Gemini 生图链路已经从 `fetch failed` 修到可真实出图
-- Gemini、Gemini 生图、Seedance 现在都已经统一走 Node.js `undici` 请求层
+- Gemini、Gemini 生图、Seedance 现在都已经统一走 Node.js 外部请求层
+- 对 `yunwu.ai` 这类在当前代理环境下会触发 TLS 握手断开的地址，统一请求层会在 `undici` 失败后自动切到 Node 原生 `http/https` 直连回退
 - 大片段切分和小镜头切分都能落盘
 - 每个小镜头的源视频和典型帧都能生成并返回前端
 - 背景资产自动生成已经真实完成过
@@ -146,7 +147,8 @@
 - 整片理解 prompt 已加强到“更细镜头切分 + 更精确时间点”，要求尽量把观众能感知到的真实镜头都拆出来
 - `timeAnchor` 和 `shot` 的时间要求尽量精确到 `0.1` 秒
 - 整片分析后端长超时默认 `600000ms`，可通过 `GEMINI_WHOLE_VIDEO_TIMEOUT_MS` 调整
-- 外部请求已经统一改成 Node.js `undici`，并通过系统代理出网，不再依赖 `curl`
+- 外部请求已经统一改成 Node.js 外部请求层，默认先走 `undici` 并通过系统代理出网，不再依赖 `curl`
+- 如果 `undici` 在 TLS 握手阶段报 `fetch failed / ECONNRESET / before secure TLS connection was established`，会自动改用 Node 原生 `http/https` 直连回退，避免整片分析直接中断
 - 后端启动时会自动检查 `analyses.analysis_options` 列是否存在，避免旧数据库在点击“整片分析”时直接 500
 
 ### 2.3 大片段切分
