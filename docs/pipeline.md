@@ -1,6 +1,6 @@
 # Pipeline
 
-更新时间：2026-04-23
+更新时间：2026-04-24
 
 这份文档只写当前仓库里真实存在、并且这次已经重新联调过的流水线。
 
@@ -20,6 +20,7 @@
 这次已经确认通过的真实链路：
 
 - 视频上传可以正常完成，重复上传拦截和 hash 文件名落盘正常
+- 前端开发页现在可以通过 `https://frp-fox.com:42734` 访问
 - Gemini 整片理解可以返回真实结果，不再只会掉回 mock
 - 整片理解现在固定只调用一次 `Gemini-2.5-pro`
 - 角色三视图 / 场景图的 Gemini 生图链路已经从 `fetch failed` 修到可真实出图
@@ -36,6 +37,7 @@
 这次确认并修掉的问题：
 
 - 前端点击“整片分析”时，后端会因为旧库缺少 `analyses.analysis_options` 列而直接报错；现在已经补上迁移，并在启动时自动做 schema 兼容修复
+- `sakura frp` 之前访问前端会直接返回 `502 EOF`；根因是 frp 外层已经终止 HTTPS，但本地 Vite 仍是自签 HTTPS。现在前端开发服务默认改回本地 HTTP，并在 `vite.config.js` 里放行 `frp-fox.com` 作为 `server.allowedHosts`
 - 小镜头典型帧丢失时的自愈判断不完整，导致部分帧 404
 - Seedance 对参考视频的像素总数门槛没有过滤，导致远端拒收
 - Seedance 对过短生成时长有限制，现已自动向上兼容并在下载后裁回原时长
@@ -79,6 +81,13 @@
 - 用 `ffprobe` 读取时长和分辨率
 - 以 hash 文件名保存到 `backend/uploads/videos`
 - 写入 `videos`
+
+当前开发访问方式：
+
+- 本地前端：`http://localhost:5173`
+- 外部穿透前端：`https://frp-fox.com:42734`
+- 本地后端：`https://localhost:5443`
+- 前端通过 Vite 代理把 `/api`、`/uploads`、`/ws` 转发给本地后端
 
 ### 2.1.1 一键出片
 

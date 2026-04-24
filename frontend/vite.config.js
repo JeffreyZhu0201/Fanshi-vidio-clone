@@ -88,6 +88,17 @@ const createDevProxy = (target) => {
   };
 };
 
+const parseAllowedHosts = (value) => {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const httpsEnabled = env.VITE_DEV_HTTPS === 'true';
@@ -103,6 +114,7 @@ export default defineConfig(({ mode }) => {
     port: 5173
   });
   const devProxy = createDevProxy(resolveProxyTarget(env, devOrigin));
+  const allowedHosts = parseAllowedHosts(env.VITE_ALLOWED_HOSTS);
 
   return {
     plugins: [react()],
@@ -117,6 +129,7 @@ export default defineConfig(({ mode }) => {
       host: devHost,
       port: 5173,
       https: httpsOptions,
+      allowedHosts,
       proxy: devProxy
     },
     preview: {
