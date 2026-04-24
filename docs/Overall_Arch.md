@@ -1,6 +1,6 @@
 # Overall Architecture
 
-更新时间：2026-04-22
+更新时间：2026-04-24
 
 这份文档写项目当前真实结构，不写理想结构。
 
@@ -200,10 +200,17 @@ React / Vite
 - Gemini 文本请求
 - JSON 解析和 normalize
 
+现在额外负责：
+
+- 角色 `stateTimeline` 归一化
+- 小镜头 `speech` 归一化
+- 小镜头 `characterStateRefs` 归一化
+
 当前真实特点：
 
-- 主模型失败后会尝试备用模型
-- 只有备用模型也失败时才回退 mock
+- 整片理解主链路固定只调用一次 `Gemini-2.5-pro`
+- 整片理解默认带 `extractSubtitles=true`、`parseAudio=true`
+- 外部请求统一走 Node.js HTTP 层，不再偏向 curl 传输
 
 #### `geminiImageService`
 
@@ -236,6 +243,11 @@ React / Vite
 - 小镜头结构校验
 - 片段列表序列化
 - 小镜头任务与大片段结果的拼装输出
+
+现在额外负责：
+
+- 小镜头 `speech` 保存与重建
+- 小镜头 `characterStateRefs` 派生与透传
 
 2026-04-22 新补的真实兼容：
 
@@ -459,6 +471,7 @@ React / Vite
 -> ffprobe 读元数据
 -> videos 入库
 -> Gemini 整片理解
+-> 返回 plot + characters + stateTimeline + backgrounds + timeAnchors + shots + speech + characterStateRefs
 -> analyses 入库
 ```
 
@@ -471,6 +484,8 @@ analysis.time_anchors
 -> analysis.time_anchors[*].shots
 -> 切小镜头源视频
 -> 抽小镜头典型帧
+-> 切小镜头参考音频
+-> 生成小镜头 SRT
 -> 写入 segment.analysis.shots
 ```
 
@@ -488,7 +503,8 @@ analysis.time_anchors
 ```text
 shot.prompt
 -> 展开 @角色 / #场景
--> 准备小镜头源视频 + 典型帧 + 资源图 + 背景资产
+-> 读取 shot.characterStateRefs
+-> 准备小镜头源视频 + 典型帧 + 角色状态参考帧 + 资源图 + 参考音频 + 背景资产
 -> Seedance
 -> shot_generation_tasks
 -> 小镜头结果
@@ -572,3 +588,20 @@ shot.prompt
 - `localhost`
 
 两边的本地存储上下文不是同一份，当前视频选择态不会自动共享。
+#### `characterStateService`
+
+负责：
+
+- 角色状态时间线 normalize
+- 按整片时间把角色状态映射到每个小镜头
+- 抽取状态参考帧
+- 刷新 `shot.characterStateRefs`
+
+#### `shotSpeechService`
+
+负责：
+
+- 小镜头参考音频切片
+- 小镜头字幕与对白 normalize
+- SRT 文件生成
+- 保存编辑后的字幕文本

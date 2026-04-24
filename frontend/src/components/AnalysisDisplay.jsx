@@ -14,7 +14,8 @@ import {
   generateResourceImages as generateResourceImagesRequest,
   getResourceImages,
   optimizePrompt as optimizePromptRequest,
-  toAbsoluteAssetUrl
+  toAbsoluteAssetUrl,
+  updateAnalysisCharacters as updateAnalysisCharactersRequest
 } from '../services/api.js';
 import { formatDuration } from '../utils/formatDuration.js';
 import { buildVideoAnalysisPrompt } from '../utils/promptBlueprints.js';
@@ -282,8 +283,49 @@ const createResourceEditorState = () => ({
   description: '',
   sourcePrompt: '',
   draftPrompt: '',
-  highlightedPrompt: ''
+  highlightedPrompt: '',
+  stateTimeline: []
 });
+
+const normalizeEditorFrameTime = (value) => {
+  const parsedValue = Number(value);
+  return Number.isFinite(parsedValue) && parsedValue >= 0 ? Number(parsedValue.toFixed(2)) : null;
+};
+
+const createCharacterStateTimelineItem = (stateItem = {}, index = 0, fallbackStartTime = 0, fallbackEndTime = 1) => {
+  const startTime =
+    normalizeEditorFrameTime(stateItem.startTime ?? stateItem.start_time) ?? Number(fallbackStartTime.toFixed(2));
+  const safeFallbackEnd = Math.max(startTime + 0.3, fallbackEndTime);
+  const endTime =
+    normalizeEditorFrameTime(stateItem.endTime ?? stateItem.end_time) ?? Number(safeFallbackEnd.toFixed(2));
+
+  return {
+    id: String(stateItem.id ?? `state_${index + 1}`),
+    startTime: startTime.toFixed(2),
+    endTime: Math.max(startTime + 0.3, endTime).toFixed(2),
+    stateName: String(stateItem.stateName ?? stateItem.state_name ?? '').trim(),
+    summary: String(stateItem.summary ?? '').trim(),
+    continuityPrompt: String(stateItem.continuityPrompt ?? stateItem.continuity_prompt ?? '').trim(),
+    representativeFrameTime:
+      normalizeEditorFrameTime(stateItem.representativeFrameTime ?? stateItem.representative_frame_time) !== null
+        ? Number(
+            normalizeEditorFrameTime(stateItem.representativeFrameTime ?? stateItem.representative_frame_time).toFixed(2)
+          ).toFixed(2)
+        : '',
+    representativeFrameNote: String(
+      stateItem.representativeFrameNote ??
+        stateItem.representative_frame_note ??
+        stateItem.representativeFrameReason ??
+        stateItem.representative_frame_reason ??
+        ''
+    ).trim(),
+    representativeFrameImagePath:
+      String(stateItem.representativeFrameImagePath ?? stateItem.representative_frame_image_path ?? '').trim(),
+    representativeFrameImageUrl: toAbsoluteAssetUrl(
+      stateItem.representativeFrameImageUrl ?? stateItem.representative_frame_image_url
+    )
+  };
+};
 
 const isResourceEditorEmpty = (state) => {
   return !state?.resourceType && !state?.resourceId && !state?.resourceName && !state?.draftPrompt;
@@ -394,6 +436,10 @@ const AnalysisDisplay = ({
   backgroundAssetsError = '',
   className = '',
   compactMode = false,
+  analysisOptions = {
+    extractSubtitles: true,
+    parseAudio: true
+  },
   loading = false,
   error = '',
   progress = 0,
@@ -405,15 +451,19 @@ const AnalysisDisplay = ({
     message: ''
   },
   onAnalyze,
+  onAnalysisOptionsChange = () => {},
+  onAnalysisUpdated = () => {},
   onSplit
 }) => {
   const [activeTab, setActiveTab] = useState(compactMode ? 'characters' : 'overview');
   const [promptModalOpen, setPromptModalOpen] = useState(false);
   const [lightboxFrame, setLightboxFrame] = useState(null);
+  const [analysisOptionsOpen, setAnalysisOptionsOpen] = useState(false);
   const [resourceEditorOpen, setResourceEditorOpen] = useState(false);
   const [resourceEditor, setResourceEditor] = useState(createResourceEditorState);
   const [resourcePromptOverrides, setResourcePromptOverrides] = useState({});
   const [resourceOptimizingKey, setResourceOptimizingKey] = useState('');
+  const [characterTimelineSaving, setCharacterTimelineSaving] = useState(false);
   const [resourceEditorError, setResourceEditorError] = useState('');
   const [resourceImageAssets, setResourceImageAssets] = useState([]);
   const [resourceImageAssetsLoading, setResourceImageAssetsLoading] = useState(false);
@@ -451,7 +501,17 @@ const AnalysisDisplay = ({
     personalityPrompt: getCharacterPersonalityPrompt(character),
     sourcePrompt: buildCharacterResourcePrompt(character),
     draftPrompt: buildCharacterResourcePrompt(character),
-    highlightedPrompt: ''
+    highlightedPrompt: '',
+    stateTimeline: Array.isArray(character?.stateTimeline ?? character?.state_timeline)
+      ? (character?.stateTimeline ?? character?.state_timeline).map((stateItem, stateIndex) =>
+          createCharacterStateTimelineItem(
+            stateItem,
+            stateIndex,
+            getRepresentativeFrameTime(character) ?? 0,
+            video?.duration ?? (getRepresentativeFrameTime(character) ?? 1)
+          )
+        )
+      : []
   });
 
   const buildSceneResource = (background, index) => ({
@@ -537,7 +597,17 @@ const AnalysisDisplay = ({
       description: resource.description ?? '',
       sourcePrompt: resource.sourcePrompt,
       draftPrompt: resourcePromptOverrides[resourceKey]?.prompt || resource.sourcePrompt,
-      highlightedPrompt: resourcePromptOverrides[resourceKey]?.highlightedPrompt || ''
+      highlightedPrompt: resourcePromptOverrides[resourceKey]?.highlightedPrompt || '',
+      stateTimeline: Array.isArray(resource.stateTimeline)
+        ? resource.stateTimeline.map((stateItem, stateIndex) =>
+            createCharacterStateTimelineItem(
+              stateItem,
+              stateIndex,
+              resource.frameTime ?? 0,
+              video?.duration ?? (resource.frameTime ?? 1)
+            )
+          )
+        : []
     });
     setResourceEditorError('');
     setResourceEditorOpen(true);
@@ -548,6 +618,155 @@ const AnalysisDisplay = ({
       ...currentState,
       draftPrompt: nextValue
     }));
+  };
+
+  const updateResourceEditorField = (fieldName, value) => {
+    setResourceEditor((currentState) => ({
+      ...currentState,
+      [fieldName]: value
+    }));
+  };
+
+  const updateCharacterStateItem = (stateId, partialState) => {
+    setResourceEditor((currentState) => ({
+      ...currentState,
+      stateTimeline: (currentState.stateTimeline ?? []).map((stateItem) =>
+        stateItem.id === stateId
+          ? {
+              ...stateItem,
+              ...partialState
+            }
+          : stateItem
+      )
+    }));
+    setResourceEditorError('');
+  };
+
+  const addCharacterStateItem = () => {
+    setResourceEditor((currentState) => {
+      const currentTimeline = Array.isArray(currentState.stateTimeline) ? currentState.stateTimeline : [];
+      const lastState = currentTimeline[currentTimeline.length - 1] ?? null;
+      const fallbackStart = lastState ? Number(lastState.endTime || 0) : 0;
+      const fallbackEnd = Math.min(
+        Number(video?.duration ?? fallbackStart + 2),
+        Math.max(fallbackStart + 0.6, fallbackStart + 2)
+      );
+
+      return {
+        ...currentState,
+        stateTimeline: [
+          ...currentTimeline,
+          createCharacterStateTimelineItem(
+            {
+              id: `state_${Date.now()}`,
+              stateName: '',
+              summary: '',
+              continuityPrompt: '',
+              representativeFrameTime: Number(((fallbackStart + fallbackEnd) / 2).toFixed(2))
+            },
+            currentTimeline.length,
+            fallbackStart,
+            fallbackEnd
+          )
+        ]
+      };
+    });
+    setResourceEditorError('');
+  };
+
+  const removeCharacterStateItem = (stateId) => {
+    setResourceEditor((currentState) => ({
+      ...currentState,
+      stateTimeline: (currentState.stateTimeline ?? []).filter((stateItem) => stateItem.id !== stateId)
+    }));
+    setResourceEditorError('');
+  };
+
+  const saveCharacterTimeline = async () => {
+    if (!video?.id || resourceEditor.resourceType !== 'character' || !resourceEditor.resourceId) {
+      return null;
+    }
+
+    const nextCharacters = characters.map((character, index) => {
+      const characterId = character?.id || character?.name || `character_${index + 1}`;
+      const baseCharacter =
+        typeof character === 'object'
+          ? {
+              ...character,
+              id: characterId,
+              name: character?.name || `角色 ${index + 1}`,
+              appearancePrompt: character?.appearancePrompt ?? '',
+              personalityPrompt: character?.personalityPrompt ?? '',
+              representativeFrameTime: character?.representativeFrameTime ?? null,
+              representativeFrameNote: character?.representativeFrameNote ?? '',
+              stateTimeline: Array.isArray(character?.stateTimeline) ? character.stateTimeline : []
+            }
+          : {
+              id: characterId,
+              name: String(character ?? '').trim() || `角色 ${index + 1}`,
+              appearancePrompt: '',
+              personalityPrompt: '',
+              representativeFrameTime: null,
+              representativeFrameNote: '',
+              stateTimeline: []
+            };
+
+      if (characterId !== resourceEditor.resourceId) {
+        return baseCharacter;
+      }
+
+      return {
+        ...baseCharacter,
+        name: resourceEditor.resourceName,
+        appearancePrompt: resourceEditor.appearancePrompt,
+        personalityPrompt: resourceEditor.personalityPrompt,
+        representativeFrameTime: resourceEditor.frameTime ?? null,
+        representativeFrameNote: resourceEditor.frameNote ?? '',
+        stateTimeline: (resourceEditor.stateTimeline ?? []).map((stateItem, stateIndex) => ({
+          id: String(stateItem.id ?? `state_${stateIndex + 1}`),
+          startTime: Number(stateItem.startTime),
+          endTime: Number(stateItem.endTime),
+          stateName: String(stateItem.stateName ?? '').trim() || `状态 ${stateIndex + 1}`,
+          summary: String(stateItem.summary ?? '').trim(),
+          continuityPrompt: String(stateItem.continuityPrompt ?? '').trim(),
+          representativeFrameTime: String(stateItem.representativeFrameTime ?? '').trim()
+            ? Number(stateItem.representativeFrameTime)
+            : null,
+          representativeFrameNote: String(stateItem.representativeFrameNote ?? '').trim()
+        }))
+      };
+    });
+
+    setCharacterTimelineSaving(true);
+    setResourceEditorError('');
+
+    try {
+      const nextAnalysis = await updateAnalysisCharactersRequest(Number(video.id), nextCharacters);
+      onAnalysisUpdated(nextAnalysis);
+      setResourceEditor((currentState) => ({
+        ...currentState,
+        stateTimeline: Array.isArray(
+          nextAnalysis?.characters?.find((character) => character.id === currentState.resourceId)?.stateTimeline
+        )
+          ? nextAnalysis.characters
+              .find((character) => character.id === currentState.resourceId)
+              .stateTimeline.map((stateItem, stateIndex) =>
+                createCharacterStateTimelineItem(
+                  stateItem,
+                  stateIndex,
+                  currentState.frameTime ?? 0,
+                  video?.duration ?? (currentState.frameTime ?? 1)
+                )
+              )
+          : currentState.stateTimeline
+      }));
+      return nextAnalysis;
+    } catch (requestError) {
+      setResourceEditorError(requestError?.message || '角色状态时间线保存失败，请稍后重试。');
+      return null;
+    } finally {
+      setCharacterTimelineSaving(false);
+    }
   };
 
   const optimizeResourcePrompt = async (resource = null, promptOverride = '') => {
@@ -577,7 +796,17 @@ const AnalysisDisplay = ({
       description: targetResource.description ?? '',
       sourcePrompt: targetResource.sourcePrompt || basePrompt,
       draftPrompt: basePrompt,
-      highlightedPrompt: resource && getResourceKey(resourceEditor) !== resourceKey ? '' : resourceEditor.highlightedPrompt
+      highlightedPrompt: resource && getResourceKey(resourceEditor) !== resourceKey ? '' : resourceEditor.highlightedPrompt,
+      stateTimeline: Array.isArray(targetResource.stateTimeline)
+        ? targetResource.stateTimeline.map((stateItem, stateIndex) =>
+            createCharacterStateTimelineItem(
+              stateItem,
+              stateIndex,
+              targetResource.frameTime ?? 0,
+              video?.duration ?? (targetResource.frameTime ?? 1)
+            )
+          )
+        : []
     });
     setResourceEditorError('');
     setResourceOptimizingKey(resourceKey);
@@ -890,15 +1119,28 @@ const AnalysisDisplay = ({
         description={lightboxFrame.description}
         size="lg"
       >
-        <VideoFramePreview
-          videoUrl={lightboxFrame.videoUrl}
-          timeSeconds={lightboxFrame.timeSeconds}
-          originalTimeSeconds={lightboxFrame.originalTimeSeconds}
-          label={lightboxFrame.label}
-          note={lightboxFrame.note}
-          requestedTimeLabel={lightboxFrame.requestedTimeLabel}
-          className="max-w-4xl"
-        />
+        {lightboxFrame.imageUrl ? (
+          <div className="space-y-3">
+            <img
+              src={lightboxFrame.imageUrl}
+              alt={lightboxFrame.title}
+              className="max-h-[70vh] w-full rounded-[20px] border border-white/10 object-contain"
+            />
+            {lightboxFrame.note ? (
+              <p className="text-sm leading-6 text-white/70">{lightboxFrame.note}</p>
+            ) : null}
+          </div>
+        ) : (
+          <VideoFramePreview
+            videoUrl={lightboxFrame.videoUrl}
+            timeSeconds={lightboxFrame.timeSeconds}
+            originalTimeSeconds={lightboxFrame.originalTimeSeconds}
+            label={lightboxFrame.label}
+            note={lightboxFrame.note}
+            requestedTimeLabel={lightboxFrame.requestedTimeLabel}
+            className="max-w-4xl"
+          />
+        )}
       </ModalSheet>
     );
   };
@@ -930,11 +1172,24 @@ const AnalysisDisplay = ({
               </span>
             </div>
             {generatedAssetMap.get(variant.id)?.assetUrl ? (
-              <img
-                src={generatedAssetMap.get(variant.id).assetUrl}
-                alt={`${resource.resourceName} ${variant.label}`}
-                className="resource-generated-image"
-              />
+              <button
+                type="button"
+                className="block w-full"
+                onClick={() =>
+                  setLightboxFrame({
+                    title: `${resource.resourceName} · ${variant.label}`,
+                    description: generatedAssetMap.get(variant.id)?.prompt || resource.sourcePrompt,
+                    imageUrl: generatedAssetMap.get(variant.id).assetUrl,
+                    note: generatedAssetMap.get(variant.id)?.prompt || ''
+                  })
+                }
+              >
+                <img
+                  src={generatedAssetMap.get(variant.id).assetUrl}
+                  alt={`${resource.resourceName} ${variant.label}`}
+                  className="resource-generated-image"
+                />
+              </button>
             ) : (
               <>
                 <p className="mt-3 text-xs font-semibold text-white">{variant.label}</p>
@@ -1270,25 +1525,36 @@ const AnalysisDisplay = ({
 
             <div className="space-y-3">
               {resourceEditor.resourceType === 'character' ? (
-                <div className="resource-attribute-grid">
-                  <div className="resource-attribute-card">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="resource-attribute-card">
                     <p className="resource-attribute-label">外表描述</p>
-                    <p className="resource-attribute-value">
-                      {resourceEditor.appearancePrompt || '待补充'}
-                    </p>
-                  </div>
-                  <div className="resource-attribute-card">
+                    <textarea
+                      value={resourceEditor.appearancePrompt}
+                      onChange={(event) => updateResourceEditorField('appearancePrompt', event.target.value)}
+                      className="mt-2 min-h-[104px] w-full rounded-[14px] border border-white/10 bg-black/20 px-3 py-2 text-[13px] leading-6 text-white outline-none"
+                      placeholder="角色外表、服装、发型、体态和材质细节"
+                    />
+                  </label>
+                  <label className="resource-attribute-card">
                     <p className="resource-attribute-label">性格气质</p>
-                    <p className="resource-attribute-value">
-                      {resourceEditor.personalityPrompt || '待补充'}
-                    </p>
-                  </div>
+                    <textarea
+                      value={resourceEditor.personalityPrompt}
+                      onChange={(event) => updateResourceEditorField('personalityPrompt', event.target.value)}
+                      className="mt-2 min-h-[104px] w-full rounded-[14px] border border-white/10 bg-black/20 px-3 py-2 text-[13px] leading-6 text-white outline-none"
+                      placeholder="角色气质、情绪底色、表演风格和行为习惯"
+                    />
+                  </label>
                 </div>
               ) : (
-                <div className="resource-attribute-card">
+                <label className="resource-attribute-card">
                   <p className="resource-attribute-label">场景描述</p>
-                  <p className="resource-attribute-value">{resourceEditor.description || '待补充'}</p>
-                </div>
+                  <textarea
+                    value={resourceEditor.description}
+                    onChange={(event) => updateResourceEditorField('description', event.target.value)}
+                    className="mt-2 min-h-[120px] w-full rounded-[14px] border border-white/10 bg-black/20 px-3 py-2 text-[13px] leading-6 text-white outline-none"
+                    placeholder="场景布局、材质、光线和可复用视觉特征"
+                  />
+                </label>
               )}
 
               <PromptPreview
@@ -1330,7 +1596,192 @@ const AnalysisDisplay = ({
                 mentionSummaryLabel="资源标签"
               />
 
+              {resourceEditor.resourceType === 'character' ? (
+                <section className="rounded-[20px] border border-white/10 bg-black/20 px-4 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/45">
+                        状态时间线
+                      </p>
+                      <p className="mt-1 text-[12px] leading-5 text-white/60">
+                        用整片绝对秒数记录该角色的阶段性状态。镜头会自动继承同时间点上最近有效的角色状态。
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.08]"
+                      onClick={addCharacterStateItem}
+                    >
+                      新增状态节点
+                    </button>
+                  </div>
+
+                  <div className="mt-4 space-y-3">
+                    {(resourceEditor.stateTimeline ?? []).length ? (
+                      resourceEditor.stateTimeline.map((stateItem, stateIndex) => (
+                        <article
+                          key={`${resourceEditor.resourceId}-${stateItem.id}`}
+                          className="rounded-[16px] border border-white/10 bg-white/[0.04] px-3 py-3"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <p className="text-sm font-semibold text-white">
+                              状态 {String(stateIndex + 1).padStart(2, '0')}
+                            </p>
+                            <button
+                              type="button"
+                              className="rounded-full border border-rose-500/20 bg-rose-500/10 px-3 py-1 text-[11px] font-semibold text-rose-100 transition hover:border-rose-500/35 hover:bg-rose-500/15"
+                              onClick={() => removeCharacterStateItem(stateItem.id)}
+                            >
+                              删除
+                            </button>
+                          </div>
+
+                          <div className="mt-3 grid gap-3 md:grid-cols-3">
+                            <label className="space-y-1 text-[11px] text-white/55">
+                              <span>开始秒数</span>
+                              <input
+                                type="number"
+                                step="0.1"
+                                min="0"
+                                value={stateItem.startTime}
+                                onChange={(event) => updateCharacterStateItem(stateItem.id, { startTime: event.target.value })}
+                                className="w-full rounded-[12px] border border-white/10 bg-black/25 px-3 py-2 text-[12px] text-white outline-none"
+                              />
+                            </label>
+                            <label className="space-y-1 text-[11px] text-white/55">
+                              <span>结束秒数</span>
+                              <input
+                                type="number"
+                                step="0.1"
+                                min="0"
+                                value={stateItem.endTime}
+                                onChange={(event) => updateCharacterStateItem(stateItem.id, { endTime: event.target.value })}
+                                className="w-full rounded-[12px] border border-white/10 bg-black/25 px-3 py-2 text-[12px] text-white outline-none"
+                              />
+                            </label>
+                            <label className="space-y-1 text-[11px] text-white/55">
+                              <span>状态参考帧秒数</span>
+                              <input
+                                type="number"
+                                step="0.1"
+                                min="0"
+                                value={stateItem.representativeFrameTime}
+                                onChange={(event) =>
+                                  updateCharacterStateItem(stateItem.id, { representativeFrameTime: event.target.value })
+                                }
+                                className="w-full rounded-[12px] border border-white/10 bg-black/25 px-3 py-2 text-[12px] text-white outline-none"
+                              />
+                            </label>
+                          </div>
+
+                          <div className="mt-3 grid gap-3 lg:grid-cols-[220px_minmax(0,1fr)]">
+                            <div className="rounded-[14px] border border-white/10 bg-black/20 p-2">
+                              {stateItem.representativeFrameImageUrl ? (
+                                <button
+                                  type="button"
+                                  className="block w-full"
+                                  onClick={() =>
+                                    setLightboxFrame({
+                                      title: `${resourceEditor.resourceName} · ${stateItem.stateName || `状态 ${stateIndex + 1}`}`,
+                                      description: stateItem.representativeFrameNote,
+                                      imageUrl: stateItem.representativeFrameImageUrl,
+                                      note: stateItem.continuityPrompt || stateItem.summary || stateItem.representativeFrameNote
+                                    })
+                                  }
+                                >
+                                  <img
+                                    src={stateItem.representativeFrameImageUrl}
+                                    alt={stateItem.stateName || `状态 ${stateIndex + 1}`}
+                                    className="h-[180px] w-full rounded-[12px] object-cover"
+                                  />
+                                </button>
+                              ) : (
+                                <VideoFramePreview
+                                  videoUrl={analysisFrameSource}
+                                  timeSeconds={
+                                    String(stateItem.representativeFrameTime ?? '').trim()
+                                      ? Number(stateItem.representativeFrameTime)
+                                      : null
+                                  }
+                                  originalTimeSeconds={
+                                    String(stateItem.representativeFrameTime ?? '').trim()
+                                      ? Number(stateItem.representativeFrameTime)
+                                      : null
+                                  }
+                                  label={stateItem.stateName || `状态 ${stateIndex + 1}`}
+                                  note={stateItem.representativeFrameNote || '保存后会生成稳定的状态参考帧。'}
+                                  requestedTimeLabel="整片时间"
+                                />
+                              )}
+                            </div>
+
+                            <div className="space-y-3">
+                              <label className="block space-y-1 text-[11px] text-white/55">
+                                <span>状态名</span>
+                                <input
+                                  type="text"
+                                  value={stateItem.stateName}
+                                  onChange={(event) => updateCharacterStateItem(stateItem.id, { stateName: event.target.value })}
+                                  className="w-full rounded-[12px] border border-white/10 bg-black/25 px-3 py-2 text-[12px] text-white outline-none"
+                                  placeholder="例如：右手受伤、包扎阶段、衣服破损"
+                                />
+                              </label>
+                              <label className="block space-y-1 text-[11px] text-white/55">
+                                <span>状态摘要</span>
+                                <textarea
+                                  value={stateItem.summary}
+                                  onChange={(event) => updateCharacterStateItem(stateItem.id, { summary: event.target.value })}
+                                  className="min-h-[88px] w-full rounded-[12px] border border-white/10 bg-black/25 px-3 py-2 text-[12px] leading-6 text-white outline-none"
+                                  placeholder="描述该阶段的身体、服装、妆造和可见变化"
+                                />
+                              </label>
+                              <label className="block space-y-1 text-[11px] text-white/55">
+                                <span>连续性提示词</span>
+                                <textarea
+                                  value={stateItem.continuityPrompt}
+                                  onChange={(event) =>
+                                    updateCharacterStateItem(stateItem.id, { continuityPrompt: event.target.value })
+                                  }
+                                  className="min-h-[88px] w-full rounded-[12px] border border-white/10 bg-black/25 px-3 py-2 text-[12px] leading-6 text-white outline-none"
+                                  placeholder="直接服务镜头生成，强调该状态必须持续到后续镜头"
+                                />
+                              </label>
+                              <label className="block space-y-1 text-[11px] text-white/55">
+                                <span>参考帧说明</span>
+                                <input
+                                  type="text"
+                                  value={stateItem.representativeFrameNote}
+                                  onChange={(event) =>
+                                    updateCharacterStateItem(stateItem.id, { representativeFrameNote: event.target.value })
+                                  }
+                                  className="w-full rounded-[12px] border border-white/10 bg-black/25 px-3 py-2 text-[12px] text-white outline-none"
+                                  placeholder="说明这个参考帧为何能代表当前状态"
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        </article>
+                      ))
+                    ) : (
+                      <div className="rounded-[16px] border border-dashed border-white/10 bg-black/10 px-4 py-4 text-[12px] text-white/60">
+                        当前角色还没有状态时间线。可以先新增一个基础状态，后续再补受伤、包扎或妆造变化阶段。
+                      </div>
+                    )}
+                  </div>
+                </section>
+              ) : null}
+
               <div className="flex flex-wrap items-center justify-end gap-2">
+                {resourceEditor.resourceType === 'character' ? (
+                  <button
+                    type="button"
+                    className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/75 transition hover:border-white/20 hover:bg-white/[0.08] disabled:opacity-50"
+                    disabled={characterTimelineSaving}
+                    onClick={() => void saveCharacterTimeline()}
+                  >
+                    {characterTimelineSaving ? '保存状态中...' : '保存角色状态时间线'}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 transition hover:border-emerald-500/35 hover:bg-emerald-500/15 disabled:opacity-50"
@@ -1605,6 +2056,14 @@ const AnalysisDisplay = ({
             <button
               type="button"
               className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.06]"
+              onClick={() => setAnalysisOptionsOpen(true)}
+              disabled={!video}
+            >
+              分析选项
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.06]"
               onClick={() => void onAnalyze()}
               disabled={!video || loading}
             >
@@ -1644,6 +2103,12 @@ const AnalysisDisplay = ({
                     status={analysis ? analysisStatusTone : 'idle'}
                     label={analysis ? analysisStatusLabel : '等待分析'}
                   />
+                  <span className="toolbar-pill">
+                    字幕解析 {analysisOptions?.extractSubtitles ? '开' : '关'}
+                  </span>
+                  <span className="toolbar-pill">
+                    音频解析 {analysisOptions?.parseAudio ? '开' : '关'}
+                  </span>
                   <span className="toolbar-pill">时长 {video.duration ? formatDuration(video.duration) : '待探测'}</span>
                   <span className="toolbar-pill">典型帧 {keyFrameCount}</span>
                   <span className="toolbar-pill">片段提示词 {timeAnchorPromptCount}</span>
@@ -1939,6 +2404,58 @@ const AnalysisDisplay = ({
         />
       </ModalSheet>
 
+      <ModalSheet
+        open={analysisOptionsOpen}
+        onClose={() => setAnalysisOptionsOpen(false)}
+        title="分析选项"
+        description="这些选项会随当前视频保存，并在下一次整片理解时决定是否抽取字幕和说话节奏。当前默认双开。"
+        size="md"
+      >
+        <div className="space-y-4">
+          <label className="flex items-start justify-between gap-4 rounded-[18px] border border-white/10 bg-black/20 px-4 py-4">
+            <div>
+              <p className="text-sm font-semibold text-white">提取字幕</p>
+              <p className="mt-1 text-[12px] leading-5 text-white/60">
+                整片理解时返回每个小镜头的对白全文和逐句字幕，并在镜头编辑区提供复制与编辑。
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={Boolean(analysisOptions?.extractSubtitles)}
+              onChange={(event) =>
+                onAnalysisOptionsChange({
+                  extractSubtitles: event.target.checked
+                })
+              }
+              className="mt-1 h-4 w-4 accent-emerald-400"
+            />
+          </label>
+
+          <label className="flex items-start justify-between gap-4 rounded-[18px] border border-white/10 bg-black/20 px-4 py-4">
+            <div>
+              <p className="text-sm font-semibold text-white">音频解析</p>
+              <p className="mt-1 text-[12px] leading-5 text-white/60">
+                分析说话方式、停顿、语速与情绪，后续说话镜头会优先用原镜头音频做口型参考。
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={Boolean(analysisOptions?.parseAudio)}
+              onChange={(event) =>
+                onAnalysisOptionsChange({
+                  parseAudio: event.target.checked
+                })
+              }
+              className="mt-1 h-4 w-4 accent-emerald-400"
+            />
+          </label>
+
+          <div className="rounded-[18px] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-[12px] leading-6 text-amber-100">
+            重新点击“开始分析 / 重新分析”后，新选项才会对整片理解结果生效。当前镜头字幕和口型真值默认优先使用原镜头音频。
+          </div>
+        </div>
+      </ModalSheet>
+
       {renderResourceEditModal()}
       {renderPreviewModal()}
     </>
@@ -1971,6 +2488,10 @@ AnalysisDisplay.propTypes = {
   backgroundAssetsError: PropTypes.string,
   className: PropTypes.string,
   compactMode: PropTypes.bool,
+  analysisOptions: PropTypes.shape({
+    extractSubtitles: PropTypes.bool,
+    parseAudio: PropTypes.bool
+  }),
   loading: PropTypes.bool,
   error: PropTypes.string,
   progress: PropTypes.number,
@@ -1982,6 +2503,8 @@ AnalysisDisplay.propTypes = {
     message: PropTypes.string
   }),
   onAnalyze: PropTypes.func.isRequired,
+  onAnalysisOptionsChange: PropTypes.func,
+  onAnalysisUpdated: PropTypes.func,
   onSplit: PropTypes.func.isRequired
 };
 

@@ -12,14 +12,20 @@ import {
 import logger from '../utils/logger.js';
 
 const DEFAULT_ANALYSIS_OPTIONS = Object.freeze({
-  extractSubtitles: false,
-  parseAudio: false
+  extractSubtitles: true,
+  parseAudio: true
 });
 
 const normalizeAnalysisOptions = (value = null) => {
   return {
-    extractSubtitles: Boolean(value?.extractSubtitles ?? value?.extract_subtitles),
-    parseAudio: Boolean(value?.parseAudio ?? value?.parse_audio)
+    extractSubtitles:
+      typeof value?.extractSubtitles === 'boolean' || typeof value?.extract_subtitles === 'boolean'
+        ? Boolean(value?.extractSubtitles ?? value?.extract_subtitles)
+        : DEFAULT_ANALYSIS_OPTIONS.extractSubtitles,
+    parseAudio:
+      typeof value?.parseAudio === 'boolean' || typeof value?.parse_audio === 'boolean'
+        ? Boolean(value?.parseAudio ?? value?.parse_audio)
+        : DEFAULT_ANALYSIS_OPTIONS.parseAudio
   };
 };
 
@@ -290,15 +296,29 @@ const rebuildShotSpeechAssetsForSegment = async ({
         };
       }
 
-      const extractedSpeech = await extractShotSpeechPayload({
-        segment,
-        shot: {
-          ...shot,
-          sourceAudioFilePath: String(sourceAudio?.filePath ?? '').trim(),
-          sourceAudioFileUrl: String(sourceAudio?.fileUrl ?? '').trim()
-        },
-        analysisOptions: normalizedOptions
+      const existingSpeech = normalizeShotSpeech(shot?.speech ?? null, {
+        durationSeconds: Number(shot?.durationSeconds ?? 0),
+        fallbackStatus: 'idle'
       });
+      const shouldReuseExistingSpeech = Boolean(
+        existingSpeech.sourceOfTruth === 'edited_text' ||
+          existingSpeech.transcript ||
+          existingSpeech.subtitleLines.length
+      );
+      const extractedSpeech = shouldReuseExistingSpeech
+        ? {
+            ...existingSpeech,
+            extractionStatus: existingSpeech.extractionStatus || 'completed'
+          }
+        : await extractShotSpeechPayload({
+            segment,
+            shot: {
+              ...shot,
+              sourceAudioFilePath: String(sourceAudio?.filePath ?? '').trim(),
+              sourceAudioFileUrl: String(sourceAudio?.fileUrl ?? '').trim()
+            },
+            analysisOptions: normalizedOptions
+          });
       const persistedSpeech = await persistShotSubtitleFile({
         segment,
         shot,

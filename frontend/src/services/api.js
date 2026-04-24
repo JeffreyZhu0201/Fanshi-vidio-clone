@@ -177,6 +177,14 @@ const getAnalysis = async (videoId) => {
   return response.data;
 };
 
+const updateAnalysisCharacters = async (videoId, characters) => {
+  const response = await api.put(`/analysis/${videoId}/characters`, {
+    characters
+  });
+
+  return response.data;
+};
+
 const getBackgroundAssets = async (videoId) => {
   const response = await api.get(`/background-assets/${videoId}`);
   return response.data;
@@ -317,6 +325,7 @@ export {
   generateShotBatch,
   generateResourceImages,
   getAnalysis,
+  updateAnalysisCharacters,
   getBackgroundAssets,
   getGenerationTask,
   getShotGenerationTask,

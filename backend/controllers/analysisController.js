@@ -1,7 +1,8 @@
 import {
   analyzeVideoById,
   getAnalysisByVideoId,
-  optimizePrompt
+  optimizePrompt,
+  updateAnalysisCharactersByVideoId
 } from '../services/analysisService.js';
 
 const analyzeVideo = async (request, response) => {
@@ -11,6 +12,11 @@ const analyzeVideo = async (request, response) => {
 
 const fetchAnalysis = async (request, response) => {
   const analysis = await getAnalysisByVideoId(request.params.videoId);
+  response.status(200).json(analysis);
+};
+
+const updateAnalysisCharacters = async (request, response) => {
+  const analysis = await updateAnalysisCharactersByVideoId(request.params.videoId, request.body.characters);
   response.status(200).json(analysis);
 };
 
@@ -34,4 +40,4 @@ const optimizePromptController = async (request, response) => {
   response.status(200).json(result);
 };
 
-export { analyzeVideo, fetchAnalysis, optimizePromptController };
+export { analyzeVideo, fetchAnalysis, updateAnalysisCharacters, optimizePromptController };

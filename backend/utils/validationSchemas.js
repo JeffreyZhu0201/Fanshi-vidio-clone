@@ -33,11 +33,11 @@ const uploadVideoBodySchema = Joi.object({
 });
 
 const analysisOptionsSchema = Joi.object({
-  extractSubtitles: Joi.boolean().default(false),
-  parseAudio: Joi.boolean().default(false)
+  extractSubtitles: Joi.boolean().default(true),
+  parseAudio: Joi.boolean().default(true)
 }).default({
-  extractSubtitles: false,
-  parseAudio: false
+  extractSubtitles: true,
+  parseAudio: true
 });
 
 const analyzeVideoBodySchema = Joi.object({
@@ -165,6 +165,30 @@ const subtitleLineSchema = Joi.object({
   text: Joi.string().trim().allow('').required()
 });
 
+const characterStateTimelineItemSchema = Joi.object({
+  id: Joi.string().trim().allow(''),
+  startTime: Joi.number().min(0).required(),
+  endTime: Joi.number().greater(Joi.ref('startTime')).required(),
+  stateName: Joi.string().trim().min(1).required(),
+  summary: Joi.string().trim().allow(''),
+  continuityPrompt: Joi.string().trim().allow(''),
+  representativeFrameTime: Joi.number().min(0).allow(null),
+  representativeFrameNote: Joi.string().trim().allow(''),
+  representativeFrameImagePath: Joi.string().trim().allow(''),
+  representativeFrameImageUrl: Joi.string().trim().allow('')
+});
+
+const shotCharacterStateRefSchema = Joi.object({
+  characterName: Joi.string().trim().min(1).required(),
+  stateId: Joi.string().trim().allow(''),
+  stateName: Joi.string().trim().allow(''),
+  summary: Joi.string().trim().allow(''),
+  continuityPrompt: Joi.string().trim().allow(''),
+  representativeFrameTime: Joi.number().min(0).allow(null),
+  representativeFrameImagePath: Joi.string().trim().allow(''),
+  representativeFrameImageUrl: Joi.string().trim().allow('')
+});
+
 const shotSpeechSchema = Joi.object({
   transcript: Joi.string().trim().allow(''),
   subtitleLines: Joi.array().items(subtitleLineSchema).default([]),
@@ -187,11 +211,26 @@ const segmentShotDefinitionSchema = Joi.object({
   characterNames: Joi.array().items(Joi.string().trim().min(1)).default([]),
   representativeFrameTime: Joi.number().min(0).allow(null),
   representativeFrameNote: Joi.string().trim().allow(''),
-  speech: shotSpeechSchema.optional()
+  speech: shotSpeechSchema.optional(),
+  characterStateRefs: Joi.array().items(shotCharacterStateRefSchema).default([])
 });
 
 const updateSegmentShotsBodySchema = Joi.object({
   shots: Joi.array().items(segmentShotDefinitionSchema).min(1).required()
+});
+
+const analysisCharacterSchema = Joi.object({
+  id: Joi.string().trim().allow(''),
+  name: Joi.string().trim().min(1).required(),
+  appearancePrompt: Joi.string().trim().allow(''),
+  personalityPrompt: Joi.string().trim().allow(''),
+  representativeFrameTime: Joi.number().min(0).allow(null),
+  representativeFrameNote: Joi.string().trim().allow(''),
+  stateTimeline: Joi.array().items(characterStateTimelineItemSchema).default([])
+});
+
+const updateAnalysisCharactersBodySchema = Joi.object({
+  characters: Joi.array().items(analysisCharacterSchema).min(1).required()
 });
 
 const generateResourceImagesBodySchema = Joi.object({
@@ -241,6 +280,7 @@ export {
   generateShotBodySchema,
   generateShotBatchBodySchema,
   updateSegmentShotsBodySchema,
+  updateAnalysisCharactersBodySchema,
   generateResourceImagesBodySchema,
   mergeStartBodySchema,
   monitoringEventBodySchema

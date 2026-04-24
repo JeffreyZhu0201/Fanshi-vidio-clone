@@ -92,7 +92,19 @@ const buildVideoAnalysisPrompt = ({ video }) => {
             appearancePrompt: '角色完整形象设定',
             personalityPrompt: '角色的性格气质设定',
             representativeFrameTime: 1.2,
-            representativeFrameNote: '该角色的典型帧说明'
+            representativeFrameNote: '该角色的典型帧说明',
+            stateTimeline: [
+              {
+                id: 'state_1',
+                startTime: 0,
+                endTime: 6.4,
+                stateName: '基础状态',
+                summary: '角色当前阶段的外形、服装、身体完整度和情绪状态。',
+                continuityPrompt: '后续镜头继续保持该状态，不要让伤势、服装破损或妆造突然消失。',
+                representativeFrameTime: 1.4,
+                representativeFrameNote: '最能代表这个状态的画面说明'
+              }
+            ]
           }
         ],
         backgrounds: [
@@ -125,7 +137,31 @@ const buildVideoAnalysisPrompt = ({ video }) => {
                 sceneNames: ['场景名称'],
                 characterNames: ['角色名'],
                 representativeFrameTime: 1.1,
-                representativeFrameNote: '该镜头的典型帧说明'
+                representativeFrameNote: '该镜头的典型帧说明',
+                speech: {
+                  transcript: '镜头对白全文，没有对白时返回空字符串',
+                  subtitleLines: [
+                    {
+                      id: 'subtitle_1',
+                      startTime: 0,
+                      endTime: 0.9,
+                      text: '逐句字幕文本'
+                    }
+                  ],
+                  speechStyle: '语速、停顿、情绪、语气、口型明显程度、说话力度等中文说明',
+                  hasDialogue: true,
+                  extractionStatus: 'completed',
+                  extractionError: '',
+                  sourceOfTruth: 'extracted'
+                },
+                characterStateRefs: [
+                  {
+                    characterName: '角色名',
+                    stateId: 'state_1',
+                    stateName: '基础状态',
+                    continuityPrompt: '当前镜头继续保持角色该阶段的身体与造型状态'
+                  }
+                ]
               }
             ]
           }
@@ -141,34 +177,41 @@ const buildVideoAnalysisPrompt = ({ video }) => {
     '2. characters 至少提取主要角色，name 要稳定，appearancePrompt 必须是可直接用于视频生成的人物外观设定。',
     '3. 每个 character 还必须返回 personalityPrompt，用中文概括角色的性格气质、情绪底色、行为风格或表演状态，方便后续角色资源与生成提示词复用。',
     '4. 每个 character 都要返回 representativeFrameTime，表示最能代表该角色外观的时间点（单位秒）；representativeFrameNote 简要说明为什么选择该帧。',
-    '5. backgrounds 需要尽量多提取对后续重生成有价值的可复用场景资源，不只提大场景；同一大场景中的稳定子空间、机位常驻区域、布景核心角落、走廊、门口、窗边、吧台、沙发区等，只要能独立复用，都可以沉淀成单独场景资源。',
-    '6. 每个 background 都要返回 scenePrompt，内容是可直接用于生成该场景的中文场景提示词，同时返回 representativeFrameTime 和 representativeFrameNote。',
-    '7. 先识别整片有哪些可复用场景，并把它们沉淀到 backgrounds 这个场景资源库里；如果同一大场景内部有多个视觉差异稳定且值得复用的子空间，也要拆开沉淀。',
-    '8. timeAnchors 必须覆盖完整视频，startTime 和 endTime 为数字秒，严格按时间升序，不要重叠，不要遗漏关键内容。',
-    '9. 片段切分必须以场景切换为硬边界；只有在同一场景内动作阶段明显不同且确实需要独立生成时，才继续细分。',
-    '10. 每个 timeAnchor 代表一个后续可独立生成的片段，而不是纯观感镜头；片段边界要尽量保证动作完整、人物连续、场景切换清晰、前后文衔接稳定。',
-    '11. 避免输出明显过短且没有独立生成价值的片段；如果视频较短，也要保证切分结果仍然覆盖全片。',
-    '12. 每个 timeAnchor 都要给出 sceneSummary 和 scenePrompt；sceneSummary 用中文解释该片段发生了什么，scenePrompt 必须是可直接复用的片段场景提示词，包含场景、光线、主体关系、空间结构和镜头氛围，不要只写事件摘要。',
-    '13. 每个 timeAnchor 都必须绑定 backgroundId、backgroundAction、backgroundName。',
-    '14. 同一 backgroundId 首次出现的片段标记为 create_new，后续再次出现的同场景片段标记为 reuse_existing。',
-    '15. 每个 timeAnchor 都要返回 representativeFrameTime，且该时间点必须落在 startTime 到 endTime 之间；优先选择最适合做预览、最能代表人物或场景的画面，而不是机械取中点。',
-    '16. 如果同一场景在多个片段重复出现，允许每个片段返回更贴合该片段语境的 scenePrompt，但 backgroundId 必须保持一致。',
-    '17. 每个 timeAnchor 内都必须返回 shots 数组，用于描述该大片段下的小镜头；shots 是后续小镜头切片与生成的唯一真值来源。',
-    '18. shots 必须尽量按真实镜头切点拆分，优先对齐真实剪辑边界、机位变化、镜头运动变化、景别变化、构图重心变化、主体关系变化、场景切换、视线反打、人物进出画、明显动作 beat、焦点转移、对白换气节点和说话节奏断点，不要机械均分时间。',
-    '19. 如果同一连续动作里出现了明显的左/中/右站位变化、前后景关系变化、镜头角度变化、横移推拉变化、遮挡关系变化、表演节奏断点、口型状态切换或说话人主次变化，也应该继续拆成新的 shot。',
-    '20. 对 60 秒以内的视频，要尽量把观众能明显感知到的真实镜头都拆出来；不要把多个连续 cut、多个表演 beat 或多个构图中心合并成一个 shot。',
-    '21. 如果没有硬切，也要按动作阶段、视线关系、说话段落、镜头运动阶段和构图稳定区间细分 shot；除非画面长时间稳定且动作单一，否则单个 shot 尽量不要超过 4 秒。',
-    '22. shots 必须按整片绝对时间返回 startTime 和 endTime，严格落在所属 timeAnchor 范围内，按时间升序、无重叠，并尽量覆盖该大片段；timeAnchor 和 shot 的时间请尽量精确到 0.1 秒，不要只给粗略整秒。',
-    '23. 每个 shot 都要返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote；sceneNames 和 characterNames 都不能为空。',
-    '24. shot.summary 不能只写发生了什么，还要简要点出镜头核心动作、主体关系、构图变化或切分依据，让人能看出为什么这里单独成镜头。',
-    '25. representativeFrameTime 必须选择该镜头最有代表性的画面，不允许机械取中点；优先选择最适合作为预览图和生成参考图、最能体现该镜头构图、动作状态和人物表情的画面。',
-    '26. representativeFrameNote 需要说明这个时间点对应的关键画面，例如哪个动作定格、哪个表情瞬间、哪个构图最稳定。',
-    '27. shot.prompt 必须直接服务镜头级视频生成，必须写清：角色数量、谁在前景/中景/后景、人物在画面中的左/中/右位置、远近层次、朝向与视线方向、肢体姿态、运动轨迹、进出画方式、遮挡关系、镜头景别、拍摄角度、镜头运动、光线氛围、说话状态或口型是否明显，以及与前后镜头的连续关系。',
-    '28. shot.prompt 必须同时使用至少一个 @角色名 和至少一个 #场景名 引用，不要把资源正文直接展开，也不要只重复大片段摘要。',
-    '29. 如果一个 shot 涉及多个场景，需要在 sceneNames 中全部列出，并在 prompt 中按顺序引用对应的 #场景名。',
-    '30. 如果一个 shot 涉及多个角色，需要明确每个角色各自的位置、主次关系、视线关系和表演状态，而不是只列名字；如果角色是不完整出镜、背影、手部或 POV，也必须绑定稳定的人物名。',
-    '31. 如果角色较少，也至少保证 characters 返回 1 个对象。',
-    '32. 输出必须是合法 JSON，字段名保持与示例完全一致。'
+    '5. 每个 character 都必须返回 stateTimeline，用整片绝对秒数描述这个角色在全片中的阶段性状态变化，例如完好、受伤、包扎、衣物破损、沾血、妆造变化、疲惫加剧、姿势残缺等。',
+    '6. stateTimeline 必须按时间升序，startTime 和 endTime 是整片绝对秒数；允许时间上有空洞，但不要重叠；continuityPrompt 必须直接服务后续镜头连续性生成。',
+    '7. 如果某个角色在整片里没有明显状态变化，也要至少返回 1 个覆盖主要时段的基础状态。',
+    '8. backgrounds 需要尽量多提取对后续重生成有价值的可复用场景资源，不只提大场景；同一大场景中的稳定子空间、机位常驻区域、布景核心角落、走廊、门口、窗边、吧台、沙发区等，只要能独立复用，都可以沉淀成单独场景资源。',
+    '9. 每个 background 都要返回 scenePrompt，内容是可直接用于生成该场景的中文场景提示词，同时返回 representativeFrameTime 和 representativeFrameNote。',
+    '10. 先识别整片有哪些可复用场景，并把它们沉淀到 backgrounds 这个场景资源库里；如果同一大场景内部有多个视觉差异稳定且值得复用的子空间，也要拆开沉淀。',
+    '11. timeAnchors 必须覆盖完整视频，startTime 和 endTime 为数字秒，严格按时间升序，不要重叠，不要遗漏关键内容。',
+    '12. 片段切分必须以场景切换为硬边界；只有在同一场景内动作阶段明显不同且确实需要独立生成时，才继续细分。',
+    '13. 每个 timeAnchor 代表一个后续可独立生成的片段，而不是纯观感镜头；片段边界要尽量保证动作完整、人物连续、场景切换清晰、前后文衔接稳定。',
+    '14. 避免输出明显过短且没有独立生成价值的片段；如果视频较短，也要保证切分结果仍然覆盖全片。',
+    '15. 每个 timeAnchor 都要给出 sceneSummary 和 scenePrompt；sceneSummary 用中文解释该片段发生了什么，scenePrompt 必须是可直接复用的片段场景提示词，包含场景、光线、主体关系、空间结构和镜头氛围，不要只写事件摘要。',
+    '16. 每个 timeAnchor 都必须绑定 backgroundId、backgroundAction、backgroundName。',
+    '17. 同一 backgroundId 首次出现的片段标记为 create_new，后续再次出现的同场景片段标记为 reuse_existing。',
+    '18. 每个 timeAnchor 都要返回 representativeFrameTime，且该时间点必须落在 startTime 到 endTime 之间；优先选择最适合做预览、最能代表人物或场景的画面，而不是机械取中点。',
+    '19. 如果同一场景在多个片段重复出现，允许每个片段返回更贴合该片段语境的 scenePrompt，但 backgroundId 必须保持一致。',
+    '20. 每个 timeAnchor 内都必须返回 shots 数组，用于描述该大片段下的小镜头；shots 是后续小镜头切片与生成的唯一真值来源，同时也是字幕抽取、口型生成和状态连续性控制的唯一真值来源。',
+    '21. shots 必须尽量按真实镜头切点拆分，优先对齐真实剪辑边界、机位变化、镜头运动变化、景别变化、构图重心变化、主体关系变化、场景切换、视线反打、人物进出画、明显动作 beat、焦点转移、对白换气节点和说话节奏断点，不要机械均分时间。',
+    '22. 如果同一连续动作里出现了明显的左/中/右站位变化、前后景关系变化、镜头角度变化、横移推拉变化、遮挡关系变化、表演节奏断点、口型状态切换或说话人主次变化，也应该继续拆成新的 shot。',
+    '23. 对 60 秒以内的视频，要尽量把观众能明显感知到的真实镜头都拆出来；不要把多个连续 cut、多个表演 beat 或多个构图中心合并成一个 shot。',
+    '24. 如果没有硬切，也要按动作阶段、视线关系、说话段落、镜头运动阶段和构图稳定区间细分 shot；除非画面长时间稳定且动作单一，否则单个 shot 尽量不要超过 4 秒。',
+    '25. shots 必须按整片绝对时间返回 startTime 和 endTime，严格落在所属 timeAnchor 范围内，按时间升序、无重叠，并尽量覆盖该大片段；timeAnchor 和 shot 的时间请尽量精确到 0.1 秒，不要只给粗略整秒。',
+    '26. 每个 shot 都要返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote、speech、characterStateRefs；sceneNames 和 characterNames 都不能为空。',
+    '27. shot.summary 不能只写发生了什么，还要简要点出镜头核心动作、主体关系、构图变化或切分依据，让人能看出为什么这里单独成镜头。',
+    '28. representativeFrameTime 必须选择该镜头最有代表性的画面，不允许机械取中点；优先选择最适合作为预览图和生成参考图、最能体现该镜头构图、动作状态和人物表情的画面。',
+    '29. representativeFrameNote 需要说明这个时间点对应的关键画面，例如哪个动作定格、哪个表情瞬间、哪个构图最稳定。',
+    '30. shot.prompt 必须直接服务镜头级视频生成，必须写清：角色数量、谁在前景/中景/后景、人物在画面中的左/中/右位置、远近层次、朝向与视线方向、肢体姿态、运动轨迹、进出画方式、遮挡关系、镜头景别、拍摄角度、镜头运动、光线氛围、说话状态或口型是否明显，以及与前后镜头的连续关系。',
+    '31. shot.prompt 必须同时使用至少一个 @角色名 和至少一个 #场景名 引用，不要把资源正文直接展开，也不要只重复大片段摘要。',
+    '32. 如果一个 shot 涉及多个场景，需要在 sceneNames 中全部列出，并在 prompt 中按顺序引用对应的 #场景名。',
+    '33. 如果一个 shot 涉及多个角色，需要明确每个角色各自的位置、主次关系、视线关系和表演状态，而不是只列名字；如果角色是不完整出镜、背影、手部或 POV，也必须绑定稳定的人物名。',
+    '34. 每个 shot 都必须返回 speech：如果有对白，transcript 填完整对白全文，subtitleLines 按当前小镜头本地时间返回逐句字幕，speechStyle 用中文概括语速、停顿、情绪、语气、口型明显程度和说话力度；如果没有对白，也要返回 hasDialogue=false 的空结构。',
+    '35. subtitleLines[*].startTime 和 endTime 是相对当前 shot 本地时间，不是整片绝对秒数。',
+    '36. 每个 shot 都必须返回 characterStateRefs，并覆盖当前镜头实际出现的角色；对每个角色都要绑定最贴切的 stateId/stateName/continuityPrompt，不允许丢主角状态。',
+    '37. 当角色在后续镜头中出现伤势、断肢、包扎、服装破损、血迹、妆发变化等延续性状态时，后续 shot 的 characterStateRefs 必须继续引用对应状态，不要让状态突然恢复成基础状态。',
+    '38. 如果角色较少，也至少保证 characters 返回 1 个对象。',
+    '39. 输出必须是合法 JSON，字段名保持与示例完全一致。'
   ].join('\n');
 };
 

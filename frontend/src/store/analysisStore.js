@@ -3,8 +3,8 @@ import { create } from 'zustand';
 const createInitialAnalysisState = () => ({
   analysis: null,
   analysisOptions: {
-    extractSubtitles: false,
-    parseAudio: false
+    extractSubtitles: true,
+    parseAudio: true
   },
   loading: false,
   error: '',
@@ -24,8 +24,14 @@ const useAnalysisStore = create((set) => ({
     set({
       analysis,
       analysisOptions: {
-        extractSubtitles: Boolean(analysis?.analysis_options?.extractSubtitles ?? analysis?.analysis_options?.extract_subtitles),
-        parseAudio: Boolean(analysis?.analysis_options?.parseAudio ?? analysis?.analysis_options?.parse_audio)
+        extractSubtitles:
+          typeof (analysis?.analysis_options?.extractSubtitles ?? analysis?.analysis_options?.extract_subtitles) === 'boolean'
+            ? Boolean(analysis?.analysis_options?.extractSubtitles ?? analysis?.analysis_options?.extract_subtitles)
+            : true,
+        parseAudio:
+          typeof (analysis?.analysis_options?.parseAudio ?? analysis?.analysis_options?.parse_audio) === 'boolean'
+            ? Boolean(analysis?.analysis_options?.parseAudio ?? analysis?.analysis_options?.parse_audio)
+            : true
       },
       loading: false,
       error: '',
@@ -43,8 +49,14 @@ const useAnalysisStore = create((set) => ({
     set((state) => ({
       analysisOptions: {
         ...state.analysisOptions,
-        extractSubtitles: Boolean(analysisOptions?.extractSubtitles),
-        parseAudio: Boolean(analysisOptions?.parseAudio)
+        extractSubtitles:
+          typeof analysisOptions?.extractSubtitles === 'boolean'
+            ? analysisOptions.extractSubtitles
+            : state.analysisOptions.extractSubtitles,
+        parseAudio:
+          typeof analysisOptions?.parseAudio === 'boolean'
+            ? analysisOptions.parseAudio
+            : state.analysisOptions.parseAudio
       },
       lastUpdatedAt: new Date().toISOString()
     })),

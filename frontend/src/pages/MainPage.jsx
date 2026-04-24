@@ -85,7 +85,18 @@ const MainPage = () => {
     uploadLimit,
     uploadSelectedFile
   } = useVideoUpload();
-  const { analysis, analysisOptions, loading, error, progress, status, statusMessage, runAnalysis, setAnalysisOptions } = useAnalysis();
+  const {
+    analysis,
+    analysisOptions,
+    loading,
+    error,
+    progress,
+    status,
+    statusMessage,
+    runAnalysis,
+    setAnalysisOptions,
+    applyAnalysisPayload
+  } = useAnalysis();
   const { segments, splitProgress, segmentsLoading, segmentsError, splitFromAnalysis, refreshSegments } = useSegments();
   const {
     backgroundAssets,
@@ -761,6 +772,7 @@ const MainPage = () => {
                 splitProgress={splitProgress}
                 onAnalyze={runAnalysis}
                 onAnalysisOptionsChange={setAnalysisOptions}
+                onAnalysisUpdated={applyAnalysisPayload}
                 onSplit={splitFromAnalysis}
                 compactMode
                 className="compact-surface compact-analysis-panel"
