@@ -15,7 +15,7 @@ import {
   getPromptSceneNames
 } from './generationService.js';
 import { publicUrlToRelativePath, resolveUploadPath, toAbsolutePublicUploadUrl } from './fileService.js';
-import { extractVideoFrame, mergeVideos } from './ffmpegService.js';
+import { extractVideoFrame, mergeVideos, padAudioClipToDuration } from './ffmpegService.js';
 import { broadcastRealtimeEvent } from './realtimeService.js';
 import {
   assertSeedDanceReady,
@@ -37,6 +37,7 @@ import { normalizeCharacterStateRefs } from './characterStateService.js';
 const SHOT_TASK_EVENT = 'shot:progress';
 const SHOT_ASSEMBLY_EVENT = 'shot-assembly:progress';
 const inflightShotGenerationTaskProcesses = new Map();
+const MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS = 1.8;
 
 const normalizeOptionalNumber = (value) => {
   const parsedValue = Number(value);
@@ -969,6 +970,8 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
     const shotSourceAudioAbsolutePath = shot.sourceAudioFilePath ? resolveUploadPath(shot.sourceAudioFilePath) : '';
     const shotSourceAudioPublicUrl =
       shot.sourceAudioFileUrl || (shot.sourceAudioFilePath ? toAbsolutePublicUploadUrl(shot.sourceAudioFilePath) : '');
+    let effectiveShotSourceAudioAbsolutePath = shotSourceAudioAbsolutePath;
+    let effectiveShotSourceAudioPublicUrl = shotSourceAudioPublicUrl;
     const sourceVideoAbsolutePath = segment?.video?.filePath ? resolveUploadPath(segment.video.filePath) : '';
     const generationWarnings = [];
     const sourceAbsolutePath = shotSourceAbsolutePath || segmentSourceAbsolutePath;
@@ -1036,6 +1039,36 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
 
     if (shouldGenerateDialogue && !shotSourceAudioAbsolutePath) {
       generationWarnings.push('小镜头参考音频缺失，已仅使用字幕与说话方式约束');
+    }
+
+    if (
+      shouldGenerateDialogue &&
+      shotSourceAudioAbsolutePath &&
+      Number(shot?.durationSeconds ?? 0) > 0 &&
+      Number(shot.durationSeconds) < MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS
+    ) {
+      const paddedAudio = await padAudioClipToDuration(
+        shotSourceAudioAbsolutePath,
+        MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS,
+        {
+          basename: `segment-${segment.id}-${task.shotId}-task-${task.id}-speech-audio-padded`
+        }
+      );
+
+      if (paddedAudio?.filePath) {
+        effectiveShotSourceAudioAbsolutePath = resolveUploadPath(paddedAudio.filePath);
+        effectiveShotSourceAudioPublicUrl =
+          toAbsolutePublicUploadUrl(paddedAudio.filePath) || paddedAudio.fileUrl || '';
+        generationWarnings.push(
+          `小镜头参考音频不足 ${MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS} 秒，已自动补静音后再发送`
+        );
+      } else {
+        generationWarnings.push(
+          `小镜头参考音频不足 ${MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS} 秒，补静音失败，已仅使用文本对白约束`
+        );
+        effectiveShotSourceAudioAbsolutePath = '';
+        effectiveShotSourceAudioPublicUrl = '';
+      }
     }
 
     let backgroundAsset = null;
@@ -1166,11 +1199,13 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
       generateAudio: shouldGenerateDialogue,
       referenceImages,
       referenceAudios:
-        shouldGenerateDialogue && (shotSourceAudioAbsolutePath || shotSourceAudioPublicUrl)
+        shouldGenerateDialogue && (effectiveShotSourceAudioAbsolutePath || effectiveShotSourceAudioPublicUrl)
           ? [
               {
-                relativePath: shot.sourceAudioFilePath || '',
-                url: shotSourceAudioPublicUrl,
+                absolutePath: effectiveShotSourceAudioAbsolutePath,
+                relativePath:
+                  effectiveShotSourceAudioAbsolutePath === shotSourceAudioAbsolutePath ? shot.sourceAudioFilePath || '' : '',
+                url: effectiveShotSourceAudioPublicUrl,
                 role: 'reference_audio',
                 sourceKind: 'shot_reference_audio',
                 displayLabel: '小镜头参考音频'

@@ -269,6 +269,25 @@ describe('seedDanceService', () => {
     ]);
   });
 
+  test('skips reference audio when no visual reference survives request preparation', async () => {
+    const requestBody = await buildSeedDanceRequestBody({
+      prompt: '只有对白参考时也不能把 reference_audio 单独发给 Seedance',
+      sourcePublicUrl: '',
+      sourceAbsolutePath: '',
+      referenceImages: [],
+      referenceVideos: [],
+      referenceAudios: [{ absolutePath: sampleAudioPath }]
+    });
+
+    expect(requestBody.content.some((item) => item.type === 'audio_url')).toBe(false);
+    expect(requestBody.content).toEqual([
+      {
+        type: 'text',
+        text: '只有对白参考时也不能把 reference_audio 单独发给 Seedance'
+      }
+    ]);
+  });
+
   test('allows per-segment duration overrides for Seedance task creation', async () => {
     const requestBody = await buildSeedDanceRequestBody({
       prompt: '按片段实际时长生成',

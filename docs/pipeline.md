@@ -48,6 +48,8 @@
 - `shotAssemblyInvalidatedAt` 带毫秒，但数据库任务时间只有秒级，刷新后会把同秒新任务误过滤掉
 - 后端重启会打断本地内存轮询，导致远端已完成但本地任务仍卡在 `processing`
 - Seedance 会因为输入真人帧图或敏感参考图，直接拒绝创建镜头任务并返回 `InputImageSensitiveContentDetected`
+- `PUBLIC_ASSET_BASE_URL` 如果指向 `frp-fox.com:42734` 这种当前返回自签 HTTPS 的地址，Seedance 会拿不到参考素材；现在图片和音频会自动回退成 `data:` 内联引用，避免请求里只剩失效公网 URL
+- 说话镜头之前会因为 `reference_audio cannot be the only reference input` 或 `audio duration must be >= 1.8s` 被 Seedance 直接拒绝；现在无视觉参考时会自动移除 `reference_audio`，过短音频会先补静音到 1.8 秒
 - 当前大片段已经有预览视频后，再次点击“生成新片段”仍会重复给全部小镜头下单
 - 旧的小镜头成功结果没有被带进新一轮批处理上下文，导致拼回阶段可能看不到旧成功结果
 - Seedance 镜头任务会卡在 `45%` 后报“视频生成失败”，根因是创建任务仍使用 30 秒通用超时，且本地参考图会被转成 5MB 以上 base64 请求体；现在改成 Seedance 专用创建超时，并在 `PUBLIC_ASSET_BASE_URL` 存在时优先发送公网资源 URL
@@ -149,6 +151,7 @@
 - 整片分析后端长超时默认 `600000ms`，可通过 `GEMINI_WHOLE_VIDEO_TIMEOUT_MS` 调整
 - 外部请求已经统一改成 Node.js 外部请求层，默认先走 `undici` 并通过系统代理出网，不再依赖 `curl`
 - 如果 `undici` 在 TLS 握手阶段报 `fetch failed / ECONNRESET / before secure TLS connection was established`，会自动改用 Node 原生 `http/https` 直连回退，避免整片分析直接中断
+- 如果 `PUBLIC_ASSET_BASE_URL` 返回自签证书，图片和音频参考会自动改成内联 `data:`，视频参考则继续要求公网可访问 URL
 - 后端启动时会自动检查 `analyses.analysis_options` 列是否存在，避免旧数据库在点击“整片分析”时直接 500
 
 ### 2.3 大片段切分
