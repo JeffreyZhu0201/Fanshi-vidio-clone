@@ -55,8 +55,8 @@ const MIN_REFERENCE_VIDEO_PIXEL_COUNT = 409600;
 const MIN_SEED_DANCE_GENERATION_DURATION_SECONDS = 4;
 const MAX_SEED_DANCE_GENERATION_DURATION_SECONDS = 15;
 const SEED_DANCE_SENSITIVE_IMAGE_ERROR_PATTERN = /InputImageSensitiveContentDetected(?:\.[A-Za-z]+)?/u;
-const REFERENCE_VIDEO_URL_CHECK_TIMEOUT_MS = 8000;
-const referenceVideoUrlReachabilityCache = new Map();
+const REFERENCE_ASSET_URL_CHECK_TIMEOUT_MS = 8000;
+const referenceAssetUrlReachabilityCache = new Map();
 const SEED_DANCE_PROVIDER_SAFETY_REPLACEMENTS = [
   [/身体不适/gu, '身体有些疲惫'],
   [/不适/gu, '疲惫'],
@@ -392,6 +392,13 @@ const resolveReferenceEntryPublicUrl = (entry) => {
   return '';
 };
 
+const shouldCheckReferenceAssetReachability = (url = '') => {
+  const normalizedUrl = String(url ?? '').trim();
+  const publicAssetBaseUrl = String(env.PUBLIC_ASSET_BASE_URL || '').trim().replace(/\/+$/u, '');
+
+  return Boolean(publicAssetBaseUrl) && normalizedUrl.startsWith(publicAssetBaseUrl);
+};
+
 const getReferenceVideoEntryMetadata = async (entry) => {
   const absolutePath = resolveReferenceEntryAbsolutePath(entry);
 
@@ -475,34 +482,37 @@ const resolveReferenceEntryUrl = async (entry, mediaType) => {
   return resolveSeedDanceDataUrl(absolutePath, mediaType);
 };
 
-const isReferenceVideoUrlReachable = async (url) => {
+const isReferenceAssetUrlReachable = async (url, mediaType = 'asset') => {
   const normalizedUrl = String(url ?? '').trim();
 
   if (!normalizedUrl || !isWebUrl(normalizedUrl)) {
     return false;
   }
 
-  if (referenceVideoUrlReachabilityCache.has(normalizedUrl)) {
-    return referenceVideoUrlReachabilityCache.get(normalizedUrl);
+  const cacheKey = `${mediaType}:${normalizedUrl}`;
+
+  if (referenceAssetUrlReachabilityCache.has(cacheKey)) {
+    return referenceAssetUrlReachabilityCache.get(cacheKey);
   }
 
   const reachabilityPromise = requestExternalText(normalizedUrl, {
     method: 'HEAD',
-    timeoutMs: REFERENCE_VIDEO_URL_CHECK_TIMEOUT_MS
+    timeoutMs: REFERENCE_ASSET_URL_CHECK_TIMEOUT_MS
   })
     .then(({ response }) => {
       return Boolean(response && response.status >= 200 && response.status < 400);
     })
     .catch((error) => {
-      logger.warn('Skipping Seedance reference video because the public URL is not reachable from the current runtime.', {
+      logger.warn('Seedance public asset URL is not reachable from the current runtime.', {
         url: normalizedUrl,
+        mediaType,
         message: error.message,
         cause: error.cause?.message || ''
       });
       return false;
     });
 
-  referenceVideoUrlReachabilityCache.set(normalizedUrl, reachabilityPromise);
+  referenceAssetUrlReachabilityCache.set(cacheKey, reachabilityPromise);
   return reachabilityPromise;
 };
 
@@ -557,7 +567,19 @@ const buildSeedDanceContentPackage = async ({
   let acceptedReferenceVideoDurationSeconds = 0;
 
   for (const referenceImage of normalizedReferenceImages) {
-    const resolvedUrl = await resolveReferenceEntryUrl(referenceImage, 'image');
+    let resolvedUrl = resolveReferenceEntryPublicUrl(referenceImage);
+    const referenceImageAbsolutePath = resolveReferenceEntryAbsolutePath(referenceImage);
+
+    if (
+      resolvedUrl &&
+      shouldCheckReferenceAssetReachability(resolvedUrl) &&
+      !(await isReferenceAssetUrlReachable(resolvedUrl, 'image')) &&
+      referenceImageAbsolutePath
+    ) {
+      resolvedUrl = await resolveSeedDanceDataUrl(referenceImageAbsolutePath, 'image');
+    } else if (!resolvedUrl) {
+      resolvedUrl = await resolveReferenceEntryUrl(referenceImage, 'image');
+    }
 
     if (!resolvedUrl) {
       continue;
@@ -614,11 +636,9 @@ const buildSeedDanceContentPackage = async ({
       continue;
     }
 
-    const shouldCheckReferenceVideoReachability =
-      Boolean(String(env.PUBLIC_ASSET_BASE_URL || '').trim()) &&
-      resolvedUrl.startsWith(String(env.PUBLIC_ASSET_BASE_URL).replace(/\/+$/u, ''));
+    const shouldCheckReferenceVideoReachability = shouldCheckReferenceAssetReachability(resolvedUrl);
 
-    if (shouldCheckReferenceVideoReachability && !(await isReferenceVideoUrlReachable(resolvedUrl))) {
+    if (shouldCheckReferenceVideoReachability && !(await isReferenceAssetUrlReachable(resolvedUrl, 'video'))) {
       logger.warn('Skipping Seedance reference video because the public asset URL is unavailable or returned a non-success status.', {
         url: resolvedUrl,
         relativePath: String(referenceVideo.relativePath || '').trim(),
@@ -641,8 +661,32 @@ const buildSeedDanceContentPackage = async ({
     }
   }
 
+  const allowReferenceAudios = sentReferenceImages.length > 0 || sentReferenceVideos.length > 0;
+
+  if (!allowReferenceAudios && normalizedReferenceAudios.length) {
+    logger.warn('Skipping Seedance reference audio because no visual reference survived request preparation.', {
+      referenceAudioCount: normalizedReferenceAudios.length
+    });
+  }
+
   for (const referenceAudio of normalizedReferenceAudios) {
-    const resolvedUrl = await resolveReferenceEntryUrl(referenceAudio, 'audio');
+    if (!allowReferenceAudios) {
+      break;
+    }
+
+    let resolvedUrl = resolveReferenceEntryPublicUrl(referenceAudio);
+    const referenceAudioAbsolutePath = resolveReferenceEntryAbsolutePath(referenceAudio);
+
+    if (
+      resolvedUrl &&
+      shouldCheckReferenceAssetReachability(resolvedUrl) &&
+      !(await isReferenceAssetUrlReachable(resolvedUrl, 'audio')) &&
+      referenceAudioAbsolutePath
+    ) {
+      resolvedUrl = await resolveSeedDanceDataUrl(referenceAudioAbsolutePath, 'audio');
+    } else if (!resolvedUrl) {
+      resolvedUrl = await resolveReferenceEntryUrl(referenceAudio, 'audio');
+    }
 
     if (!resolvedUrl) {
       continue;

@@ -284,6 +284,57 @@ const extractAudioClip = async (
   };
 };
 
+const padAudioClipToDuration = async (
+  absoluteSourcePath,
+  targetDurationSeconds,
+  { basename = 'shot-audio-padded', directory = 'audio', extension = '.mp3' } = {}
+) => {
+  const ffmpegAvailable = await isBinaryAvailable('ffmpeg');
+
+  if (!ffmpegAvailable) {
+    return null;
+  }
+
+  const safeTargetDurationSeconds = Number(targetDurationSeconds);
+
+  if (!Number.isFinite(safeTargetDurationSeconds) || safeTargetDurationSeconds <= 0) {
+    return null;
+  }
+
+  const relativePath = createOutputRelativePath(directory, basename, extension);
+  const absoluteTargetPath = resolveUploadPath(relativePath);
+  await ensureParentDirectory(absoluteTargetPath);
+
+  try {
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-i',
+      absoluteSourcePath,
+      '-af',
+      'apad',
+      '-t',
+      String(Number(safeTargetDurationSeconds.toFixed(3))),
+      '-acodec',
+      extension === '.wav' ? 'pcm_s16le' : 'libmp3lame',
+      absoluteTargetPath
+    ]);
+  } catch (error) {
+    logger.warn('FFmpeg audio padding failed, keeping the original shot audio clip.', {
+      message: error.message,
+      absoluteSourcePath,
+      targetDurationSeconds: safeTargetDurationSeconds
+    });
+    return null;
+  }
+
+  return {
+    duration: Number(safeTargetDurationSeconds.toFixed(3)),
+    filePath: relativePath,
+    fileUrl: toPublicUploadUrl(relativePath),
+    engine: 'ffmpeg-audio-pad'
+  };
+};
+
 const extractVideoFrame = async (
   absoluteSourcePath,
   timeSeconds,
@@ -410,4 +461,12 @@ const mergeVideos = async (absoluteInputPaths, { basename = 'merged-video', onPr
   };
 };
 
-export { getVideoMetadata, splitVideo, sliceVideoClip, extractAudioClip, mergeVideos, extractVideoFrame };
+export {
+  getVideoMetadata,
+  splitVideo,
+  sliceVideoClip,
+  extractAudioClip,
+  padAudioClipToDuration,
+  mergeVideos,
+  extractVideoFrame
+};

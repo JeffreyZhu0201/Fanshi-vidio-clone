@@ -64,7 +64,10 @@
 - 旧的小镜头结果没有被带进新一轮批处理上下文，导致拼回阶段看不到旧成功结果，用户会误以为系统还在重复生成
 - Seedance 镜头任务之前会在 `45%` 报“视频生成失败”，根因是创建远端任务还在用 30 秒通用超时，而且参考图被打成大体积 base64；现在改成 Seedance 专用长超时，并优先把上传资源转成公网 URL 发给 Seedance
 - 小镜头源视频之前因为是 `/uploads/...` 相对地址，没有稳定进入 Seedance 的 `reference_video`；现在会自动归一化成公网资源 URL
+- `PUBLIC_ASSET_BASE_URL=https://frp-fox.com:42734` 这条链路现在会因为自签 HTTPS 导致 Seedance 拿不到参考图/音频；现在图片和音频会自动回退成 `data:` 内联引用，避免只剩失效公网 URL
+- 说话镜头之前会因为 `reference_audio cannot be the only reference input` 或 `audio duration must be >= 1.8s` 直接失败；现在如果没有可用视觉参考就自动跳过 `reference_audio`，过短音频会先补静音到 1.8 秒再发送
 - 前端仍显示“镜头任务 · 视频生成失败”时，最新原因已经不是 `fetch failed`，而是 Seedance 返回 `content video total duration <= 15.2s`；现在系统会限制 reference video 总时长，长镜头优先保留小镜头源视频，必要时跳过背景资产视频
+- 当前 `frp-fox` 公网资源如果返回自签证书，系统会自动把小镜头典型帧、角色三视图、场景图和参考音频回退成内联 `data:` 资源；视频参考仍要求可公开访问的 HTTP(S) 地址
 - 同一个镜头任务重复触发时，现在会被后端进程内锁拦住，不再同时创建多个远端 Seedance 任务
 - 如果 Seedance 在输出审核阶段提示 `output video may contain sensitive information`，通常是提示词里有医疗、药品、病痛类描述；现在发送前会自动改成更中性的供应商安全表达
 - Seedance 现在已经彻底禁用“本地复制原视频作为 mock 结果”的回退；远端失败时会直接报错，不再拿原片充数
