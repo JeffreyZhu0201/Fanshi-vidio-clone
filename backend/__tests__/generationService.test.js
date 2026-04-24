@@ -58,6 +58,7 @@ await jest.unstable_mockModule('../services/realtimeService.js', () => ({
 const {
   buildSeedDanceReconstructionPrompt,
   collectSceneReferenceImages,
+  composeSeedDanceReferenceImages,
   resolveRelevantCharacters,
   resolveRelevantScenes
 } = await import('../services/generationService.js');
@@ -154,6 +155,76 @@ describe('generationService helpers', () => {
         sourceKind: 'scene_asset',
         displayLabel: '#background_2 场景图'
       }
+    ]);
+  });
+
+  test('keeps both character triptych and scene images when composing final Seedance references', () => {
+    const result = composeSeedDanceReferenceImages({
+      primaryImages: [
+        {
+          url: '/uploads/frames/shot-frame.jpg',
+          role: 'reference_image',
+          sourceKind: 'shot_representative_frame'
+        }
+      ],
+      characterStateImages: [
+        {
+          url: '/uploads/frames/state-1.jpg',
+          role: 'reference_image',
+          sourceKind: 'character_state_asset'
+        },
+        {
+          url: '/uploads/frames/state-2.jpg',
+          role: 'reference_image',
+          sourceKind: 'character_state_asset'
+        }
+      ],
+      characterImages: [
+        {
+          url: '/uploads/resource-images/character-front.jpg',
+          role: 'reference_image',
+          sourceKind: 'character_asset'
+        },
+        {
+          url: '/uploads/resource-images/character-side.jpg',
+          role: 'reference_image',
+          sourceKind: 'character_asset'
+        },
+        {
+          url: '/uploads/resource-images/character-back.jpg',
+          role: 'reference_image',
+          sourceKind: 'character_asset'
+        }
+      ],
+      sceneImages: [
+        {
+          url: '/uploads/resource-images/scene-angle-1.jpg',
+          role: 'reference_image',
+          sourceKind: 'scene_asset'
+        },
+        {
+          url: '/uploads/resource-images/scene-angle-2.jpg',
+          role: 'reference_image',
+          sourceKind: 'scene_asset'
+        },
+        {
+          url: '/uploads/resource-images/scene-angle-3.jpg',
+          role: 'reference_image',
+          sourceKind: 'scene_asset'
+        }
+      ]
+    });
+
+    expect(result.map((item) => item.sourceKind)).toEqual([
+      'shot_representative_frame',
+      'character_asset',
+      'character_asset',
+      'character_asset',
+      'scene_asset',
+      'scene_asset',
+      'scene_asset',
+      'character_state_asset',
+      'character_state_asset'
     ]);
   });
 

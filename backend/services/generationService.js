@@ -157,6 +157,10 @@ const SCENE_REFERENCE_IMAGE_FIELDS = [
   'imageUrls',
   'image_urls'
 ];
+const SEED_DANCE_REFERENCE_IMAGE_LIMIT = 9;
+const CHARACTER_REFERENCE_IMAGE_BUDGET = 3;
+const SCENE_REFERENCE_IMAGE_BUDGET = 3;
+const CHARACTER_STATE_REFERENCE_IMAGE_BUDGET = 2;
 
 const sanitizeBasenamePart = (value = '') => {
   return String(value ?? '')
@@ -178,6 +182,137 @@ const dedupeReferenceEntries = (entries = []) => {
     seenKeys.add(dedupeKey);
     return true;
   });
+};
+
+const pushReferenceEntriesWithBudget = ({
+  targetEntries,
+  candidateEntries = [],
+  budget = Number.POSITIVE_INFINITY,
+  seenKeys = new Set(),
+  startIndex = 0
+}) => {
+  if (!Array.isArray(candidateEntries) || budget <= 0) {
+    return {
+      nextIndex: startIndex,
+      addedCount: 0
+    };
+  }
+
+  let nextIndex = startIndex;
+  let addedCount = 0;
+
+  for (; nextIndex < candidateEntries.length; nextIndex += 1) {
+    if (addedCount >= budget) {
+      break;
+    }
+
+    const candidateEntry = candidateEntries[nextIndex];
+
+    if (!candidateEntry) {
+      continue;
+    }
+
+    const dedupeKey = `${candidateEntry.url || ''}|${candidateEntry.relativePath || ''}|${candidateEntry.absolutePath || ''}|${candidateEntry.role || ''}`;
+
+    if (seenKeys.has(dedupeKey)) {
+      continue;
+    }
+
+    seenKeys.add(dedupeKey);
+    targetEntries.push(candidateEntry);
+    addedCount += 1;
+  }
+
+  return {
+    nextIndex,
+    addedCount
+  };
+};
+
+const composeSeedDanceReferenceImages = ({
+  primaryImages = [],
+  characterImages = [],
+  sceneImages = [],
+  characterStateImages = [],
+  maxTotal = SEED_DANCE_REFERENCE_IMAGE_LIMIT
+} = {}) => {
+  const combinedEntries = [];
+  const seenKeys = new Set();
+  const normalizedMaxTotal = Number.isFinite(Number(maxTotal)) && Number(maxTotal) > 0 ? Number(maxTotal) : SEED_DANCE_REFERENCE_IMAGE_LIMIT;
+  const normalizedPrimaryImages = dedupeReferenceEntries(primaryImages);
+  const normalizedCharacterImages = dedupeReferenceEntries(characterImages);
+  const normalizedSceneImages = dedupeReferenceEntries(sceneImages);
+  const normalizedCharacterStateImages = dedupeReferenceEntries(characterStateImages);
+  let remainingBudget = normalizedMaxTotal;
+
+  pushReferenceEntriesWithBudget({
+    targetEntries: combinedEntries,
+    candidateEntries: normalizedPrimaryImages,
+    budget: remainingBudget,
+    seenKeys
+  });
+  remainingBudget = normalizedMaxTotal - combinedEntries.length;
+
+  let characterCursor = 0;
+  ({ nextIndex: characterCursor } = pushReferenceEntriesWithBudget({
+    targetEntries: combinedEntries,
+    candidateEntries: normalizedCharacterImages,
+    budget: Math.min(remainingBudget, CHARACTER_REFERENCE_IMAGE_BUDGET),
+    seenKeys
+  }));
+  remainingBudget = normalizedMaxTotal - combinedEntries.length;
+
+  let sceneCursor = 0;
+  ({ nextIndex: sceneCursor } = pushReferenceEntriesWithBudget({
+    targetEntries: combinedEntries,
+    candidateEntries: normalizedSceneImages,
+    budget: Math.min(remainingBudget, SCENE_REFERENCE_IMAGE_BUDGET),
+    seenKeys
+  }));
+  remainingBudget = normalizedMaxTotal - combinedEntries.length;
+
+  let characterStateCursor = 0;
+  ({ nextIndex: characterStateCursor } = pushReferenceEntriesWithBudget({
+    targetEntries: combinedEntries,
+    candidateEntries: normalizedCharacterStateImages,
+    budget: Math.min(remainingBudget, CHARACTER_STATE_REFERENCE_IMAGE_BUDGET),
+    seenKeys
+  }));
+  remainingBudget = normalizedMaxTotal - combinedEntries.length;
+
+  if (remainingBudget > 0) {
+    ({ nextIndex: characterCursor } = pushReferenceEntriesWithBudget({
+      targetEntries: combinedEntries,
+      candidateEntries: normalizedCharacterImages,
+      budget: remainingBudget,
+      seenKeys,
+      startIndex: characterCursor
+    }));
+    remainingBudget = normalizedMaxTotal - combinedEntries.length;
+  }
+
+  if (remainingBudget > 0) {
+    ({ nextIndex: sceneCursor } = pushReferenceEntriesWithBudget({
+      targetEntries: combinedEntries,
+      candidateEntries: normalizedSceneImages,
+      budget: remainingBudget,
+      seenKeys,
+      startIndex: sceneCursor
+    }));
+    remainingBudget = normalizedMaxTotal - combinedEntries.length;
+  }
+
+  if (remainingBudget > 0) {
+    pushReferenceEntriesWithBudget({
+      targetEntries: combinedEntries,
+      candidateEntries: normalizedCharacterStateImages,
+      budget: remainingBudget,
+      seenKeys,
+      startIndex: characterStateCursor
+    });
+  }
+
+  return combinedEntries.slice(0, normalizedMaxTotal);
 };
 
 const normalizeReferenceEntry = (entry, role = 'reference_image') => {
@@ -536,7 +671,7 @@ const collectCharacterReferenceImages = async ({
     }
   }
 
-  return dedupeReferenceEntries(referenceImages).slice(0, 9);
+  return dedupeReferenceEntries(referenceImages).slice(0, SEED_DANCE_REFERENCE_IMAGE_LIMIT);
 };
 
 const collectCharacterStateReferenceImages = ({ shot = {} } = {}) => {
@@ -670,7 +805,7 @@ const collectSceneReferenceImages = async ({
     const persistedAssetsForScene = dedupeReferenceEntries([
       ...(persistedSceneAssetMap.get(String(background?.id ?? '').trim()) ?? []),
       ...(persistedSceneAssetMap.get(String(background?.name ?? '').trim()) ?? [])
-    ]).slice(0, 2);
+    ]).slice(0, SCENE_REFERENCE_IMAGE_BUDGET);
 
     if (persistedAssetsForScene.length) {
       referenceImages.push(...persistedAssetsForScene);
@@ -687,7 +822,7 @@ const collectSceneReferenceImages = async ({
         sourceKind: 'scene_asset',
         displayLabel: `#${String(background?.name ?? background?.id ?? '场景').trim() || '场景'} 场景图`
       }))
-      .slice(0, 2);
+      .slice(0, SCENE_REFERENCE_IMAGE_BUDGET);
 
     if (explicitReferenceImages.length) {
       referenceImages.push(...explicitReferenceImages);
@@ -705,7 +840,7 @@ const collectSceneReferenceImages = async ({
     }
   }
 
-  return dedupeReferenceEntries(referenceImages).slice(0, 6);
+  return dedupeReferenceEntries(referenceImages).slice(0, SCENE_REFERENCE_IMAGE_BUDGET * 2);
 };
 
 const expandPromptMentions = (prompt, characters, backgrounds) => {
@@ -1066,10 +1201,10 @@ const processGenerationTask = async (taskId) => {
       sourceVideoAbsolutePath,
       basenamePrefix: `segment-${task.segmentId}-task-${task.id}`
     });
-    const referenceImages = dedupeReferenceEntries([
-      ...characterReferenceImages,
-      ...sceneReferenceImages
-    ]).slice(0, 9);
+    const referenceImages = composeSeedDanceReferenceImages({
+      characterImages: characterReferenceImages,
+      sceneImages: sceneReferenceImages
+    });
 
     await task.update({
       optimizedPrompt,
@@ -1250,6 +1385,7 @@ export {
   collectCharacterReferenceImages,
   collectCharacterStateReferenceImages,
   collectSceneReferenceImages,
+  composeSeedDanceReferenceImages,
   expandPromptMentions,
   getBackgroundBindingForSegment,
   getPromptMentionNames,

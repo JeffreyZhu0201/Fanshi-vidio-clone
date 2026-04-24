@@ -9,6 +9,7 @@ import {
   collectCharacterReferenceImages,
   collectCharacterStateReferenceImages,
   collectSceneReferenceImages,
+  composeSeedDanceReferenceImages,
   expandPromptMentions,
   getBackgroundBindingForSegment,
   getPromptMentionNames,
@@ -1171,12 +1172,12 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
       sourceVideoAbsolutePath,
       basenamePrefix: `segment-${segment.id}-${task.shotId}-task-${task.id}`
     });
-    const referenceImages = [
-      ...(primaryShotReferenceImage ? [primaryShotReferenceImage] : []),
-      ...characterStateReferenceImages,
-      ...characterReferenceImages,
-      ...sceneReferenceImages
-    ].slice(0, 9);
+    const referenceImages = composeSeedDanceReferenceImages({
+      primaryImages: primaryShotReferenceImage ? [primaryShotReferenceImage] : [],
+      characterImages: characterReferenceImages,
+      sceneImages: sceneReferenceImages,
+      characterStateImages: characterStateReferenceImages
+    });
 
     await task.update({
       optimizedPrompt,
