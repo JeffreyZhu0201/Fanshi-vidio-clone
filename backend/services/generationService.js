@@ -539,6 +539,37 @@ const collectCharacterReferenceImages = async ({
   return dedupeReferenceEntries(referenceImages).slice(0, 9);
 };
 
+const collectCharacterStateReferenceImages = ({ shot = {} } = {}) => {
+  const stateRefs = Array.isArray(shot?.characterStateRefs ?? shot?.character_state_refs)
+    ? shot.characterStateRefs ?? shot.character_state_refs
+    : [];
+
+  return dedupeReferenceEntries(
+    stateRefs
+      .map((stateRef) => {
+        const relativePath = String(
+          stateRef?.representativeFrameImagePath ?? stateRef?.representative_frame_image_path ?? ''
+        ).trim();
+        const url = String(
+          stateRef?.representativeFrameImageUrl ?? stateRef?.representative_frame_image_url ?? ''
+        ).trim();
+
+        if (!relativePath && !url) {
+          return null;
+        }
+
+        return {
+          relativePath,
+          url,
+          role: 'reference_image',
+          sourceKind: 'character_state_asset',
+          displayLabel: `@${String(stateRef?.characterName ?? '角色').trim() || '角色'} 状态参考帧`
+        };
+      })
+      .filter(Boolean)
+  ).slice(0, 6);
+};
+
 const resolveRelevantScenes = ({ segment, overallAnalysis, prompt = '', sceneNames = [], backgroundBinding = null }) => {
   const overallBackgrounds = Array.isArray(overallAnalysis?.backgrounds) ? overallAnalysis.backgrounds.filter(Boolean) : [];
 
@@ -821,11 +852,30 @@ const buildSeedDanceReconstructionPrompt = ({
   shotPrompt = '',
   characterNames = [],
   sceneNames = [],
+  characterStateRefs = [],
   speech = null,
   isShot = false
 }) => {
   const normalizedCharacterNames = dedupeNameList(characterNames, normalizeCharacterIdentity);
   const normalizedSceneNames = dedupeNameList(sceneNames, normalizeSceneIdentity);
+  const normalizedCharacterStateRefs = Array.isArray(characterStateRefs)
+    ? characterStateRefs
+        .map((stateRef) => {
+          const characterName = String(stateRef?.characterName ?? '').trim();
+
+          if (!characterName) {
+            return null;
+          }
+
+          return {
+            characterName,
+            stateName: String(stateRef?.stateName ?? '').trim(),
+            summary: String(stateRef?.summary ?? '').trim(),
+            continuityPrompt: String(stateRef?.continuityPrompt ?? '').trim()
+          };
+        })
+        .filter(Boolean)
+    : [];
   const basePrompt = String(prompt ?? '').trim();
   const hasDialogue = Boolean(speech?.hasDialogue);
   const speechTranscript = String(speech?.transcript ?? '').trim();
@@ -851,6 +901,18 @@ const buildSeedDanceReconstructionPrompt = ({
     normalizedCharacterNames.length
       ? `必须把这些角色三视图作为人物身份真值：${normalizedCharacterNames.map((name) => `@${name}`).join('、')}。`
       : '如果提供了角色三视图，必须优先用它们锁定角色身份、脸型、发型、服装、比例和体态。',
+    isShot && normalizedCharacterStateRefs.length
+      ? `当前镜头还必须继承这些角色阶段状态：${normalizedCharacterStateRefs
+          .map((stateRef) =>
+            `@${stateRef.characterName}${stateRef.stateName ? ` 的「${stateRef.stateName}」` : ''}${
+              stateRef.continuityPrompt ? `，${stateRef.continuityPrompt}` : stateRef.summary ? `，${stateRef.summary}` : ''
+            }`
+          )
+          .join('；')}。`
+      : '',
+    isShot && normalizedCharacterStateRefs.length
+      ? '如果提供了角色状态参考帧，必须优先用它们锁定当前阶段的伤势、包扎、残缺、服装破损、血迹、妆造变化和疲惫程度，不要回退成角色基础完好状态。'
+      : '',
     normalizedSceneNames.length
       ? `必须把这些场景参考图作为空间真值：${normalizedSceneNames.map((name) => `#${name}`).join('、')}。`
       : '如果提供了场景参考图，必须优先用它们锁定空间结构、布景、材质、布光和色彩。',
@@ -1186,6 +1248,7 @@ export {
   buildSeedDanceReconstructionPrompt,
   broadcastGenerationTaskUpdate,
   collectCharacterReferenceImages,
+  collectCharacterStateReferenceImages,
   collectSceneReferenceImages,
   expandPromptMentions,
   getBackgroundBindingForSegment,

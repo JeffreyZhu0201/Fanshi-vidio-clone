@@ -20,6 +20,10 @@ import {
   rebuildShotSpeechAssetsForSegment,
   shotSpeechAssetsNeedRebuild
 } from './shotSpeechService.js';
+import {
+  hydrateCharacterStateRefsForShots,
+  normalizeCharacterStateRefs
+} from './characterStateService.js';
 import { getVideoRecordById, resolveVideoAbsolutePath } from './videoService.js';
 
 const serializeGenerationTask = (task) => {
@@ -132,7 +136,10 @@ const normalizeShotDefinitions = (shots, segmentStartTime, segmentEndTime) => {
       speech: normalizeShotSpeech(shot.speech ?? null, {
         durationSeconds,
         fallbackStatus: 'idle'
-      })
+      }),
+      characterStateRefs: normalizeCharacterStateRefs(
+        shot.characterStateRefs ?? shot.character_state_refs ?? []
+      )
     };
   });
 };
@@ -208,7 +215,8 @@ const buildPersistedShotDefinitions = (shots, segmentStartTime, segmentEndTime) 
       speech: normalizeShotSpeech(shot?.speech ?? null, {
         durationSeconds: Number((endTime - startTime).toFixed(2)),
         fallbackStatus: 'completed'
-      })
+      }),
+      characterStateRefs: normalizeCharacterStateRefs(shot?.characterStateRefs ?? shot?.character_state_refs ?? [])
     };
   });
 
@@ -255,7 +263,8 @@ const getShotPersistenceComparablePayload = (shots = []) => {
     speech: normalizeShotSpeech(shot.speech, {
       durationSeconds: shot.durationSeconds,
       fallbackStatus: 'completed'
-    })
+    }),
+    characterStateRefs: normalizeCharacterStateRefs(shot.characterStateRefs ?? shot.character_state_refs ?? [])
   }));
 };
 
@@ -563,7 +572,12 @@ const buildBaseSegmentAnalysis = ({ segment, timeAnchor = {}, overallAnalysis, p
             speech: normalizeShotSpeech(previousAnalysis?.shots?.[0]?.speech ?? null, {
               durationSeconds: Number(segment.endTime) - Number(segment.startTime),
               fallbackStatus: 'idle'
-            })
+            }),
+            characterStateRefs: normalizeCharacterStateRefs(
+              previousAnalysis?.shots?.[0]?.characterStateRefs ??
+                previousAnalysis?.shots?.[0]?.character_state_refs ??
+                []
+            )
           }
         ],
     shotAssembly: previousAnalysis.shotAssembly ?? null
@@ -873,7 +887,11 @@ const updateSegmentShotsById = async (segmentId, shots) => {
   const segment = await getSegmentRecordById(segmentId);
   const segmentStartTime = Number(segment.startTime);
   const segmentEndTime = Number(segment.endTime);
-  const persistedShots = buildPersistedShotDefinitions(shots, segmentStartTime, segmentEndTime);
+  const overallAnalysis = await getAnalysisRecordByVideoId(segment.videoId);
+  const persistedShots = hydrateCharacterStateRefsForShots({
+    shots: buildPersistedShotDefinitions(shots, segmentStartTime, segmentEndTime),
+    characters: overallAnalysis?.characters ?? []
+  });
   const currentPersistedShots = normalizeShotDefinitions(segment.analysis?.shots ?? [], segmentStartTime, segmentEndTime);
   const analysisOptions = normalizeAnalysisOptions(segment.analysis?.analysisOptions);
 

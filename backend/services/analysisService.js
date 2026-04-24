@@ -1,10 +1,16 @@
-import { Analysis } from '../models/index.js';
+import { Analysis, Segment } from '../models/index.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { VIDEO_STATUS } from '../config/constants.js';
 import { analyzeSegment, analyzeVideo as analyzeVideoWithGemini, optimizePrompt as optimizePromptWithGemini } from './geminiService.js';
 import { broadcastRealtimeEvent } from './realtimeService.js';
 import { normalizeAnalysisOptions } from './shotSpeechService.js';
 import { getVideoRecordById, resolveVideoAbsolutePath } from './videoService.js';
+import {
+  hydrateCharacterStateRefsForAnchors,
+  hydrateCharacterStateRefsForShots,
+  normalizeAnalysisCharacters,
+  rebuildCharacterStateFrameAssets
+} from './characterStateService.js';
 
 const parseGeminiMeta = (geminiResponse) => {
   try {
@@ -78,7 +84,7 @@ const analyzeVideoById = async (videoId, analysisOptions = null) => {
   });
 
   try {
-    const analysisPayload = await analyzeVideoWithGemini({
+    const rawAnalysisPayload = await analyzeVideoWithGemini({
       video,
       metadata: {
         duration: video.duration
@@ -86,6 +92,24 @@ const analyzeVideoById = async (videoId, analysisOptions = null) => {
       videoAbsolutePath: resolveVideoAbsolutePath(video),
       analysisOptions: normalizeAnalysisOptions(analysisOptions)
     });
+    const nextCharacters = await rebuildCharacterStateFrameAssets({
+      video,
+      characters: normalizeAnalysisCharacters(rawAnalysisPayload.characters ?? [], {
+        videoDuration: Number(video.duration ?? 0)
+      }),
+      previousCharacters: normalizeAnalysisCharacters(video.analysis?.characters ?? [], {
+        videoDuration: Number(video.duration ?? 0)
+      }),
+      cleanupExisting: Boolean(video.analysis?.characters?.length)
+    });
+    const analysisPayload = {
+      ...rawAnalysisPayload,
+      characters: nextCharacters,
+      timeAnchors: hydrateCharacterStateRefsForAnchors({
+        timeAnchors: rawAnalysisPayload.timeAnchors ?? [],
+        characters: nextCharacters
+      })
+    };
 
     let analysisRecord = video.analysis;
 
@@ -174,6 +198,70 @@ const optimizePrompt = async ({
   };
 };
 
+const updateAnalysisCharactersByVideoId = async (videoId, characters) => {
+  const video = await getVideoRecordById(videoId, {
+    include: [
+      {
+        model: Analysis,
+        as: 'analysis'
+      }
+    ]
+  });
+
+  if (!video.analysis) {
+    throw new AppError('请先完成整片分析，再编辑角色状态。', 400, {
+      video_id: videoId
+    });
+  }
+
+  const currentAnalysis = video.analysis;
+  const normalizedCharacters = normalizeAnalysisCharacters(characters, {
+    videoDuration: Number(video.duration ?? 0)
+  });
+  const rebuiltCharacters = await rebuildCharacterStateFrameAssets({
+    video,
+    characters: normalizedCharacters,
+    previousCharacters: normalizeAnalysisCharacters(currentAnalysis.characters ?? [], {
+      videoDuration: Number(video.duration ?? 0)
+    }),
+    cleanupExisting: true
+  });
+  const nextTimeAnchors = hydrateCharacterStateRefsForAnchors({
+    timeAnchors: currentAnalysis.timeAnchors ?? [],
+    characters: rebuiltCharacters
+  });
+
+  await currentAnalysis.update({
+    characters: rebuiltCharacters,
+    timeAnchors: nextTimeAnchors
+  });
+
+  const segments = await Segment.findAll({
+    where: {
+      videoId
+    }
+  });
+
+  await Promise.all(
+    segments.map(async (segment) => {
+      const segmentAnalysis = segment.analysis ?? {};
+      const nextShots = hydrateCharacterStateRefsForShots({
+        shots: Array.isArray(segmentAnalysis.shots) ? segmentAnalysis.shots : [],
+        characters: rebuiltCharacters
+      });
+
+      await segment.update({
+        analysis: {
+          ...segmentAnalysis,
+          shots: nextShots
+        }
+      });
+    })
+  );
+
+  return serializeAnalysis(currentAnalysis);
+};
+
 const analyzeSegmentContent = async ({ segment, overallAnalysis, segmentAbsolutePath = '' }) => {
   return analyzeSegment({
     segment,
@@ -188,5 +276,6 @@ export {
   getAnalysisRecordByVideoId,
   optimizePrompt,
   analyzeSegmentContent,
-  serializeAnalysis
+  serializeAnalysis,
+  updateAnalysisCharactersByVideoId
 };

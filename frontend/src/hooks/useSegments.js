@@ -209,6 +209,53 @@ const normalizeSegment = (segment) => {
           Number(shot.representativeFrameActualTime ?? shot.representative_frame_actual_time) >= 0
             ? Number(Number(shot.representativeFrameActualTime ?? shot.representative_frame_actual_time).toFixed(2))
             : null,
+        sourceAudioFilePath: shot.sourceAudioFilePath ?? shot.source_audio_file_path ?? '',
+        sourceAudioFileUrl: toAbsoluteAssetUrl(shot.sourceAudioFileUrl ?? shot.source_audio_file_url),
+        speech: {
+          transcript: shot.speech?.transcript ?? '',
+          subtitleLines: Array.isArray(shot.speech?.subtitleLines ?? shot.speech?.subtitle_lines)
+            ? (shot.speech?.subtitleLines ?? shot.speech?.subtitle_lines).map((line, lineIndex) => ({
+                id: line.id ?? `subtitle_${lineIndex + 1}`,
+                startTime:
+                  Number.isFinite(Number(line.startTime ?? line.start_time)) &&
+                  Number(line.startTime ?? line.start_time) >= 0
+                    ? Number(Number(line.startTime ?? line.start_time).toFixed(2))
+                    : 0,
+                endTime:
+                  Number.isFinite(Number(line.endTime ?? line.end_time)) &&
+                  Number(line.endTime ?? line.end_time) >= 0
+                    ? Number(Number(line.endTime ?? line.end_time).toFixed(2))
+                    : 0,
+                text: line.text ?? ''
+              }))
+            : [],
+          speechStyle: shot.speech?.speechStyle ?? shot.speech?.speech_style ?? '',
+          hasDialogue: Boolean(shot.speech?.hasDialogue ?? shot.speech?.has_dialogue),
+          extractionStatus: shot.speech?.extractionStatus ?? shot.speech?.extraction_status ?? 'idle',
+          extractionError: shot.speech?.extractionError ?? shot.speech?.extraction_error ?? '',
+          subtitleFilePath: shot.speech?.subtitleFilePath ?? shot.speech?.subtitle_file_path ?? '',
+          subtitleFileUrl: toAbsoluteAssetUrl(shot.speech?.subtitleFileUrl ?? shot.speech?.subtitle_file_url),
+          sourceOfTruth: shot.speech?.sourceOfTruth ?? shot.speech?.source_of_truth ?? 'extracted'
+        },
+        characterStateRefs: Array.isArray(shot.characterStateRefs ?? shot.character_state_refs)
+          ? (shot.characterStateRefs ?? shot.character_state_refs).map((stateRef) => ({
+              characterName: stateRef.characterName ?? stateRef.character_name ?? '',
+              stateId: stateRef.stateId ?? stateRef.state_id ?? '',
+              stateName: stateRef.stateName ?? stateRef.state_name ?? '',
+              summary: stateRef.summary ?? '',
+              continuityPrompt: stateRef.continuityPrompt ?? stateRef.continuity_prompt ?? '',
+              representativeFrameTime:
+                Number.isFinite(Number(stateRef.representativeFrameTime ?? stateRef.representative_frame_time)) &&
+                Number(stateRef.representativeFrameTime ?? stateRef.representative_frame_time) >= 0
+                  ? Number(Number(stateRef.representativeFrameTime ?? stateRef.representative_frame_time).toFixed(2))
+                  : null,
+              representativeFrameImagePath:
+                stateRef.representativeFrameImagePath ?? stateRef.representative_frame_image_path ?? '',
+              representativeFrameImageUrl: toAbsoluteAssetUrl(
+                stateRef.representativeFrameImageUrl ?? stateRef.representative_frame_image_url
+              )
+            }))
+          : [],
         latestGenerationTask: normalizeShotGenerationTask(shot.latestGenerationTask ?? shot.latest_generation_task),
         latestCompletedGenerationTask: normalizeShotGenerationTask(
           shot.latestCompletedGenerationTask ?? shot.latest_completed_generation_task
@@ -242,6 +289,7 @@ const normalizeSegment = (segment) => {
     representativeFrameTime: segment.analysis?.representativeFrameTime ?? null,
     representativeFrameNote: segment.analysis?.representativeFrameNote ?? '',
     characters: segment.analysis?.characters ?? [],
+    analysisOptions: segment.analysis?.analysisOptions ?? segment.analysis?.analysis_options ?? null,
     highlightedPrompt: '',
     shotGenerationSummary: normalizedShotSummary,
     latestShotAssemblyTask: normalizeShotGenerationSummary(segment.latest_shot_assembly_task) ?? normalizedShotSummary,

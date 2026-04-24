@@ -265,6 +265,8 @@ const inferReferenceLabel = (entry = {}, mediaType = 'image') => {
       return '小镜头典型帧';
     case 'character_asset':
       return '角色参考图';
+    case 'character_state_asset':
+      return '角色状态参考帧';
     case 'scene_asset':
       return '场景参考图';
     case 'character_frame_fallback':

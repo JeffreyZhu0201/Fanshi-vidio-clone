@@ -7,6 +7,7 @@ import {
   buildSeedDanceReconstructionPrompt,
   broadcastGenerationTaskUpdate,
   collectCharacterReferenceImages,
+  collectCharacterStateReferenceImages,
   collectSceneReferenceImages,
   expandPromptMentions,
   getBackgroundBindingForSegment,
@@ -31,6 +32,7 @@ import {
   rebuildShotSpeechAssetsForSegment,
   shotSpeechAssetsNeedRebuild
 } from './shotSpeechService.js';
+import { normalizeCharacterStateRefs } from './characterStateService.js';
 
 const SHOT_TASK_EVENT = 'shot:progress';
 const SHOT_ASSEMBLY_EVENT = 'shot-assembly:progress';
@@ -118,7 +120,10 @@ const getNormalizedSegmentShots = (segment) => {
       speech: normalizeShotSpeech(shot.speech ?? null, {
         durationSeconds: Number(Math.max(0.3, safeEndTime - shotStartTime).toFixed(2)),
         fallbackStatus: 'idle'
-      })
+      }),
+      characterStateRefs: normalizeCharacterStateRefs(
+        shot.characterStateRefs ?? shot.character_state_refs ?? []
+      )
     };
   });
 };
@@ -156,6 +161,21 @@ const buildShotSpeechSignature = (shot) => {
   });
 };
 
+const buildShotCharacterStateSignature = (shot) => {
+  const normalizedStateRefs = normalizeCharacterStateRefs(shot?.characterStateRefs ?? shot?.character_state_refs ?? []);
+
+  return JSON.stringify(
+    normalizedStateRefs.map((stateRef) => ({
+      characterName: stateRef.characterName,
+      stateId: stateRef.stateId,
+      stateName: stateRef.stateName,
+      continuityPrompt: stateRef.continuityPrompt,
+      representativeFrameImagePath: stateRef.representativeFrameImagePath,
+      representativeFrameImageUrl: stateRef.representativeFrameImageUrl
+    }))
+  );
+};
+
 const doesShotTaskMatchGenerationRequest = ({ task, shot, prompt, ratio }) => {
   if (!task || !shot) {
     return false;
@@ -166,6 +186,7 @@ const doesShotTaskMatchGenerationRequest = ({ task, shot, prompt, ratio }) => {
     normalizeComparablePrompt(task.prompt) === normalizeComparablePrompt(prompt) &&
     normalizeGenerationRatio(task.meta?.ratio) === normalizeGenerationRatio(ratio) &&
     String(task.meta?.speechSignature ?? '').trim() === buildShotSpeechSignature(shot) &&
+    String(task.meta?.characterStateSignature ?? '').trim() === buildShotCharacterStateSignature(shot) &&
     areNumericTaskFieldsEqual(task.startTime, shot.startTime) &&
     areNumericTaskFieldsEqual(task.endTime, shot.endTime) &&
     areNumericTaskFieldsEqual(task.durationSeconds, shot.durationSeconds)
@@ -270,6 +291,7 @@ const createCompletedReuseTaskForBatch = async ({
       batchStartedAt: startedAt,
       ratio: normalizeGenerationRatio(ratio),
       speechSignature: buildShotSpeechSignature(shot),
+      characterStateSignature: buildShotCharacterStateSignature(shot),
       reusedFromTaskId: sourceTask.id
     }
   });
@@ -303,6 +325,7 @@ const createResumedReuseTaskForBatch = async ({
       batchStartedAt: startedAt,
       ratio: normalizeGenerationRatio(ratio),
       speechSignature: buildShotSpeechSignature(shot),
+      characterStateSignature: buildShotCharacterStateSignature(shot),
       reusedFromTaskId: sourceTask.id
     }
   });
@@ -596,6 +619,7 @@ const hydrateAnalysisShotsWithTasks = ({
       sourceAudioFilePath: shot.sourceAudioFilePath,
       sourceAudioFileUrl: shot.sourceAudioFileUrl,
       speech: shot.speech,
+      characterStateRefs: shot.characterStateRefs,
       latestGenerationTask: serializeShotGenerationTask(latestGenerationTask),
       latestCompletedGenerationTask: serializeShotGenerationTask(latestCompletedGenerationTask),
       generatedUrl: latestCompletedGenerationTask?.resultUrl || ''
@@ -1046,6 +1070,7 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
       shotPrompt: task.prompt,
       characterNames: [...getPromptMentionNames(task.prompt), ...(Array.isArray(shot.characterNames) ? shot.characterNames : [])],
       sceneNames: [...getPromptSceneNames(task.prompt), ...(Array.isArray(shot.sceneNames) ? shot.sceneNames : []), backgroundBinding?.backgroundName || ''],
+      characterStateRefs: shot.characterStateRefs ?? [],
       speech: shouldGenerateDialogue
         ? {
             transcript: shotSpeech.transcript || buildTranscriptFromSubtitleLines(shotSpeech.subtitleLines),
@@ -1100,6 +1125,9 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
       sourceVideoAbsolutePath,
       basenamePrefix: `segment-${segment.id}-${task.shotId}-task-${task.id}`
     });
+    const characterStateReferenceImages = collectCharacterStateReferenceImages({
+      shot
+    });
     const sceneReferenceImages = await collectSceneReferenceImages({
       videoId: segment?.video?.id,
       segment,
@@ -1112,6 +1140,7 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
     });
     const referenceImages = [
       ...(primaryShotReferenceImage ? [primaryShotReferenceImage] : []),
+      ...characterStateReferenceImages,
       ...characterReferenceImages,
       ...sceneReferenceImages
     ].slice(0, 9);
@@ -1183,6 +1212,7 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
         fallbackReason: [generationWarnings.join('；'), result.fallbackReason || ''].filter(Boolean).join('；'),
         providerError: result.providerError || '',
         speechSignature: buildShotSpeechSignature(shot),
+        characterStateSignature: buildShotCharacterStateSignature(shot),
         generateAudio: shouldGenerateDialogue
       }
     });
@@ -1307,6 +1337,7 @@ const startShotGeneration = async ({ segmentId, shotId, prompt, ratio }) => {
       fallbackReason: '',
       providerError: '',
       speechSignature: buildShotSpeechSignature(shot),
+      characterStateSignature: buildShotCharacterStateSignature(shot),
       generateAudio: isSpeechAnalysisEnabled(
         normalizeAnalysisOptions(segment?.analysis?.analysisOptions ?? segment?.video?.analysis?.analysisOptions)
       ) && Boolean(normalizeShotSpeech(shot?.speech ?? null, {
@@ -1399,6 +1430,7 @@ const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, rat
         fallbackReason: '',
         providerError: '',
         speechSignature: buildShotSpeechSignature(shot),
+        characterStateSignature: buildShotCharacterStateSignature(shot),
         generateAudio: isSpeechAnalysisEnabled(
           normalizeAnalysisOptions(segment?.analysis?.analysisOptions ?? segment?.video?.analysis?.analysisOptions)
         ) && Boolean(normalizeShotSpeech(shot?.speech ?? null, {

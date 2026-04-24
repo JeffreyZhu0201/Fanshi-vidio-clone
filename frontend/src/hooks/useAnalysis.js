@@ -298,7 +298,8 @@ const useAnalysis = () => {
     status,
     statusMessage,
     runAnalysis,
-    setAnalysisOptions
+    setAnalysisOptions,
+    applyAnalysisPayload: setAnalysis
   };
 };
 

@@ -196,6 +196,76 @@ const splitNameInput = (value = '') => {
     .filter(Boolean);
 };
 
+const formatSubtitleTimestamp = (value) => {
+  const safeValue = Math.max(0, Number(value) || 0);
+  const hours = Math.floor(safeValue / 3600);
+  const minutes = Math.floor((safeValue % 3600) / 60);
+  const seconds = Math.floor(safeValue % 60);
+  const milliseconds = Math.round((safeValue - Math.floor(safeValue)) * 1000);
+
+  return [hours, minutes, seconds]
+    .map((item) => String(item).padStart(2, '0'))
+    .join(':')
+    .concat(',', String(milliseconds).padStart(3, '0'));
+};
+
+const buildSrtFromSubtitleLines = (subtitleLines = []) => {
+  return (Array.isArray(subtitleLines) ? subtitleLines : [])
+    .map((line, index) => {
+      return [
+        String(index + 1),
+        `${formatSubtitleTimestamp(line.startTime)} --> ${formatSubtitleTimestamp(line.endTime)}`,
+        String(line.text ?? '').trim()
+      ].join('\n');
+    })
+    .join('\n\n');
+};
+
+const normalizeSubtitleLineEditorItem = (line = {}, index = 0) => ({
+  id: String(line?.id ?? `subtitle_${index + 1}`),
+  startTime: toEditorString(line?.startTime, '0.00'),
+  endTime: toEditorString(line?.endTime, '0.50'),
+  text: String(line?.text ?? '').trim()
+});
+
+const normalizeSpeechEditorState = (speech = null) => ({
+  transcript: String(speech?.transcript ?? '').trim(),
+  subtitleLines: Array.isArray(speech?.subtitleLines)
+    ? speech.subtitleLines.map((line, index) => normalizeSubtitleLineEditorItem(line, index))
+    : [],
+  speechStyle: String(speech?.speechStyle ?? '').trim(),
+  hasDialogue: Boolean(speech?.hasDialogue),
+  extractionStatus: String(speech?.extractionStatus ?? 'idle').trim() || 'idle',
+  extractionError: String(speech?.extractionError ?? '').trim(),
+  subtitleFilePath: String(speech?.subtitleFilePath ?? '').trim(),
+  subtitleFileUrl: String(speech?.subtitleFileUrl ?? '').trim(),
+  sourceOfTruth: String(speech?.sourceOfTruth ?? 'extracted').trim() || 'extracted'
+});
+
+const normalizeCharacterStateRefEditorItem = (stateRef = {}) => ({
+  characterName: String(stateRef?.characterName ?? '').trim(),
+  stateId: String(stateRef?.stateId ?? '').trim(),
+  stateName: String(stateRef?.stateName ?? '').trim(),
+  summary: String(stateRef?.summary ?? '').trim(),
+  continuityPrompt: String(stateRef?.continuityPrompt ?? '').trim(),
+  representativeFrameTime: toEditorString(stateRef?.representativeFrameTime, ''),
+  representativeFrameImagePath: String(stateRef?.representativeFrameImagePath ?? '').trim(),
+  representativeFrameImageUrl: String(stateRef?.representativeFrameImageUrl ?? '').trim()
+});
+
+const copyToClipboard = async (value = '') => {
+  if (!navigator?.clipboard?.writeText) {
+    return false;
+  }
+
+  try {
+    await navigator.clipboard.writeText(String(value ?? ''));
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
 const toEditorString = (value, fallback = '') => {
   if (value === null || value === undefined || value === '') {
     return fallback;
@@ -225,6 +295,12 @@ const buildShotEditorItem = (shot, shotIndex = 0) => ({
   representativeFrameImagePath: String(shot?.representativeFrameImagePath ?? '').trim(),
   representativeFrameImageUrl: String(shot?.representativeFrameImageUrl ?? '').trim(),
   representativeFrameActualTime: toEditorString(shot?.representativeFrameActualTime, ''),
+  sourceAudioFilePath: String(shot?.sourceAudioFilePath ?? '').trim(),
+  sourceAudioFileUrl: String(shot?.sourceAudioFileUrl ?? '').trim(),
+  speech: normalizeSpeechEditorState(shot?.speech ?? null),
+  characterStateRefs: Array.isArray(shot?.characterStateRefs)
+    ? shot.characterStateRefs.map((stateRef) => normalizeCharacterStateRefEditorItem(stateRef))
+    : [],
   generatedUrl: shot?.generatedUrl ?? '',
   latestGenerationTask: shot?.latestGenerationTask ?? null,
   latestCompletedGenerationTask: shot?.latestCompletedGenerationTask ?? null,
@@ -270,6 +346,20 @@ const buildNewShotEditorItem = (segment, currentShots = []) => {
     representativeFrameImagePath: '',
     representativeFrameImageUrl: '',
     representativeFrameActualTime: '',
+    sourceAudioFilePath: '',
+    sourceAudioFileUrl: '',
+    speech: normalizeSpeechEditorState({
+      transcript: '',
+      subtitleLines: [],
+      speechStyle: '',
+      hasDialogue: false,
+      extractionStatus: 'idle',
+      extractionError: '',
+      subtitleFilePath: '',
+      subtitleFileUrl: '',
+      sourceOfTruth: 'edited_text'
+    }),
+    characterStateRefs: [],
     generatedUrl: '',
     latestGenerationTask: null,
     latestCompletedGenerationTask: null,
@@ -346,7 +436,43 @@ const normalizeShotDraftForSave = (shotDraft) => ({
   representativeFrameTime: String(shotDraft.representativeFrameTime ?? '').trim()
     ? Number(shotDraft.representativeFrameTime)
     : null,
-  representativeFrameNote: String(shotDraft.representativeFrameNote ?? '').trim()
+  representativeFrameNote: String(shotDraft.representativeFrameNote ?? '').trim(),
+  speech: {
+    transcript: String(shotDraft.speech?.transcript ?? '').trim(),
+    subtitleLines: Array.isArray(shotDraft.speech?.subtitleLines)
+      ? shotDraft.speech.subtitleLines
+          .map((line, lineIndex) => ({
+            id: String(line?.id ?? `subtitle_${lineIndex + 1}`),
+            startTime: Number(line?.startTime),
+            endTime: Number(line?.endTime),
+            text: String(line?.text ?? '').trim()
+          }))
+          .filter((line) => line.text)
+      : [],
+    speechStyle: String(shotDraft.speech?.speechStyle ?? '').trim(),
+    hasDialogue: Boolean(shotDraft.speech?.hasDialogue),
+    extractionStatus: String(shotDraft.speech?.extractionStatus ?? 'completed').trim() || 'completed',
+    extractionError: String(shotDraft.speech?.extractionError ?? '').trim(),
+    subtitleFilePath: String(shotDraft.speech?.subtitleFilePath ?? '').trim(),
+    subtitleFileUrl: String(shotDraft.speech?.subtitleFileUrl ?? '').trim(),
+    sourceOfTruth: String(shotDraft.speech?.sourceOfTruth ?? 'edited_text').trim() || 'edited_text'
+  },
+  characterStateRefs: Array.isArray(shotDraft.characterStateRefs)
+    ? shotDraft.characterStateRefs
+        .map((stateRef) => ({
+          characterName: String(stateRef?.characterName ?? '').trim(),
+          stateId: String(stateRef?.stateId ?? '').trim(),
+          stateName: String(stateRef?.stateName ?? '').trim(),
+          summary: String(stateRef?.summary ?? '').trim(),
+          continuityPrompt: String(stateRef?.continuityPrompt ?? '').trim(),
+          representativeFrameTime: String(stateRef?.representativeFrameTime ?? '').trim()
+            ? Number(stateRef.representativeFrameTime)
+            : null,
+          representativeFrameImagePath: String(stateRef?.representativeFrameImagePath ?? '').trim(),
+          representativeFrameImageUrl: String(stateRef?.representativeFrameImageUrl ?? '').trim()
+        }))
+        .filter((stateRef) => stateRef.characterName)
+    : []
 });
 
 const normalizeShotDraftForRebuildCheck = (shotDraft) => ({
@@ -378,10 +504,10 @@ const shouldPersistShotDraftsBeforeGeneration = (shotDrafts = [], persistedShots
       return true;
     }
 
-    const nextRebuildFields = normalizeShotDraftForRebuildCheck(shotDraft);
-    const persistedRebuildFields = normalizeShotDraftForRebuildCheck(currentPersistedShot);
-
-    return JSON.stringify(nextRebuildFields) !== JSON.stringify(persistedRebuildFields);
+    return (
+      JSON.stringify(normalizeShotDraftForSave(shotDraft)) !==
+      JSON.stringify(normalizeShotDraftForSave(currentPersistedShot))
+    );
   });
 };
 
@@ -667,6 +793,109 @@ const SegmentCard = ({
     setEditorBanner('');
   };
 
+  const updateShotSpeech = (shotId, partialSpeech) => {
+    setShotEditorItems((currentState) =>
+      currentState.map((shotDraft) =>
+        shotDraft.id === shotId
+          ? {
+              ...shotDraft,
+              speech: {
+                ...shotDraft.speech,
+                ...partialSpeech
+              }
+            }
+          : shotDraft
+      )
+    );
+    setEditorBanner('');
+  };
+
+  const updateShotSubtitleLine = (shotId, subtitleId, partialLine) => {
+    setShotEditorItems((currentState) =>
+      currentState.map((shotDraft) =>
+        shotDraft.id === shotId
+          ? {
+              ...shotDraft,
+              speech: {
+                ...shotDraft.speech,
+                subtitleLines: (shotDraft.speech?.subtitleLines ?? []).map((line) =>
+                  line.id === subtitleId
+                    ? {
+                        ...line,
+                        ...partialLine
+                      }
+                    : line
+                )
+              }
+            }
+          : shotDraft
+      )
+    );
+    setEditorBanner('');
+  };
+
+  const addShotSubtitleLine = (shotId) => {
+    setShotEditorItems((currentState) =>
+      currentState.map((shotDraft) => {
+        if (shotDraft.id !== shotId) {
+          return shotDraft;
+        }
+
+        const currentLines = Array.isArray(shotDraft.speech?.subtitleLines) ? shotDraft.speech.subtitleLines : [];
+        const lastLine = currentLines[currentLines.length - 1] ?? null;
+        const nextStart = lastLine ? Number(lastLine.endTime || 0) : 0;
+        const nextEnd = Number((nextStart + 0.5).toFixed(2));
+
+        return {
+          ...shotDraft,
+          speech: {
+            ...shotDraft.speech,
+            subtitleLines: [
+              ...currentLines,
+              normalizeSubtitleLineEditorItem(
+                {
+                  id: `subtitle_${Date.now()}`,
+                  startTime: nextStart,
+                  endTime: nextEnd,
+                  text: ''
+                },
+                currentLines.length
+              )
+            ]
+          }
+        };
+      })
+    );
+    setEditorBanner('');
+  };
+
+  const removeShotSubtitleLine = (shotId, subtitleId) => {
+    setShotEditorItems((currentState) =>
+      currentState.map((shotDraft) =>
+        shotDraft.id === shotId
+          ? {
+              ...shotDraft,
+              speech: {
+                ...shotDraft.speech,
+                subtitleLines: (shotDraft.speech?.subtitleLines ?? []).filter((line) => line.id !== subtitleId)
+              }
+            }
+          : shotDraft
+      )
+    );
+    setEditorBanner('');
+  };
+
+  const handleCopyShotTranscript = async (shotDraft) => {
+    const copied = await copyToClipboard(shotDraft?.speech?.transcript ?? '');
+    setEditorBanner(copied ? '对白全文已复制到剪贴板。' : '当前环境不支持剪贴板复制。');
+  };
+
+  const handleCopyShotSrt = async (shotDraft) => {
+    const copied = await copyToClipboard(buildSrtFromSubtitleLines(shotDraft?.speech?.subtitleLines ?? []));
+    setEditorBanner(copied ? 'SRT 已复制到剪贴板。' : '当前环境不支持剪贴板复制。');
+  };
+
   const handleAddShot = () => {
     setShotEditorItems((currentState) => [...currentState, buildNewShotEditorItem(segment, currentState)]);
     setEditorBanner('已新增一个待保存的小镜头。');
@@ -938,6 +1167,16 @@ const SegmentCard = ({
                             <p className="text-sm font-semibold text-white">待生成镜头</p>
                           </div>
                         )}
+                        {Array.isArray(shot.speech?.subtitleLines) && shot.speech.subtitleLines.length ? (
+                          <div className="mt-3 rounded-[12px] border border-white/10 bg-black/20 px-3 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
+                              字幕预览
+                            </p>
+                            <p className="mt-1 text-[12px] leading-5 text-white/72">
+                              {shot.speech.subtitleLines.map((line) => line.text).join(' / ')}
+                            </p>
+                          </div>
+                        ) : null}
                       </div>
                     </article>
                   );
@@ -1343,6 +1582,246 @@ const SegmentCard = ({
                             placeholder="说明为什么这个时间点最能代表当前镜头"
                           />
                         </label>
+
+                        <section className="rounded-[14px] border border-white/10 bg-black/20 px-3 py-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
+                                台词 / 字幕
+                              </p>
+                              <p className="mt-1 text-[12px] leading-5 text-white/60">
+                                这里的文本主要用于查看、复制和导出。当前口型真值仍默认优先使用原镜头参考音频。
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-white/75 transition hover:border-white/20 hover:bg-white/[0.08]"
+                                onClick={() => void handleCopyShotTranscript(shotDraft)}
+                              >
+                                复制全文
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-white/75 transition hover:border-white/20 hover:bg-white/[0.08]"
+                                onClick={() => void handleCopyShotSrt(shotDraft)}
+                              >
+                                复制 SRT
+                              </button>
+                              {shotDraft.speech?.subtitleFileUrl ? (
+                                <a
+                                  href={shotDraft.speech.subtitleFileUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="rounded-full border border-brand-500/20 bg-brand-500/10 px-3 py-1 text-[11px] font-semibold text-brand-100 transition hover:border-brand-500/35 hover:bg-brand-500/15"
+                                >
+                                  下载 SRT
+                                </a>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+                            <div className="space-y-3">
+                              <label className="block space-y-1 text-[11px] text-white/55">
+                                <span>对白全文</span>
+                                <textarea
+                                  value={shotDraft.speech?.transcript ?? ''}
+                                  onChange={(event) =>
+                                    updateShotSpeech(shotDraft.id, {
+                                      transcript: event.target.value,
+                                      hasDialogue: Boolean(event.target.value.trim()) || Boolean(shotDraft.speech?.subtitleLines?.length),
+                                      sourceOfTruth: 'edited_text'
+                                    })
+                                  }
+                                  className="min-h-[96px] w-full rounded-[12px] border border-white/10 bg-black/25 px-3 py-2 text-[12px] leading-6 text-white outline-none"
+                                  placeholder="这里显示当前镜头对白全文，可复制、校对和微调。"
+                                />
+                              </label>
+
+                              <label className="block space-y-1 text-[11px] text-white/55">
+                                <span>说话方式</span>
+                                <input
+                                  type="text"
+                                  value={shotDraft.speech?.speechStyle ?? ''}
+                                  onChange={(event) =>
+                                    updateShotSpeech(shotDraft.id, {
+                                      speechStyle: event.target.value,
+                                      sourceOfTruth: 'edited_text'
+                                    })
+                                  }
+                                  className="w-full rounded-[12px] border border-white/10 bg-black/25 px-3 py-2 text-[12px] text-white outline-none"
+                                  placeholder="语速、停顿、情绪、语气、说话力度、口型明显程度"
+                                />
+                              </label>
+
+                              <label className="flex items-center gap-2 text-[12px] text-white/72">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(shotDraft.speech?.hasDialogue)}
+                                  onChange={(event) =>
+                                    updateShotSpeech(shotDraft.id, {
+                                      hasDialogue: event.target.checked,
+                                      sourceOfTruth: 'edited_text'
+                                    })
+                                  }
+                                  className="h-4 w-4 accent-emerald-400"
+                                />
+                                当前镜头包含对白 / 口型
+                              </label>
+
+                              <div className="rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
+                                    字幕列表
+                                  </p>
+                                  <button
+                                    type="button"
+                                    className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-white/75 transition hover:border-white/20 hover:bg-white/[0.08]"
+                                    onClick={() => addShotSubtitleLine(shotDraft.id)}
+                                  >
+                                    新增字幕行
+                                  </button>
+                                </div>
+
+                                <div className="mt-3 space-y-2">
+                                  {(shotDraft.speech?.subtitleLines ?? []).length ? (
+                                    (shotDraft.speech?.subtitleLines ?? []).map((line, lineIndex) => (
+                                      <div
+                                        key={`${shotDraft.id}-${line.id}`}
+                                        className="grid gap-2 rounded-[12px] border border-white/10 bg-black/20 px-3 py-3 md:grid-cols-[90px_90px_minmax(0,1fr)_72px]"
+                                      >
+                                        <input
+                                          type="number"
+                                          step="0.1"
+                                          min="0"
+                                          value={line.startTime}
+                                          onChange={(event) =>
+                                            updateShotSubtitleLine(shotDraft.id, line.id, {
+                                              startTime: event.target.value
+                                            })
+                                          }
+                                          className="rounded-[10px] border border-white/10 bg-black/25 px-3 py-2 text-[12px] text-white outline-none"
+                                          placeholder="开始"
+                                        />
+                                        <input
+                                          type="number"
+                                          step="0.1"
+                                          min="0"
+                                          value={line.endTime}
+                                          onChange={(event) =>
+                                            updateShotSubtitleLine(shotDraft.id, line.id, {
+                                              endTime: event.target.value
+                                            })
+                                          }
+                                          className="rounded-[10px] border border-white/10 bg-black/25 px-3 py-2 text-[12px] text-white outline-none"
+                                          placeholder="结束"
+                                        />
+                                        <input
+                                          type="text"
+                                          value={line.text}
+                                          onChange={(event) =>
+                                            updateShotSubtitleLine(shotDraft.id, line.id, {
+                                              text: event.target.value
+                                            })
+                                          }
+                                          className="rounded-[10px] border border-white/10 bg-black/25 px-3 py-2 text-[12px] text-white outline-none"
+                                          placeholder={`字幕 ${lineIndex + 1}`}
+                                        />
+                                        <button
+                                          type="button"
+                                          className="rounded-[10px] border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-[11px] font-semibold text-rose-100 transition hover:border-rose-500/35 hover:bg-rose-500/15"
+                                          onClick={() => removeShotSubtitleLine(shotDraft.id, line.id)}
+                                        >
+                                          删除
+                                        </button>
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <div className="rounded-[12px] border border-dashed border-white/10 bg-black/10 px-3 py-3 text-[12px] text-white/60">
+                                      当前镜头还没有字幕行。若整片理解已抽到字幕，会自动显示在这里；也可以手动补一行。
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="space-y-3">
+                              <div className="rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-3">
+                                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
+                                  参考音频
+                                </p>
+                                {shotDraft.sourceAudioFileUrl ? (
+                                  <audio className="mt-3 w-full" src={shotDraft.sourceAudioFileUrl} controls preload="metadata" />
+                                ) : (
+                                  <p className="mt-3 text-[12px] leading-5 text-white/60">
+                                    当前镜头暂无持久化参考音频。保存并重建后会重新尝试抽取。
+                                  </p>
+                                )}
+                              </div>
+
+                              <div className="rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-3">
+                                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
+                                  字幕状态
+                                </p>
+                                <p className="mt-2 text-[12px] leading-5 text-white/72">
+                                  提取状态：{shotDraft.speech?.extractionStatus || 'idle'}
+                                </p>
+                                {shotDraft.speech?.sourceOfTruth ? (
+                                  <p className="mt-1 text-[12px] leading-5 text-white/60">
+                                    当前文本来源：{shotDraft.speech.sourceOfTruth}
+                                  </p>
+                                ) : null}
+                                {shotDraft.speech?.extractionError ? (
+                                  <p className="mt-2 text-[12px] leading-5 text-amber-100">
+                                    {shotDraft.speech.extractionError}
+                                  </p>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        </section>
+
+                        <section className="rounded-[14px] border border-white/10 bg-black/20 px-3 py-3">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
+                            当前角色状态
+                          </p>
+                          <div className="mt-3 space-y-2">
+                            {(shotDraft.characterStateRefs ?? []).length ? (
+                              shotDraft.characterStateRefs.map((stateRef, stateRefIndex) => (
+                                <div
+                                  key={`${shotDraft.id}-${stateRef.characterName}-${stateRef.stateId || stateRefIndex}`}
+                                  className="rounded-[12px] border border-white/10 bg-white/[0.04] px-3 py-3"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-sm font-semibold text-white">
+                                      @{stateRef.characterName} {stateRef.stateName ? `· ${stateRef.stateName}` : ''}
+                                    </p>
+                                    {stateRef.representativeFrameImageUrl ? (
+                                      <img
+                                        src={stateRef.representativeFrameImageUrl}
+                                        alt={`${stateRef.characterName} 状态参考`}
+                                        className="h-12 w-12 rounded-[10px] border border-white/10 object-cover"
+                                      />
+                                    ) : null}
+                                  </div>
+                                  {stateRef.summary ? (
+                                    <p className="mt-2 text-[12px] leading-5 text-white/72">{stateRef.summary}</p>
+                                  ) : null}
+                                  {stateRef.continuityPrompt ? (
+                                    <p className="mt-2 text-[12px] leading-5 text-white/60">
+                                      连续性约束：{stateRef.continuityPrompt}
+                                    </p>
+                                  ) : null}
+                                </div>
+                              ))
+                            ) : (
+                              <div className="rounded-[12px] border border-dashed border-white/10 bg-black/10 px-3 py-3 text-[12px] text-white/60">
+                                当前镜头没有绑定角色状态引用。保存镜头或保存角色状态时间线后会自动重新计算。
+                              </div>
+                            )}
+                          </div>
+                        </section>
                       </div>
 
                       <div className="rounded-[16px] border border-white/10 bg-white/[0.04] px-3 py-3">
@@ -1416,6 +1895,38 @@ SegmentCard.propTypes = {
         representativeFrameImagePath: PropTypes.string,
         representativeFrameImageUrl: PropTypes.string,
         representativeFrameActualTime: PropTypes.number,
+        sourceAudioFilePath: PropTypes.string,
+        sourceAudioFileUrl: PropTypes.string,
+        speech: PropTypes.shape({
+          transcript: PropTypes.string,
+          subtitleLines: PropTypes.arrayOf(
+            PropTypes.shape({
+              id: PropTypes.string,
+              startTime: PropTypes.number,
+              endTime: PropTypes.number,
+              text: PropTypes.string
+            })
+          ),
+          speechStyle: PropTypes.string,
+          hasDialogue: PropTypes.bool,
+          extractionStatus: PropTypes.string,
+          extractionError: PropTypes.string,
+          subtitleFilePath: PropTypes.string,
+          subtitleFileUrl: PropTypes.string,
+          sourceOfTruth: PropTypes.string
+        }),
+        characterStateRefs: PropTypes.arrayOf(
+          PropTypes.shape({
+            characterName: PropTypes.string,
+            stateId: PropTypes.string,
+            stateName: PropTypes.string,
+            summary: PropTypes.string,
+            continuityPrompt: PropTypes.string,
+            representativeFrameTime: PropTypes.number,
+            representativeFrameImagePath: PropTypes.string,
+            representativeFrameImageUrl: PropTypes.string
+          })
+        ),
         generatedUrl: PropTypes.string,
         latestGenerationTask: PropTypes.object,
         latestCompletedGenerationTask: PropTypes.object

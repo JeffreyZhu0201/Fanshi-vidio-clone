@@ -91,8 +91,8 @@ const resetStores = () => {
   useAnalysisStore.setState({
     analysis: null,
     analysisOptions: {
-      extractSubtitles: false,
-      parseAudio: false
+      extractSubtitles: true,
+      parseAudio: true
     },
     loading: false,
     error: '',
@@ -143,8 +143,8 @@ describe('useAnalysis recovery flow', () => {
     });
 
     expect(analyzeVideo).toHaveBeenCalledWith(501, {
-      extractSubtitles: false,
-      parseAudio: false
+      extractSubtitles: true,
+      parseAudio: true
     });
     expect(getAnalysis).toHaveBeenCalledWith(501);
     expect(sleep).toHaveBeenCalled();

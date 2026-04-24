@@ -10,6 +10,8 @@
 - 一键出片自动编排
 - 整片理解
 - 大片段与小镜头切分
+- 小镜头字幕 / 音频 / 口型链路
+- 角色状态连续性
 - 小镜头源预览与典型帧
 - 背景资产自动生成
 - Seedance 小镜头生成
@@ -123,15 +125,21 @@
 
 - `plot`
 - `characters`
+- `characters[*].stateTimeline`
 - `backgrounds`
 - `time_anchors`
 - `time_anchors[*].shots`
+- `time_anchors[*].shots[*].speech`
+- `time_anchors[*].shots[*].characterStateRefs`
 
 当前规则：
 
 - 小镜头真值来自整片理解，不再由片段分析二次重写
 - 大片段时间和小镜头时间都用整片绝对秒数
+- 角色状态时间线也用整片绝对秒数
+- 小镜头字幕时间是相对当前小镜头本地时间
 - 整片理解固定只走一次 `Gemini-2.5-pro`
+- 分析选项默认 `extractSubtitles=true`、`parseAudio=true`
 - 不再自动切备用文本模型
 - 不再自动走关键帧回退
 - 不再自动掉回 mock 整片分析
@@ -173,7 +181,25 @@
 - 大片段卡
 - 小镜头源预览
 - 小镜头典型帧
+- 小镜头字幕预览
 - 当前最终提示词
+
+新增的编辑能力：
+
+- 角色编辑弹窗可以维护 `stateTimeline`
+- 小镜头编辑弹窗可以查看和编辑 `speech`
+- 可以复制对白全文、复制 SRT、下载 SRT
+
+### 2.4.1 角色状态时间线保存
+
+- 接口：`PUT /api/analysis/:videoId/characters`
+- 后端服务：`analysisService.updateAnalysisCharactersByVideoId`
+
+保存后会自动做：
+
+- 持久化 `characters[*].stateTimeline`
+- 重算 `time_anchors[*].shots[*].characterStateRefs`
+- 同步刷新 `segment.analysis.shots[*].characterStateRefs`
 
 ### 2.5 角色三视图 / 场景资源图
 
@@ -220,9 +246,11 @@
 
 1. 小镜头源视频
 2. 小镜头典型帧
-3. 角色三视图
-4. 场景资源图
-5. 背景资产视频
+3. 当前镜头角色状态参考帧
+4. 角色三视图
+5. 场景资源图
+6. 小镜头参考音频
+7. 背景资产视频
 
 然后再把：
 
@@ -230,6 +258,12 @@
 - `#场景`
 
 替换成真实资源提示词，组装成最终 Seedance 提示词。
+
+当前镜头生成分支：
+
+- 有对白并且参考音频存在：`generate_audio=true`，会传 `reference_audio`
+- 无对白：`generate_audio=false`，明确要求不要明显说话口型
+- 编辑区改过的对白和字幕会先保存，再参与页面展示与 SRT；口型真值首版仍默认优先原镜头音频
 
 Seedance 这轮已经确认的兼容规则：
 
@@ -331,9 +365,12 @@ Seedance 这轮已经确认的兼容规则：
 输出重点：
 
 - `characters`
+- `characters[*].stateTimeline`
 - `backgrounds`
 - `time_anchors`
 - `time_anchors[*].shots`
+- `time_anchors[*].shots[*].speech`
+- `time_anchors[*].shots[*].characterStateRefs`
 
 当前硬规则：
 
@@ -342,6 +379,9 @@ Seedance 这轮已经确认的兼容规则：
 - `shots` 尽量按真实镜头切点拆分
 - `timeAnchor` / `shot` 时间尽量精确到 `0.1` 秒
 - `representativeFrameTime` 必须选镜头里最有代表性的真实瞬间，不允许机械取中点
+- 每个 `shot.prompt` 必须带 `@角色` 和 `#场景`
+- 每个 `shot` 都必须带 `speech`
+- 每个 `shot` 都必须带 `characterStateRefs`
 
 ### 3.2 片段理解提示词
 
@@ -402,7 +442,20 @@ Seedance 这轮已经确认的兼容规则：
 
 - 把 `@角色` 替换成角色真实资源提示词
 - 把 `#场景` 替换成场景真实资源提示词
+- 再补上当前镜头角色状态 `continuityPrompt`
+- 再补上对白全文、字幕节奏和说话方式
 - 再补上镜头复原、构图、动作连续性要求
+
+当前真实顺序：
+
+1. 整片剧情目标
+2. 大片段最终提示词
+3. 小镜头最终提示词
+4. 展开的 `@角色` 资源提示词
+5. 当前镜头角色状态 `continuityPrompt`
+6. 展开的 `#场景` 资源提示词
+7. 对白文本 / 字幕节奏 / 说话方式
+8. 不要字幕 / 不要文字 / 不要水印 / 不要 UI
 
 ### 3.7 Gemini 生图提示词
 
@@ -426,8 +479,11 @@ Seedance 这轮已经确认的兼容规则：
 - 整片理解细粒度镜头切分提示词
 - 大片段切分
 - 小镜头定义透传
+- 小镜头对白 / 字幕 / 说话方式透传
+- 角色状态时间线与镜头状态引用
 - 小镜头源视频切片
 - 小镜头典型帧抽取
+- 小镜头参考音频切片与 SRT 生成
 - 小镜头缺失资产自愈重建
 - 背景资产自动生成与查询
 - 小镜头单任务创建、轮询、进度显示
