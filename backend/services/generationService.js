@@ -2,6 +2,11 @@ import { Analysis, GenerationTask, Segment, Video } from '../models/index.js';
 import env from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { TASK_STATUS } from '../config/constants.js';
+import {
+  DEFAULT_STYLE_MODE,
+  normalizeStyleMode,
+  resolveStyleTemplate
+} from '../../shared/styleTemplates.js';
 import { ensureBackgroundAsset } from './backgroundAssetService.js';
 import { listCompletedResourceImageAssetsByResourceKeys } from './resourceImageService.js';
 import {
@@ -19,6 +24,7 @@ const serializeGenerationMeta = (task) => {
   return {
     engine: String(taskMeta.engine ?? '').trim(),
     ratio: String(taskMeta.ratio ?? '').trim(),
+    style_mode: normalizeStyleMode(taskMeta.styleMode ?? taskMeta.style_mode ?? DEFAULT_STYLE_MODE),
     remote_status: String(taskMeta.remoteStatus ?? '').trim(),
     remote_status_label: String(taskMeta.remoteStatusLabel ?? '').trim(),
     remote_created_at: Number(taskMeta.remoteCreatedAt ?? 0) || null,
@@ -969,14 +975,16 @@ const getSeedDanceDurationForSegment = (segment) => {
 
 const normalizeComparablePrompt = (value) => String(value ?? '').trim();
 
-const doesSegmentTaskMatchGenerationRequest = ({ task, prompt, ratio }) => {
+const doesSegmentTaskMatchGenerationRequest = ({ task, prompt, ratio, styleMode = '' }) => {
   if (!task) {
     return false;
   }
 
   return (
     normalizeComparablePrompt(task.prompt) === normalizeComparablePrompt(prompt) &&
-    normalizeGenerationRatio(task.meta?.ratio) === normalizeGenerationRatio(ratio)
+    normalizeGenerationRatio(task.meta?.ratio) === normalizeGenerationRatio(ratio) &&
+    normalizeStyleMode(task.meta?.styleMode ?? task.meta?.style_mode ?? DEFAULT_STYLE_MODE) ===
+      normalizeStyleMode(styleMode || task.meta?.styleMode || task.meta?.style_mode || DEFAULT_STYLE_MODE)
   );
 };
 
@@ -989,7 +997,9 @@ const buildSeedDanceReconstructionPrompt = ({
   sceneNames = [],
   characterStateRefs = [],
   speech = null,
-  isShot = false
+  isShot = false,
+  videoGenerationStylePrompt = '',
+  durationSeconds = null
 }) => {
   const normalizedCharacterNames = dedupeNameList(characterNames, normalizeCharacterIdentity);
   const normalizedSceneNames = dedupeNameList(sceneNames, normalizeSceneIdentity);
@@ -1016,6 +1026,11 @@ const buildSeedDanceReconstructionPrompt = ({
   const speechTranscript = String(speech?.transcript ?? '').trim();
   const speechStyle = String(speech?.speechStyle ?? '').trim();
   const speechSubtitleLines = Array.isArray(speech?.subtitleLines) ? speech.subtitleLines : [];
+  const speechDeliveryRateMultiplier = Number(speech?.deliveryRateMultiplier ?? speech?.delivery_rate_multiplier ?? 1);
+  const shouldFitDialogueWithinShot =
+    Boolean(speech?.fitWithinDuration ?? speech?.fit_within_duration) ||
+    speechDeliveryRateMultiplier > 1.001 ||
+    Boolean(String(speech?.deliveryConstraint ?? speech?.delivery_constraint ?? '').trim());
   const speechTimingSummary = speechSubtitleLines.length
     ? speechSubtitleLines
         .map((line) => {
@@ -1028,6 +1043,7 @@ const buildSeedDanceReconstructionPrompt = ({
     plot ? `整片剧情目标：${plot}` : '',
     segmentPrompt ? `大片段最终提示词：${segmentPrompt}` : '',
     isShot && shotPrompt ? `小镜头最终提示词：${shotPrompt}` : '',
+    videoGenerationStylePrompt ? `全局风格硬约束：${videoGenerationStylePrompt}` : '',
     basePrompt ? `资源展开后的生成真值：${basePrompt}` : '',
     isShot ? '严格还原原片当前小镜头，不要把多个镜头语义混成一个新镜头。' : '严格延续原片当前片段的剧情、镜头语言和表演逻辑。',
     isShot
@@ -1057,6 +1073,12 @@ const buildSeedDanceReconstructionPrompt = ({
     isShot && hasDialogue && speechTranscript ? `对白文本真值：${speechTranscript}` : '',
     isShot && hasDialogue && speechTimingSummary ? `字幕节奏参考：${speechTimingSummary}` : '',
     isShot && hasDialogue && speechStyle ? `说话方式：${speechStyle}` : '',
+    isShot && hasDialogue && shouldFitDialogueWithinShot && Number.isFinite(Number(durationSeconds))
+      ? `必须把完整对白压缩在当前镜头 ${Number(durationSeconds).toFixed(2)} 秒内说完，允许适度加快语速和压缩停顿，但不要截断台词结尾。`
+      : '',
+    isShot && hasDialogue && String(speech?.deliveryConstraint ?? speech?.delivery_constraint ?? '').trim()
+      ? `对白时长约束：${String(speech?.deliveryConstraint ?? speech?.delivery_constraint ?? '').trim()}`
+      : '',
     isShot && hasDialogue ? '对白和字幕只用于口型、表演、语速、停顿和生成音频，不要把任何字幕文字直接显示到画面里。' : '',
     isShot && !hasDialogue ? '当前镜头不要对白、不要唱词、不要明显说话嘴部动作，只生成纯视频画面。' : '',
     '画面里不要任何字幕、台词字卡、贴纸文案、Logo、水印、角标、UI 浮层或其它可见文字。'
@@ -1139,6 +1161,23 @@ const processGenerationTask = async (taskId) => {
 
     const characters = task.segment?.video?.analysis?.characters ?? [];
     const overallAnalysis = task.segment?.video?.analysis ?? null;
+    const resolvedStyleMode = normalizeStyleMode(
+      task.meta?.styleMode ??
+        task.meta?.style_mode ??
+        task.segment?.analysis?.analysisOptions?.styleMode ??
+        overallAnalysis?.analysisOptions?.styleMode ??
+        overallAnalysis?.analysis_options?.styleMode ??
+        DEFAULT_STYLE_MODE
+    );
+    const videoGenerationStylePrompt = resolveStyleTemplate({
+      styleMode: resolvedStyleMode,
+      styleTemplates:
+        task.segment?.analysis?.analysisOptions?.styleTemplates ??
+        overallAnalysis?.analysisOptions?.styleTemplates ??
+        overallAnalysis?.analysis_options?.styleTemplates ??
+        null,
+      templateKey: 'videoGenerationStylePrompt'
+    });
     const backgroundBinding = getBackgroundBindingForSegment(task.segment, overallAnalysis);
     const sourceAbsolutePath = resolveUploadPath(task.segment.filePath);
     const sourcePublicUrl = toAbsolutePublicUploadUrl(task.segment.filePath);
@@ -1175,6 +1214,7 @@ const processGenerationTask = async (taskId) => {
       prompt: optimizedPrompt,
       plot: overallAnalysis?.plot ?? '',
       segmentPrompt: task.prompt,
+      videoGenerationStylePrompt,
       characterNames: [...getPromptMentionNames(task.prompt), ...getSegmentCharacterNames(task.segment)],
       sceneNames: [
         ...getPromptSceneNames(task.prompt),
@@ -1280,7 +1320,7 @@ const processGenerationTask = async (taskId) => {
   }
 };
 
-const startGeneration = async ({ segmentId, prompt, ratio }) => {
+const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '' }) => {
   const segment = await Segment.findByPk(segmentId);
 
   if (!segment) {
@@ -1292,6 +1332,9 @@ const startGeneration = async ({ segmentId, prompt, ratio }) => {
   assertSeedDanceReady();
 
   const resolvedRatio = normalizeGenerationRatio(ratio);
+  const resolvedStyleMode = normalizeStyleMode(
+    styleMode || segment?.analysis?.analysisOptions?.styleMode || DEFAULT_STYLE_MODE
+  );
   const latestTasks = await GenerationTask.findAll({
     where: {
       segmentId
@@ -1307,14 +1350,16 @@ const startGeneration = async ({ segmentId, prompt, ratio }) => {
     doesSegmentTaskMatchGenerationRequest({
       task: latestAttemptTask,
       prompt,
-      ratio: resolvedRatio
+      ratio: resolvedRatio,
+      styleMode: resolvedStyleMode
     })
   ) {
     return {
       task_id: latestAttemptTask.id,
       status: latestAttemptTask.status,
       progress: latestAttemptTask.progress,
-      ratio: resolvedRatio
+      ratio: resolvedRatio,
+      style_mode: resolvedStyleMode
     };
   }
 
@@ -1323,14 +1368,16 @@ const startGeneration = async ({ segmentId, prompt, ratio }) => {
     doesSegmentTaskMatchGenerationRequest({
       task: latestCompletedTask,
       prompt,
-      ratio: resolvedRatio
+      ratio: resolvedRatio,
+      styleMode: resolvedStyleMode
     })
   ) {
     return {
       task_id: latestCompletedTask.id,
       status: latestCompletedTask.status,
       progress: latestCompletedTask.progress,
-      ratio: resolvedRatio
+      ratio: resolvedRatio,
+      style_mode: resolvedStyleMode
     };
   }
 
@@ -1342,6 +1389,7 @@ const startGeneration = async ({ segmentId, prompt, ratio }) => {
     meta: {
       source: 'segment_generation',
       ratio: resolvedRatio,
+      styleMode: resolvedStyleMode,
       engine: '',
       remoteStatus: '',
       remoteStatusLabel: '',
@@ -1363,7 +1411,8 @@ const startGeneration = async ({ segmentId, prompt, ratio }) => {
     task_id: task.id,
     status: task.status,
     progress: task.progress,
-    ratio: resolvedRatio
+    ratio: resolvedRatio,
+    style_mode: resolvedStyleMode
   };
 };
 

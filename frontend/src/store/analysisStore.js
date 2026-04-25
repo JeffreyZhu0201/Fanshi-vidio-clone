@@ -1,10 +1,18 @@
 import { create } from 'zustand';
 
+import {
+  DEFAULT_STYLE_MODE,
+  getEditableStyleTemplateDefaults,
+  normalizeStyleMode
+} from '../../../shared/styleTemplates.js';
+
 const createInitialAnalysisState = () => ({
   analysis: null,
   analysisOptions: {
     extractSubtitles: true,
-    parseAudio: true
+    parseAudio: true,
+    styleMode: DEFAULT_STYLE_MODE,
+    styleTemplates: getEditableStyleTemplateDefaults()
   },
   loading: false,
   error: '',
@@ -13,6 +21,32 @@ const createInitialAnalysisState = () => ({
   statusMessage: '等待分析',
   lastUpdatedAt: null
 });
+
+const normalizeAnalysisOptionsForStore = (analysisOptions = null) => {
+  const nextStyleTemplates = getEditableStyleTemplateDefaults();
+  const inputStyleTemplates = analysisOptions?.styleTemplates ?? analysisOptions?.style_templates ?? null;
+
+  Object.keys(nextStyleTemplates).forEach((styleMode) => {
+    Object.keys(nextStyleTemplates[styleMode]).forEach((templateKey) => {
+      if (inputStyleTemplates?.[styleMode] && Object.prototype.hasOwnProperty.call(inputStyleTemplates[styleMode], templateKey)) {
+        nextStyleTemplates[styleMode][templateKey] = String(inputStyleTemplates[styleMode][templateKey] ?? '');
+      }
+    });
+  });
+
+  return {
+    extractSubtitles:
+      typeof (analysisOptions?.extractSubtitles ?? analysisOptions?.extract_subtitles) === 'boolean'
+        ? Boolean(analysisOptions?.extractSubtitles ?? analysisOptions?.extract_subtitles)
+        : true,
+    parseAudio:
+      typeof (analysisOptions?.parseAudio ?? analysisOptions?.parse_audio) === 'boolean'
+        ? Boolean(analysisOptions?.parseAudio ?? analysisOptions?.parse_audio)
+        : true,
+    styleMode: normalizeStyleMode(analysisOptions?.styleMode ?? analysisOptions?.style_mode ?? DEFAULT_STYLE_MODE),
+    styleTemplates: nextStyleTemplates
+  };
+};
 
 const buildResetAnalysisState = () => ({
   ...createInitialAnalysisState()
@@ -23,16 +57,7 @@ const useAnalysisStore = create((set) => ({
   setAnalysis: (analysis) =>
     set({
       analysis,
-      analysisOptions: {
-        extractSubtitles:
-          typeof (analysis?.analysis_options?.extractSubtitles ?? analysis?.analysis_options?.extract_subtitles) === 'boolean'
-            ? Boolean(analysis?.analysis_options?.extractSubtitles ?? analysis?.analysis_options?.extract_subtitles)
-            : true,
-        parseAudio:
-          typeof (analysis?.analysis_options?.parseAudio ?? analysis?.analysis_options?.parse_audio) === 'boolean'
-            ? Boolean(analysis?.analysis_options?.parseAudio ?? analysis?.analysis_options?.parse_audio)
-            : true
-      },
+      analysisOptions: normalizeAnalysisOptionsForStore(analysis?.analysis_options ?? analysis?.analysisOptions ?? null),
       loading: false,
       error: '',
       progress: 100,
@@ -47,17 +72,24 @@ const useAnalysisStore = create((set) => ({
     })),
   setAnalysisOptions: (analysisOptions) =>
     set((state) => ({
-      analysisOptions: {
+      analysisOptions: normalizeAnalysisOptionsForStore({
         ...state.analysisOptions,
-        extractSubtitles:
-          typeof analysisOptions?.extractSubtitles === 'boolean'
-            ? analysisOptions.extractSubtitles
-            : state.analysisOptions.extractSubtitles,
-        parseAudio:
-          typeof analysisOptions?.parseAudio === 'boolean'
-            ? analysisOptions.parseAudio
-            : state.analysisOptions.parseAudio
-      },
+        ...analysisOptions,
+        styleTemplates: analysisOptions?.styleTemplates
+          ? {
+              ...state.analysisOptions.styleTemplates,
+              ...analysisOptions.styleTemplates,
+              realistic: {
+                ...state.analysisOptions.styleTemplates.realistic,
+                ...(analysisOptions.styleTemplates.realistic ?? {})
+              },
+              comic_drama: {
+                ...state.analysisOptions.styleTemplates.comic_drama,
+                ...(analysisOptions.styleTemplates.comic_drama ?? {})
+              }
+            }
+          : state.analysisOptions.styleTemplates
+      }),
       lastUpdatedAt: new Date().toISOString()
     })),
   setError: (error) =>
@@ -88,4 +120,4 @@ const useAnalysisStore = create((set) => ({
     })
 }));
 
-export { useAnalysisStore };
+export { normalizeAnalysisOptionsForStore, useAnalysisStore };

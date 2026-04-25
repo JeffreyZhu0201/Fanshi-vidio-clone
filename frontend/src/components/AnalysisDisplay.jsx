@@ -18,7 +18,19 @@ import {
   updateAnalysisCharacters as updateAnalysisCharactersRequest
 } from '../services/api.js';
 import { formatDuration } from '../utils/formatDuration.js';
-import { buildVideoAnalysisPrompt } from '../utils/promptBlueprints.js';
+import { buildVideoAnalysisPromptSections } from '../utils/promptBlueprints.js';
+import {
+  buildCharacterViewPrompts as buildStyledCharacterViewPrompts,
+  buildSceneAnglePrompts as buildStyledSceneAnglePrompts
+} from '../../../shared/promptBlueprints.js';
+import {
+  DEFAULT_STYLE_MODE,
+  STYLE_MODE_LABELS,
+  STYLE_MODE_OPTIONS,
+  getEditableStyleTemplateDefaults,
+  normalizeStyleMode,
+  resolveStyleTemplate
+} from '../../../shared/styleTemplates.js';
 
 const EMPTY_ITEMS = Object.freeze([]);
 
@@ -438,7 +450,9 @@ const AnalysisDisplay = ({
   compactMode = false,
   analysisOptions = {
     extractSubtitles: true,
-    parseAudio: true
+    parseAudio: true,
+    styleMode: DEFAULT_STYLE_MODE,
+    styleTemplates: getEditableStyleTemplateDefaults()
   },
   loading = false,
   error = '',
@@ -566,17 +580,23 @@ const AnalysisDisplay = ({
 
   const getResourceVariantPrompts = (resource) => {
     const prompt = getResolvedResourcePrompt(resource);
+    const styleMode = normalizeStyleMode(analysisOptions?.styleMode ?? analysisOptions?.style_mode ?? DEFAULT_STYLE_MODE);
+    const styleTemplates = analysisOptions?.styleTemplates ?? analysisOptions?.style_templates ?? getEditableStyleTemplateDefaults();
 
     return resource?.resourceType === 'character'
-      ? buildCharacterViewPrompts({
+      ? buildStyledCharacterViewPrompts({
           resourceName: resource.resourceName,
           prompt,
           appearancePrompt: resource.appearancePrompt,
-          personalityPrompt: resource.personalityPrompt
+          personalityPrompt: resource.personalityPrompt,
+          styleMode,
+          styleTemplates
         })
-      : buildSceneAnglePrompts({
+      : buildStyledSceneAnglePrompts({
           resourceName: resource.resourceName,
-          prompt
+          prompt,
+          styleMode,
+          styleTemplates
         });
   };
 
@@ -844,7 +864,10 @@ const AnalysisDisplay = ({
         basePrompt,
         requestCharacters,
         requestBackgrounds,
-        { mode: optimizeMode }
+        {
+          mode: optimizeMode,
+          style_mode: normalizeStyleMode(analysisOptions?.styleMode ?? analysisOptions?.style_mode ?? DEFAULT_STYLE_MODE)
+        }
       );
 
       setResourceEditor((currentState) => {
@@ -1035,7 +1058,51 @@ const AnalysisDisplay = ({
   }, [characters, resourcePromptOverrides, sceneCards]);
 
   const analysisFrameSource = video?.file_url || '';
-  const videoAnalysisPrompt = video ? buildVideoAnalysisPrompt({ video }) : '';
+  const currentStyleMode = normalizeStyleMode(analysisOptions?.styleMode ?? analysisOptions?.style_mode ?? DEFAULT_STYLE_MODE);
+  const currentStyleLabel = STYLE_MODE_LABELS[currentStyleMode] ?? STYLE_MODE_LABELS[DEFAULT_STYLE_MODE];
+  const currentStyleTemplates = analysisOptions?.styleTemplates ?? analysisOptions?.style_templates ?? getEditableStyleTemplateDefaults();
+  const videoAnalysisPromptSections = video
+    ? buildVideoAnalysisPromptSections({
+        video,
+        metadata: {
+          duration: video?.duration
+        },
+        analysisOptions
+      })
+    : null;
+  const videoAnalysisPrompt = videoAnalysisPromptSections?.finalPrompt ?? '';
+  const videoAnalysisFixedPrompt = videoAnalysisPromptSections?.fixedStructurePrompt ?? '';
+  const videoAnalysisStylePrompt = videoAnalysisPromptSections?.stylePrompt ?? '';
+  const handleStyleModeChange = (nextStyleMode) => {
+    const normalizedStyleMode = normalizeStyleMode(nextStyleMode);
+    onAnalysisOptionsChange({
+      styleMode: normalizedStyleMode
+    });
+  };
+  const handleVideoAnalysisStylePromptChange = (nextPrompt) => {
+    onAnalysisOptionsChange({
+      styleTemplates: {
+        [currentStyleMode]: {
+          ...(currentStyleTemplates?.[currentStyleMode] ?? {}),
+          videoAnalysisStylePrompt: String(nextPrompt ?? '')
+        }
+      }
+    });
+  };
+  const handleRestoreVideoAnalysisStylePrompt = () => {
+    onAnalysisOptionsChange({
+      styleTemplates: {
+        [currentStyleMode]: {
+          ...(currentStyleTemplates?.[currentStyleMode] ?? {}),
+          videoAnalysisStylePrompt: resolveStyleTemplate({
+            styleMode: currentStyleMode,
+            styleTemplates: null,
+            templateKey: 'videoAnalysisStylePrompt'
+          })
+        }
+      }
+    });
+  };
   const analysisStatusLabel = analysis?.is_mock ? 'Gemini失败已回退' : 'Gemini真实结果';
   const analysisStatusTone = analysis?.is_mock ? 'fallback' : 'completed';
   const keyFrameCount = [...characters, ...sceneCards].filter((item) => {
@@ -2109,6 +2176,7 @@ const AnalysisDisplay = ({
                   <span className="toolbar-pill">
                     音频解析 {analysisOptions?.parseAudio ? '开' : '关'}
                   </span>
+                  <span className="toolbar-pill">风格 {currentStyleLabel}</span>
                   <span className="toolbar-pill">时长 {video.duration ? formatDuration(video.duration) : '待探测'}</span>
                   <span className="toolbar-pill">典型帧 {keyFrameCount}</span>
                   <span className="toolbar-pill">片段提示词 {timeAnchorPromptCount}</span>
@@ -2392,26 +2460,105 @@ const AnalysisDisplay = ({
         open={promptModalOpen}
         onClose={() => setPromptModalOpen(false)}
         title="整片分析提示词"
-        description="开始分析时，后端会把原视频和这段提示词一起发送给 Gemini，产出剧情、角色、场景、典型帧和片段切分预案。"
+        description="这里把整片分析提示词拆成固定结构段和可编辑风格段。JSON 结构、字段要求和输出规则保持只读，只允许调整风格段。"
         size="xl"
       >
-        <PromptPreview
-          title="整片分析提示词"
-          description="这里展示的是当前前端工作台里的整片分析提示词模板。"
-          prompt={videoAnalysisPrompt}
-          modelLabel="Gemini"
-          defaultOpen
-        />
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[20px] border border-white/10 bg-white/[0.04] px-4 py-4">
+            <div>
+              <p className="text-sm font-semibold text-white">当前风格模式</p>
+              <p className="mt-1 text-xs leading-5 text-white/55">切换后只影响后续分析、优化和生成，不会自动覆盖已产出的结果。</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                aria-label="整片分析风格模式"
+                className="rounded-full border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                value={currentStyleMode}
+                onChange={(event) => handleStyleModeChange(event.target.value)}
+              >
+                {STYLE_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-white/75 transition hover:border-white/20 hover:bg-white/[0.08]"
+                onClick={handleRestoreVideoAnalysisStylePrompt}
+              >
+                恢复预设
+              </button>
+            </div>
+          </div>
+
+          <PromptPreview
+            title="固定结构段"
+            description="这一段会原样发送给 Gemini，约束 JSON 结构、字段定义和切分规则，前端不允许直接编辑。"
+            prompt={videoAnalysisFixedPrompt}
+            modelLabel="Gemini"
+            defaultOpen
+          />
+
+          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-white">可编辑风格段</p>
+                <p className="mt-1 text-xs leading-5 text-white/55">
+                  当前是 {currentStyleLabel} 模式。这里只编辑风格约束，不要改 JSON 字段或输出骨架。
+                </p>
+              </div>
+              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/60">
+                Style
+              </span>
+            </div>
+
+            <textarea
+              aria-label="整片分析风格提示编辑器"
+              className="mt-4 min-h-[160px] w-full rounded-[18px] border border-white/10 bg-black/[0.35] px-4 py-4 text-sm leading-6 text-white outline-none transition focus:border-brand-500/40 focus:ring-2 focus:ring-brand-500/20"
+              value={videoAnalysisStylePrompt}
+              onChange={(event) => handleVideoAnalysisStylePromptChange(event.target.value)}
+            />
+          </div>
+
+          <PromptPreview
+            title="最终拼装后的整片分析提示词"
+            description="开始分析时，后端会把原视频和这段最终拼装后的提示词一起发送给 Gemini。"
+            prompt={videoAnalysisPrompt}
+            modelLabel="Gemini"
+          />
+        </div>
       </ModalSheet>
 
       <ModalSheet
         open={analysisOptionsOpen}
         onClose={() => setAnalysisOptionsOpen(false)}
         title="分析选项"
-        description="这些选项会随当前视频保存，并在下一次整片理解时决定是否抽取字幕和说话节奏。当前默认双开。"
+        description="这些选项会随当前视频保存，并在下一次整片理解时决定是否抽取字幕、音频和当前风格模式。"
         size="md"
       >
         <div className="space-y-4">
+          <label className="flex items-start justify-between gap-4 rounded-[18px] border border-white/10 bg-black/20 px-4 py-4">
+            <div>
+              <p className="text-sm font-semibold text-white">全局风格模式</p>
+              <p className="mt-1 text-[12px] leading-5 text-white/60">
+                写实会按影视写实重建；漫剧会按国漫影视化风格统一作用到整片理解、片段理解、资源图和视频生成。
+              </p>
+            </div>
+            <select
+              aria-label="分析选项风格模式"
+              className="rounded-full border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+              value={currentStyleMode}
+              onChange={(event) => handleStyleModeChange(event.target.value)}
+            >
+              {STYLE_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
           <label className="flex items-start justify-between gap-4 rounded-[18px] border border-white/10 bg-black/20 px-4 py-4">
             <div>
               <p className="text-sm font-semibold text-white">提取字幕</p>
@@ -2490,7 +2637,9 @@ AnalysisDisplay.propTypes = {
   compactMode: PropTypes.bool,
   analysisOptions: PropTypes.shape({
     extractSubtitles: PropTypes.bool,
-    parseAudio: PropTypes.bool
+    parseAudio: PropTypes.bool,
+    styleMode: PropTypes.string,
+    styleTemplates: PropTypes.object
   }),
   loading: PropTypes.bool,
   error: PropTypes.string,

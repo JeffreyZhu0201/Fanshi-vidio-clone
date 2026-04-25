@@ -9,6 +9,7 @@ import {
 import { validateRequest } from '../middleware/validation.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import {
+  analyzeSegmentBodySchema,
   idParamSchema,
   splitVideoBodySchema,
   updateSegmentShotsBodySchema,
@@ -18,7 +19,11 @@ import {
 const router = Router();
 
 router.post('/split', validateRequest({ body: splitVideoBodySchema }), asyncHandler(splitVideoByAnchors));
-router.post('/:id/analyze', validateRequest({ params: idParamSchema }), asyncHandler(analyzeSegment));
+router.post(
+  '/:id/analyze',
+  validateRequest({ params: idParamSchema, body: analyzeSegmentBodySchema }),
+  asyncHandler(analyzeSegment)
+);
 router.put(
   '/:id/shots',
   validateRequest({ params: idParamSchema, body: updateSegmentShotsBodySchema }),

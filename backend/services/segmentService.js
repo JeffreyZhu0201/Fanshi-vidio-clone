@@ -772,7 +772,7 @@ const startSplitVideo = async ({ videoId, timeAnchors }) => {
   };
 };
 
-const analyzeSegmentById = async (segmentId) => {
+const analyzeSegmentById = async (segmentId, { styleMode = '', segmentAnalysisStylePrompt = '' } = {}) => {
   const segment = await ensurePersistentShotAssets(await getSegmentRecordById(segmentId));
   const overallAnalysis = await getAnalysisRecordByVideoId(segment.videoId);
 
@@ -806,7 +806,9 @@ const analyzeSegmentById = async (segmentId) => {
       analysis: baseSegmentAnalysis
     },
     overallAnalysis,
-    segmentAbsolutePath: resolveUploadPath(segment.filePath)
+    segmentAbsolutePath: resolveUploadPath(segment.filePath),
+    styleMode,
+    segmentAnalysisStylePrompt
   });
 
   await segment.update({

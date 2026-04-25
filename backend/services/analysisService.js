@@ -176,6 +176,7 @@ const optimizePrompt = async ({
   characters,
   backgrounds,
   mode = 'generation',
+  styleMode = '',
   segmentPrompt = '',
   shotPrompt = '',
   sceneNames = [],
@@ -186,6 +187,7 @@ const optimizePrompt = async ({
     characters,
     backgrounds,
     mode,
+    styleMode,
     segmentPrompt,
     shotPrompt,
     sceneNames,
@@ -262,11 +264,19 @@ const updateAnalysisCharactersByVideoId = async (videoId, characters) => {
   return serializeAnalysis(currentAnalysis);
 };
 
-const analyzeSegmentContent = async ({ segment, overallAnalysis, segmentAbsolutePath = '' }) => {
+const analyzeSegmentContent = async ({
+  segment,
+  overallAnalysis,
+  segmentAbsolutePath = '',
+  styleMode = '',
+  segmentAnalysisStylePrompt = ''
+}) => {
   return analyzeSegment({
     segment,
     overallAnalysis,
-    segmentAbsolutePath
+    segmentAbsolutePath,
+    styleMode,
+    segmentAnalysisStylePrompt
   });
 };
 

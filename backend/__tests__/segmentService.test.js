@@ -26,6 +26,14 @@ const padAudioClipToDuration = jest.fn(async (audioPath, targetDuration, options
   sourceAudioPath: audioPath,
   engine: 'ffmpeg-audio-pad'
 }));
+const compressAudioClipToDuration = jest.fn(async (audioPath, targetDuration, options = {}) => ({
+  filePath: `audio/${options.basename || 'shot-audio-fitted'}.mp3`,
+  fileUrl: `/uploads/audio/${options.basename || 'shot-audio-fitted'}.mp3`,
+  duration: Number(targetDuration),
+  sourceAudioPath: audioPath,
+  compressionRatio: 1.2,
+  engine: 'ffmpeg-audio-compress'
+}));
 const sliceVideoClip = jest.fn(async (_sourcePath, startTime, endTime, options = {}) => ({
   filePath: `shots/${options.basename || 'shot'}.mp4`,
   fileUrl: `/uploads/shots/${options.basename || 'shot'}.mp4`,
@@ -101,6 +109,7 @@ await jest.unstable_mockModule('../services/taskService.js', () => ({
 }));
 
 await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
+  compressAudioClipToDuration,
   extractAudioClip,
   extractVideoFrame,
   getVideoMetadata: jest.fn(),

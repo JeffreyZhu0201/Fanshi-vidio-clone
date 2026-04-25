@@ -4,6 +4,11 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import env from '../config/env.js';
 import logger from '../utils/logger.js';
+import {
+  buildPromptOptimizationPrompt as buildSharedPromptOptimizationPrompt,
+  buildSegmentAnalysisPrompt as buildSharedSegmentAnalysisPrompt,
+  buildVideoAnalysisPrompt as buildSharedVideoAnalysisPrompt
+} from '../../shared/promptBlueprints.js';
 import { requestExternalJson } from './externalHttpService.js';
 import { removeFileIfExists, resolveUploadPath } from './fileService.js';
 import { extractVideoFrame } from './ffmpegService.js';
@@ -480,6 +485,7 @@ const createMockOptimizedPrompt = ({
   characters,
   backgrounds,
   mode = 'generation',
+  styleMode = '',
   segmentPrompt = '',
   shotPrompt = '',
   sceneNames = [],
@@ -518,6 +524,11 @@ const createMockOptimizedPrompt = ({
           }
     )
     .filter((item) => item?.name);
+  const promptOptimizationStylePrompt = resolveStyleTemplate({
+    styleMode,
+    styleTemplates: null,
+    templateKey: 'promptOptimizationStylePrompt'
+  });
 
   let optimizedPrompt = prompt.trim();
 
@@ -527,7 +538,7 @@ const createMockOptimizedPrompt = ({
     optimizedPrompt = [
       primaryCharacter?.appearancePrompt ? `外表描述：${primaryCharacter.appearancePrompt}` : '',
       primaryCharacter?.personalityPrompt ? `性格气质：${primaryCharacter.personalityPrompt}` : '',
-      '单人角色三视图设定，纯白无缝背景，全身完整入镜，中性站姿，写实电影角色美术风格，服装结构与面部特征稳定清晰。'
+      `单人角色三视图设定，纯白无缝背景，全身完整入镜，中性站姿，${promptOptimizationStylePrompt}`
     ]
       .filter(Boolean)
       .join('，');
@@ -544,7 +555,7 @@ const createMockOptimizedPrompt = ({
     optimizedPrompt = [
       prompt.trim(),
       primaryBackground?.name ? `场景名称：${primaryBackground.name}` : '',
-      '纯场景背景参考图，不要人物，不要文字，突出空间结构、光线、材质与纵深关系。'
+      `纯场景背景参考图，不要人物，不要文字，突出空间结构、光线、材质与纵深关系。${promptOptimizationStylePrompt}`
     ]
       .filter(Boolean)
       .join('，');
@@ -590,7 +601,8 @@ const createMockOptimizedPrompt = ({
         ? `涉及角色：${normalizeSceneNameList(characterNames).map((item) => `@${item}`).join('、')}`
         : '',
       sourceSegmentPrompt ? `与大片段衔接：${sourceSegmentPrompt}` : '',
-      '强化单镜头动作、节奏和镜头语言，写清人物站位、前后景关系、景别、机位、视线和运动方向，保持与大片段叙事一致。'
+      '强化单镜头动作、节奏和镜头语言，写清人物站位、前后景关系、景别、机位、视线和运动方向，保持与大片段叙事一致。',
+      promptOptimizationStylePrompt
     ]
       .filter(Boolean)
       .join('，');
@@ -1523,128 +1535,11 @@ const callRemoteGemini = async ({
 };
 
 const buildVideoAnalysisPrompt = ({ video, metadata, analysisOptions = null }) => {
-  const normalizedOptions = {
-    extractSubtitles: Boolean(analysisOptions?.extractSubtitles ?? analysisOptions?.extract_subtitles),
-    parseAudio: Boolean(analysisOptions?.parseAudio ?? analysisOptions?.parse_audio)
-  };
-
-  return [
-    '你是一名资深视频理解与影视拆解助手。',
-    '请对输入的整条视频做一次完整的整体视频理解，并严格返回 JSON。',
-    '不要输出 Markdown，不要输出解释，不要输出额外文本。',
-    '这次整片分析只返回剧情、角色、大剧情片段和每个大片段下的小镜头真值。',
-    '场景资源库会由后端根据 timeAnchors 派生，镜头字幕、语音和角色状态引用会在后续切片阶段继续提取，所以这次不要返回 backgrounds、speech 或 characterStateRefs。',
-    '返回结构必须完全符合：',
-    JSON.stringify(
-      {
-        plot: 'string',
-        characters: [
-          {
-            id: 'character_1',
-            name: '角色名',
-            appearancePrompt: '角色完整形象设定',
-            personalityPrompt: '角色的性格气质设定',
-            representativeFrameTime: 1.2,
-            representativeFrameNote: '该角色的典型帧说明'
-          }
-        ],
-        timeAnchors: [
-          {
-            startTime: 0,
-            endTime: 7,
-            sceneSummary: '片段解释',
-            scenePrompt: '该片段可直接复用的片段提示词',
-            representativeFrameTime: 1.6,
-            representativeFrameNote: '该大片段的典型帧说明',
-            backgroundName: '场景名称',
-            shots: [
-              {
-                id: 'shot_1',
-                startTime: 0,
-                endTime: 2,
-                summary: '镜头解释',
-                prompt: '@角色名 位于画面中的明确位置，在 #场景名称 中完成该镜头动作，包含景别、机位、运动方向、视线和遮挡关系的可编辑中文提示词，不要字幕',
-                sceneNames: ['场景名称'],
-                characterNames: ['角色名'],
-                representativeFrameTime: 1.1,
-                representativeFrameNote: '该镜头的典型帧说明'
-              }
-            ]
-          }
-        ]
-      },
-      null,
-      2
-    ),
-    `视频文件名：${video.filename}`,
-    `视频时长（秒）：${metadata.duration ?? 'unknown'}`,
-    `分析选项：${JSON.stringify(normalizedOptions)}`,
-    '要求：',
-    '1. plot 用中文概括整条视频的主要剧情、事件推进和结局走向，适合后续片段生成使用。',
-    '2. characters 只返回真正重要的角色，name 要稳定；如果无法识别正式名字，就使用稳定标签，例如 主角A、反派A。',
-    '3. appearancePrompt 必须是可直接用于视频生成的人物外观设定；personalityPrompt 用中文概括性格气质、情绪底色和表演风格。',
-    '4. 每个 character 都要返回 representativeFrameTime 和 representativeFrameNote，方便后续抽典型帧生成三视图。',
-    '5. timeAnchors 必须覆盖完整视频，startTime 和 endTime 用整片绝对秒数，按时间升序、无重叠。',
-    '6. 每个 timeAnchor 代表一个后续可独立生成的大剧情片段，边界优先对齐场景变化和完整动作阶段，不要机械均分。',
-    '7. 每个 timeAnchor 都要返回 sceneSummary、scenePrompt、backgroundName、representativeFrameTime、representativeFrameNote。',
-    '8. 同一场景反复出现时，backgroundName 必须保持稳定，方便后端把它们合并成同一个场景资源。',
-    '9. 每个 timeAnchor 内都必须返回 shots；shots 是后续小镜头切片与生成的唯一真值来源。',
-    '10. shots 必须尽量按真实镜头边界细分，优先对齐剪辑点、景别变化、机位变化、人物左中右站位变化、动作 beat、视线切换、焦点转移和说话节奏变化。',
-    '11. 对 60 秒左右的视频，要尽量把观众能明显感知到的真实镜头都拆出来；除非画面长时间稳定且动作单一，否则单个 shot 尽量不要超过 4 秒。',
-    '12. 每个 shot 的 startTime 和 endTime 都是整片绝对秒数，严格落在所属 timeAnchor 内，尽量精确到 0.1 秒。',
-    '13. 每个 shot 都必须返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote，sceneNames 和 characterNames 都不能为空。',
-    '14. shot.summary 要说明镜头核心动作、主体关系和切分依据，而不是只复述剧情。',
-    '15. representativeFrameTime 必须选该镜头最有代表性的画面，不要机械取中点；representativeFrameNote 说明为什么这帧最适合作为预览和参考图。',
-    '16. shot.prompt 必须直接服务镜头级视频生成，并同时包含至少一个 @角色名 和至少一个 #场景名。',
-    '17. shot.prompt 必须写清角色数量、主次关系、人物左中右位置、前景/中景/后景层次、朝向、视线、姿态、动作轨迹、进出画方式、遮挡关系、景别、机位角度、镜头运动和光线氛围。',
-    '18. 如果角色是不完整出镜、背影、手部、反打或 POV，也必须绑定稳定的人物名；如果一个 shot 涉及多个场景或多个角色，需要在 sceneNames 和 characterNames 中列全。',
-    '19. 所有 prompt 都要明确不要字幕、不要文字、不要 UI、不要水印。',
-    '20. 输出必须是合法 JSON，字段名保持与示例完全一致。'
-  ].join('\n');
+  return buildSharedVideoAnalysisPrompt({ video, metadata, analysisOptions });
 };
 
 const buildSegmentAnalysisPrompt = ({ segment, overallAnalysis }) => {
-  const currentBackgroundBinding = {
-    backgroundId: segment?.analysis?.backgroundId ?? '',
-    backgroundAction: segment?.analysis?.backgroundAction ?? '',
-    backgroundName: segment?.analysis?.backgroundName ?? '',
-    backgroundPrompt: segment?.analysis?.backgroundPrompt ?? '',
-    scenePrompt: segment?.analysis?.scenePrompt ?? '',
-    sceneSummary: segment?.analysis?.sceneSummary ?? ''
-  };
-
-  return [
-    '你是一名资深短视频片段拆解助手。',
-    '请分析输入的视频片段，并严格返回 JSON，不要输出 Markdown、解释或额外文本。',
-    '返回结构必须完全符合：',
-    JSON.stringify(
-      {
-        characters: ['角色名'],
-        scenes: ['场景名称'],
-        scene: '片段场景描述',
-        action: '片段主要动作描述',
-        prompt: '@角色名 + #场景名 + 动作 + 镜头语言 的可编辑中文提示词'
-      },
-      null,
-      2
-    ),
-    `片段序号：${Number(segment.segmentIndex) + 1}`,
-    `片段时间：${segment.startTime} - ${segment.endTime} 秒`,
-    `整片剧情摘要：${overallAnalysis?.plot ?? '暂无'}`,
-    `整片角色设定：${JSON.stringify(overallAnalysis?.characters ?? [])}`,
-    `整片场景资源库：${JSON.stringify(overallAnalysis?.backgrounds ?? [])}`,
-    `当前片段绑定场景：${JSON.stringify(currentBackgroundBinding)}`,
-    '要求：',
-    '1. characters 返回当前片段真正出现或应重点关注的角色名称列表。',
-    '2. scenes 返回当前片段涉及到的场景资源名称，必须优先复用整片场景资源库里的原始名称，并按叙事出现顺序返回。',
-    '3. prompt 必须为后续视频生成可直接编辑的中文提示词，只刷新大片段理解，不要重新拆分 shots。',
-    '4. prompt 中涉及角色时，用 @角色名 标记，而不是展开成长描述。',
-    '5. prompt 中涉及场景时，用 #场景名 标记，而不是直接展开真实场景资源提示词。',
-    '6. 如果片段中出现多个场景，请在 scenes 中列全，并在 prompt 里按顺序引用对应的 #场景名。',
-    '7. 当前片段必须服从已绑定的 backgroundId/backgroundAction/backgroundName，不要重新发明新的场景决策。',
-    '8. 如果当前片段标记为 reuse_existing，需要在 scene 和 prompt 中强调延续同一场景资源，只变化动作、表演或镜头阶段。',
-    '9. 输出必须是有效 JSON。'
-  ].join('\n');
+  return buildSharedSegmentAnalysisPrompt({ segment, overallAnalysis });
 };
 
 const buildShotSpeechAnalysisPrompt = ({ segment, shot, analysisOptions }) => {
@@ -1700,114 +1595,23 @@ const buildPromptOptimizationPrompt = ({
   characters,
   backgrounds,
   mode = 'generation',
+  styleMode = '',
   segmentPrompt = '',
   shotPrompt = '',
   sceneNames = [],
   characterNames = []
 }) => {
-  const normalizedMode = normalizePromptOptimizationMode(mode);
-
-  if (normalizedMode === 'character_resource') {
-    return [
-      '你是一名角色资源提示词优化助手。',
-      '请把下面的角色描述整理为适合 Gemini 生图模型生成角色三视图的中文提示词，并严格返回 JSON。',
-      '不要输出 Markdown，不要输出解释，不要输出额外文本。',
-      '返回结构必须完全符合：',
-      JSON.stringify(
-        {
-          optimizedPrompt: '外表描述 + 性格气质 + 纯白背景角色三视图要求'
-        },
-        null,
-        2
-      ),
-      `原始提示词：${prompt}`,
-      `角色列表：${JSON.stringify(characters ?? [])}`,
-      '要求：',
-      '1. 只围绕角色本身优化，不要引入任何场景、环境、道具或镜头叙事。',
-      '2. 必须综合角色的外貌描述和性格气质，整理为单人角色三视图资源提示词。',
-      '3. 明确纯白无缝背景、全身完整入镜、中性站姿、正面/侧面/背面都可复用。',
-      '4. 不要使用 #场景名，也不要引入任何场景资源。',
-      '5. 不必使用 @角色名，直接输出纯角色资源提示词正文。',
-      '6. 只返回 JSON。'
-    ].join('\n');
-  }
-
-  if (normalizedMode === 'scene_resource') {
-    return [
-      '你是一名场景资源提示词优化助手。',
-      '请把下面的场景描述整理为适合 Gemini 生图模型生成背景参考图的中文提示词，并严格返回 JSON。',
-      '不要输出 Markdown，不要输出解释，不要输出额外文本。',
-      '返回结构必须完全符合：',
-      JSON.stringify(
-        {
-          optimizedPrompt: '纯场景背景参考图提示词'
-        },
-        null,
-        2
-      ),
-      `原始提示词：${prompt}`,
-      `场景资源库：${JSON.stringify(backgrounds ?? [])}`,
-      '要求：',
-      '1. 只优化场景本身，不要引入人物或角色动作。',
-      '2. 强调空间结构、材质、光线、景深和镜头角度兼容性。',
-      '3. 输出适合作为多角度背景参考图的纯场景提示词。',
-      '4. 不要使用 @角色名 或 #场景名。',
-      '5. 只返回 JSON。'
-    ].join('\n');
-  }
-
-  if (normalizedMode === 'shot_generation') {
-    return [
-      '你是一名镜头级视频生成提示词优化助手。',
-      '请在不改变当前镜头核心语义的前提下，结合大片段叙事目标优化当前小镜头提示词，并严格返回 JSON。',
-      '不要输出 Markdown，不要输出解释，不要输出额外文本。',
-      '返回结构必须完全符合：',
-      JSON.stringify(
-        {
-          optimizedPrompt: '@角色名 在 #场景名 中完成更清晰的单镜头描述'
-        },
-        null,
-        2
-      ),
-      `大片段最终提示词：${segmentPrompt}`,
-      `当前小镜头提示词：${shotPrompt || prompt}`,
-      `角色列表：${JSON.stringify(characters ?? [])}`,
-      `场景资源库：${JSON.stringify(backgrounds ?? [])}`,
-      `镜头涉及场景：${JSON.stringify(sceneNames ?? [])}`,
-      `镜头涉及角色：${JSON.stringify(characterNames ?? [])}`,
-      '要求：',
-      '1. 输出必须服务于单镜头生成，而不是复述大片段摘要。',
-      '2. 必须保留并优先使用 @角色名 和 #场景名，不要把资源正文直接展开。',
-      '3. 必须补足单镜头级别的动作、表演节奏、镜头语言、构图和氛围，但不要偏离当前镜头原意。',
-      '4. 必须写清人物数量、主次关系、人物在画面中的左/中/右位置、前景/中景/后景关系、朝向、视线、肢体姿态、运动路径、进出画方式、遮挡关系、景别、机位角度和镜头运动。',
-      '5. 需要与大片段最终提示词保持叙事和视觉连续性，尽量还原原片镜头语言。',
-      '6. 如果给了镜头涉及场景和角色，优先围绕这些对象优化。',
-      '7. 只返回 JSON。'
-    ].join('\n');
-  }
-
-  return [
-    '你是一名视频生成提示词优化助手。',
-    '请优化下面的提示词，并严格返回 JSON，不要输出 Markdown 或额外解释。',
-    '返回结构必须完全符合：',
-    JSON.stringify(
-      {
-        optimizedPrompt: '@角色名 在 #场景名 中完成更清晰的镜头描述'
-      },
-      null,
-      2
-    ),
-    `原始提示词：${prompt}`,
-    `角色列表：${JSON.stringify(characters ?? [])}`,
-    `场景资源库：${JSON.stringify(backgrounds ?? [])}`,
-    '要求：',
-    '1. 保持中文输出。',
-    '2. 所有角色名称统一替换成 @角色名。',
-    '3. 如果提示词中出现了场景资源库中的场景名称，也统一替换成 #场景名。',
-    '4. 如果原始提示词已经包含 @角色名 或 #场景名，继续保留这种引用形式，不要把资源提示词正文直接展开。',
-    '5. 提示词要更适合视频生成或资源设计，补足镜头、场景、动作、氛围，以及主体站位、景别、机位、视线和运动方向，但不要改变核心语义。',
-    '6. 只返回 JSON。'
-  ].join('\n');
+  return buildSharedPromptOptimizationPrompt({
+    prompt,
+    characters,
+    backgrounds,
+    mode,
+    styleMode,
+    segmentPrompt,
+    shotPrompt,
+    sceneNames,
+    characterNames
+  });
 };
 
 const analyzeVideo = async ({ video, metadata, videoAbsolutePath, analysisOptions = null }) => {
@@ -1914,14 +1718,26 @@ const analyzeShotSpeech = async ({
   }
 };
 
-const analyzeSegment = async ({ segment, overallAnalysis, segmentAbsolutePath = '' }) => {
+const analyzeSegment = async ({
+  segment,
+  overallAnalysis,
+  segmentAbsolutePath = '',
+  styleMode = '',
+  segmentAnalysisStylePrompt = ''
+}) => {
   if (!canUseRemoteGemini) {
     return createMockSegmentAnalysis({ segment, overallAnalysis });
   }
 
   try {
     const { responseText } = await callRemoteGemini({
-      prompt: buildSegmentAnalysisPrompt({ segment, overallAnalysis }),
+      prompt: buildSharedSegmentAnalysisPrompt({
+        segment,
+        overallAnalysis,
+        analysisOptions: overallAnalysis?.analysisOptions ?? overallAnalysis?.analysis_options ?? null,
+        styleMode,
+        segmentAnalysisStylePrompt
+      }),
       videoAbsolutePath: segmentAbsolutePath,
       model: env.GEMINI_SEGMENT_MODEL || env.GEMINI_MODEL
     });
@@ -1946,6 +1762,7 @@ const optimizePrompt = async ({
   characters,
   backgrounds,
   mode = 'generation',
+  styleMode = '',
   segmentPrompt = '',
   shotPrompt = '',
   sceneNames = [],
@@ -1971,6 +1788,7 @@ const optimizePrompt = async ({
         characters,
         backgrounds,
         mode,
+        styleMode,
         segmentPrompt,
         shotPrompt,
         sceneNames,
@@ -1998,6 +1816,7 @@ const optimizePrompt = async ({
       characters,
       backgrounds,
       mode,
+      styleMode,
       segmentPrompt,
       shotPrompt,
       sceneNames,

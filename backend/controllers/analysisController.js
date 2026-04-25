@@ -25,6 +25,7 @@ const optimizePromptController = async (request, response) => {
     prompt: request.body.prompt,
     characters: request.body.characters,
     backgrounds: request.body.backgrounds,
+    styleMode: request.body.style_mode,
     segmentPrompt: request.body.segment_prompt,
     shotPrompt: request.body.shot_prompt,
     sceneNames: request.body.scene_names,

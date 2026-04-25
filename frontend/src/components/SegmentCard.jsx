@@ -12,9 +12,17 @@ import { formatDuration } from '../utils/formatDuration.js';
 import { tokenizePrompt } from '../utils/mentionTokens.js';
 import {
   buildPromptOptimizationPrompt,
-  buildSegmentAnalysisPrompt,
+  buildSegmentAnalysisPromptSections,
   expandResourceMentions
 } from '../utils/promptBlueprints.js';
+import {
+  DEFAULT_STYLE_MODE,
+  STYLE_MODE_LABELS,
+  STYLE_MODE_OPTIONS,
+  getEditableStyleTemplateDefaults,
+  normalizeStyleMode,
+  resolveStyleTemplate
+} from '../../../shared/styleTemplates.js';
 
 const getNormalizedFrameTime = (value) => {
   const parsedValue = Number(value);
@@ -522,6 +530,8 @@ const buildShotRebuildSignature = (shots = []) => {
 const SegmentCard = ({
   segment,
   overallAnalysis = null,
+  analysisOptions = null,
+  onAnalysisOptionsChange = () => {},
   timeAnchor = null,
   backgroundAsset = null,
   expanded = false,
@@ -555,6 +565,15 @@ const SegmentCard = ({
   const seedDanceProvider = useAppStore((state) => state.providerStatuses.seedance);
   const characters = overallAnalysis?.characters ?? [];
   const backgrounds = overallAnalysis?.backgrounds ?? [];
+  const resolvedAnalysisOptions = analysisOptions ?? overallAnalysis?.analysis_options ?? overallAnalysis?.analysisOptions ?? null;
+  const currentStyleMode = normalizeStyleMode(
+    resolvedAnalysisOptions?.styleMode ?? resolvedAnalysisOptions?.style_mode ?? DEFAULT_STYLE_MODE
+  );
+  const currentStyleLabel = STYLE_MODE_LABELS[currentStyleMode] ?? STYLE_MODE_LABELS[DEFAULT_STYLE_MODE];
+  const currentStyleTemplates =
+    resolvedAnalysisOptions?.styleTemplates ??
+    resolvedAnalysisOptions?.style_templates ??
+    getEditableStyleTemplateDefaults();
   const segmentShots = Array.isArray(segment.shots) ? segment.shots : [];
   const segmentShotRebuildSignature = buildShotRebuildSignature(segmentShots);
   const shotGenerationSummary = segment.shotGenerationSummary ?? segment.latestShotAssemblyTask ?? null;
@@ -564,14 +583,20 @@ const SegmentCard = ({
     timeAnchor?.scenePrompt || timeAnchor?.scene_prompt || segment.scenePrompt || segment.prompt || '';
   const effectivePrompt = String(draftPrompt || segment.prompt || originalSegmentPrompt).trim();
   const expandedPrompt = expandResourceMentions(effectivePrompt, characters, backgrounds);
-  const segmentAnalysisPrompt = buildSegmentAnalysisPrompt({
+  const segmentAnalysisPromptSections = buildSegmentAnalysisPromptSections({
     segment,
-    overallAnalysis
+    overallAnalysis,
+    analysisOptions: resolvedAnalysisOptions
   });
+  const segmentAnalysisPrompt = segmentAnalysisPromptSections.finalPrompt;
+  const segmentAnalysisFixedPrompt = segmentAnalysisPromptSections.fixedStructurePrompt;
+  const segmentAnalysisStylePrompt = segmentAnalysisPromptSections.stylePrompt;
   const promptOptimizationPrompt = buildPromptOptimizationPrompt({
     prompt: draftPrompt,
     characters,
-    backgrounds
+    backgrounds,
+    styleMode: currentStyleMode,
+    styleTemplates: currentStyleTemplates
   });
   const segmentDuration = Math.max(0.3, Number(segment.endTime) - Number(segment.startTime));
   const backgroundName =
@@ -632,6 +657,38 @@ const SegmentCard = ({
     }
 
     return onOptimize(segment.id, normalizedPrompt);
+  };
+
+  const handleSegmentStyleModeChange = (nextStyleMode) => {
+    onAnalysisOptionsChange({
+      styleMode: normalizeStyleMode(nextStyleMode)
+    });
+  };
+
+  const handleSegmentAnalysisStylePromptChange = (nextPrompt) => {
+    onAnalysisOptionsChange({
+      styleTemplates: {
+        [currentStyleMode]: {
+          ...(currentStyleTemplates?.[currentStyleMode] ?? {}),
+          segmentAnalysisStylePrompt: String(nextPrompt ?? '')
+        }
+      }
+    });
+  };
+
+  const handleRestoreSegmentAnalysisStylePrompt = () => {
+    onAnalysisOptionsChange({
+      styleTemplates: {
+        [currentStyleMode]: {
+          ...(currentStyleTemplates?.[currentStyleMode] ?? {}),
+          segmentAnalysisStylePrompt: resolveStyleTemplate({
+            styleMode: currentStyleMode,
+            styleTemplates: null,
+            templateKey: 'segmentAnalysisStylePrompt'
+          })
+        }
+      }
+    });
   };
 
   const findPersistedShot = (sourceShotDraft, savedShotDrafts = []) => {
@@ -1307,9 +1364,54 @@ const SegmentCard = ({
             prompt={expandedPrompt}
             modelLabel="SeedDance"
           />
+          <div className="rounded-[24px] border border-white/10 bg-white/[0.04] px-4 py-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-white">片段理解风格段</p>
+                <p className="mt-1 text-xs leading-5 text-white/55">
+                  固定 JSON 结构和字段要求保持只读；这里只编辑片段理解的风格段。当前风格为 {currentStyleLabel}。
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  aria-label="片段理解风格模式"
+                  className="rounded-full border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                  value={currentStyleMode}
+                  onChange={(event) => handleSegmentStyleModeChange(event.target.value)}
+                >
+                  {STYLE_MODE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-white/75 transition hover:border-white/20 hover:bg-white/[0.08]"
+                  onClick={handleRestoreSegmentAnalysisStylePrompt}
+                >
+                  恢复预设
+                </button>
+              </div>
+            </div>
+
+            <textarea
+              aria-label="片段理解风格提示编辑器"
+              className="mt-4 min-h-[140px] w-full rounded-[18px] border border-white/10 bg-black/[0.35] px-4 py-4 text-sm leading-6 text-white outline-none transition focus:border-brand-500/40 focus:ring-2 focus:ring-brand-500/20"
+              value={segmentAnalysisStylePrompt}
+              onChange={(event) => handleSegmentAnalysisStylePromptChange(event.target.value)}
+            />
+          </div>
+
+          <PromptPreview
+            title="片段理解固定结构段"
+            description="点击“片段分析”时，这一段会原样发送给 Gemini，用于约束片段 JSON 结构、场景绑定和输出规则。"
+            prompt={segmentAnalysisFixedPrompt}
+            modelLabel="Gemini"
+          />
           <PromptPreview
             title="片段理解提示词"
-            description="点击“片段分析”时会把这段提示词发送给 Gemini，用于刷新当前大片段的理解结果。"
+            description="这是最终拼装后的片段理解提示词，会在点击“片段分析”时发送给 Gemini。"
             prompt={segmentAnalysisPrompt}
             modelLabel="Gemini"
           />
@@ -1956,6 +2058,12 @@ SegmentCard.propTypes = {
     characters: PropTypes.arrayOf(PropTypes.oneOfType([PropTypes.string, PropTypes.object])),
     backgrounds: PropTypes.arrayOf(PropTypes.oneOfType([PropTypes.string, PropTypes.object]))
   }),
+  analysisOptions: PropTypes.shape({
+    extractSubtitles: PropTypes.bool,
+    parseAudio: PropTypes.bool,
+    styleMode: PropTypes.string,
+    styleTemplates: PropTypes.object
+  }),
   timeAnchor: PropTypes.shape({
     sceneSummary: PropTypes.string,
     scenePrompt: PropTypes.string,
@@ -1974,6 +2082,7 @@ SegmentCard.propTypes = {
   }),
   expanded: PropTypes.bool,
   onToggle: PropTypes.func,
+  onAnalysisOptionsChange: PropTypes.func,
   onPromptChange: PropTypes.func,
   onShotPromptChange: PropTypes.func,
   onAnalyze: PropTypes.func,

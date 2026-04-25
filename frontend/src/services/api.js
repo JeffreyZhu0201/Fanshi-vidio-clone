@@ -225,8 +225,13 @@ const getSegments = async (videoId) => {
   return response.data;
 };
 
-const analyzeSegment = async (segmentId) => {
-  const response = await api.post(`/segments/${segmentId}/analyze`);
+const analyzeSegment = async (segmentId, options = {}) => {
+  const response = await api.post(`/segments/${segmentId}/analyze`, {
+    ...(options.style_mode ? { style_mode: options.style_mode } : {}),
+    ...(options.segment_analysis_style_prompt
+      ? { segment_analysis_style_prompt: options.segment_analysis_style_prompt }
+      : {})
+  });
   return response.data;
 };
 
@@ -243,32 +248,35 @@ const getTaskStatus = async (taskId) => {
   return response.data;
 };
 
-const generateSegment = async (segmentId, prompt, ratio = '') => {
+const generateSegment = async (segmentId, prompt, ratio = '', styleMode = '') => {
   const response = await api.post('/generation/generate', {
     segment_id: segmentId,
     prompt,
-    ...(ratio ? { ratio } : {})
+    ...(ratio ? { ratio } : {}),
+    ...(styleMode ? { style_mode: styleMode } : {})
   });
 
   return response.data;
 };
 
-const generateShot = async (segmentId, shotId, prompt, ratio = '') => {
+const generateShot = async (segmentId, shotId, prompt, ratio = '', styleMode = '') => {
   const response = await api.post('/generation/shots/generate', {
     segment_id: segmentId,
     shot_id: shotId,
     prompt,
-    ...(ratio ? { ratio } : {})
+    ...(ratio ? { ratio } : {}),
+    ...(styleMode ? { style_mode: styleMode } : {})
   });
 
   return response.data;
 };
 
-const generateShotBatch = async (segmentId, shots = [], ratio = '') => {
+const generateShotBatch = async (segmentId, shots = [], ratio = '', styleMode = '') => {
   const response = await api.post('/generation/shots/generate-batch', {
     segment_id: segmentId,
     shots,
-    ...(ratio ? { ratio } : {})
+    ...(ratio ? { ratio } : {}),
+    ...(styleMode ? { style_mode: styleMode } : {})
   });
 
   return response.data;

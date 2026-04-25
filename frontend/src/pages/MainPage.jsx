@@ -21,6 +21,7 @@ import {
   buildSceneAnglePrompts
 } from '../utils/autoProduction.js';
 import { formatDateTime } from '../utils/formatDateTime.js';
+import { DEFAULT_STYLE_MODE, STYLE_MODE_OPTIONS, normalizeStyleMode } from '../../../shared/styleTemplates.js';
 
 const resolveStepCardClassName = (status) => {
   if (['completed', 'success', 'analyzed', 'uploaded'].includes(status)) {
@@ -163,6 +164,7 @@ const MainPage = () => {
       : segments.length
         ? 'pending'
         : 'idle';
+  const currentStyleMode = normalizeStyleMode(analysisOptions?.styleMode ?? analysisOptions?.style_mode ?? DEFAULT_STYLE_MODE);
   const mergeStageStatus =
     mergeProgress.status === 'completed'
       ? 'completed'
@@ -335,8 +337,15 @@ const MainPage = () => {
   };
 
   const optimizeAndGenerateResources = async (analysisPayload) => {
-    const characterResources = buildAutoCharacterResources(analysisPayload);
-    const sceneResources = buildAutoSceneResources(analysisPayload);
+    const styleTemplates = analysisOptions?.styleTemplates ?? analysisOptions?.style_templates ?? null;
+    const characterResources = buildAutoCharacterResources(analysisPayload, {
+      styleMode: currentStyleMode,
+      styleTemplates
+    });
+    const sceneResources = buildAutoSceneResources(analysisPayload, {
+      styleMode: currentStyleMode,
+      styleTemplates
+    });
     const allResources = [...characterResources, ...sceneResources];
 
     if (!allResources.length) {
@@ -376,7 +385,8 @@ const MainPage = () => {
             ]
           : [],
         {
-          mode: optimizeMode
+          mode: optimizeMode,
+          style_mode: currentStyleMode
         }
       );
 
@@ -387,11 +397,15 @@ const MainPage = () => {
               resourceName: resource.resourceName,
               prompt: optimizedPrompt,
               appearancePrompt: resource.appearancePrompt || '',
-              personalityPrompt: resource.personalityPrompt || ''
+              personalityPrompt: resource.personalityPrompt || '',
+              styleMode: currentStyleMode,
+              styleTemplates
             })
           : buildSceneAnglePrompts({
               resourceName: resource.resourceName,
-              prompt: optimizedPrompt
+              prompt: optimizedPrompt,
+              styleMode: currentStyleMode,
+              styleTemplates
             });
 
       const generationPayload = await generateResourceImagesRequest({
@@ -644,6 +658,28 @@ const MainPage = () => {
           </div>
 
           <div className="compact-topbar-actions">
+            <label className="compact-ratio-chip" htmlFor="global-style-mode">
+              <span className="compact-ratio-copy">
+                <span className="compact-ratio-label">全局风格</span>
+                <span className="compact-ratio-note">分析、资源图与视频统一沿用</span>
+              </span>
+              <select
+                id="global-style-mode"
+                className="compact-ratio-select"
+                value={currentStyleMode}
+                onChange={(event) =>
+                  setAnalysisOptions({
+                    styleMode: event.target.value
+                  })
+                }
+              >
+                {STYLE_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className="compact-ratio-chip" htmlFor="global-video-ratio">
               <span className="compact-ratio-copy">
                 <span className="compact-ratio-label">生成比例</span>
@@ -797,6 +833,7 @@ const MainPage = () => {
               </div>
 
               <div className="stage-toolbar compact-toolbar">
+                <span className="toolbar-pill">全局风格 {STYLE_MODE_OPTIONS.find((option) => option.value === currentStyleMode)?.label || '写实'}</span>
                 <span className="toolbar-pill">全局比例 {videoRatio}</span>
                 <span className="toolbar-pill">Prompt 就绪 {promptsReady}</span>
                 <span className="toolbar-pill">运行中 {activeGenerationCount}</span>
@@ -820,12 +857,14 @@ const MainPage = () => {
                       key={segment.id}
                       segment={segment}
                       overallAnalysis={analysis}
+                      analysisOptions={analysisOptions}
                       timeAnchor={analysis?.time_anchors?.[segment.segmentIndex] || null}
                       backgroundAsset={
                         backgroundAssets.find((asset) => asset.backgroundId === segment.backgroundId) || null
                       }
                       expanded={false}
                       onToggle={() => {}}
+                      onAnalysisOptionsChange={setAnalysisOptions}
                       onPromptChange={setSegmentPrompt}
                       onShotPromptChange={setShotPrompt}
                       onAnalyze={analyzeSegmentById}
