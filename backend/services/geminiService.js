@@ -44,6 +44,7 @@ const WHOLE_VIDEO_PRIMARY_UPLOAD_TIMEOUT_MS = Math.max(
   10 * 60 * 1000
 );
 const WHOLE_VIDEO_FRAME_FALLBACK_TIMEOUT_MS = 60 * 1000;
+const WHOLE_VIDEO_ANALYSIS_MAX_ATTEMPTS = 3;
 
 const extractJsonObject = (value = '') => {
   const cleanedValue = stripMarkdownCodeFence(value);
@@ -70,6 +71,10 @@ const parseJsonPayload = (value, fallbackLabel) => {
 const describeGeminiTransportError = (error) => {
   const primaryMessage = String(error?.message ?? '').trim();
   const causeMessage = String(error?.cause?.message ?? '').trim();
+
+  if (/expected json but received non-json response/iu.test(primaryMessage)) {
+    return primaryMessage;
+  }
 
   if (primaryMessage && causeMessage && !primaryMessage.includes(causeMessage)) {
     return `${primaryMessage} (${causeMessage})`;
@@ -758,6 +763,26 @@ const normalizeCharacter = (item, index, videoDuration = 0) => {
     return null;
   }
 
+  const representativeFrameTime = normalizeOptionalNumber(
+    item.representativeFrameTime ?? item.representative_frame_time
+  );
+  const representativeFrameNote = normalizeOptionalString(
+    item.representativeFrameNote ??
+      item.representative_frame_note ??
+      item.representativeFrameReason ??
+      item.representative_frame_reason
+  );
+  const normalizedStateTimeline = normalizeCharacterStateTimeline(
+    item?.stateTimeline ?? item?.state_timeline ?? [],
+    {
+      fallbackCharacterName: name,
+      videoDuration
+    }
+  );
+  const safeVideoDuration = Number.isFinite(Number(videoDuration)) && Number(videoDuration) > 0
+    ? Number(videoDuration)
+    : Math.max(0.3, Number(representativeFrameTime ?? 0.3));
+
   return {
     id: String(item.id ?? `character_${index + 1}`),
     name,
@@ -769,22 +794,23 @@ const normalizeCharacter = (item, index, videoDuration = 0) => {
         item.personality ??
         item.traits
     ),
-    representativeFrameTime: normalizeOptionalNumber(
-      item.representativeFrameTime ?? item.representative_frame_time
-    ),
-    representativeFrameNote: normalizeOptionalString(
-      item.representativeFrameNote ??
-        item.representative_frame_note ??
-        item.representativeFrameReason ??
-        item.representative_frame_reason
-    ),
-    stateTimeline: normalizeCharacterStateTimeline(
-      item?.stateTimeline ?? item?.state_timeline ?? [],
-      {
-        fallbackCharacterName: name,
-        videoDuration
-      }
-    )
+    representativeFrameTime,
+    representativeFrameNote,
+    stateTimeline: normalizedStateTimeline.length
+      ? normalizedStateTimeline
+      : [
+          {
+            id: `${String(item.id ?? `character_${index + 1}`)}_state_base`,
+            startTime: 0,
+            endTime: Number(safeVideoDuration.toFixed(2)),
+            stateName: '基础状态',
+            summary: `${name} 保持基础外形、服装、身体完整度和情绪状态。`,
+            continuityPrompt: `后续镜头持续保持 ${name} 当前基础形象、服装和身体状态，不要突然改变。`,
+            representativeFrameTime:
+              representativeFrameTime ?? getRepresentativeFrameTime(0, safeVideoDuration),
+            representativeFrameNote: representativeFrameNote || '该帧用于代表角色的基础连续性状态。'
+          }
+        ]
   };
 };
 
@@ -1181,7 +1207,7 @@ const cleanupWholeVideoFrameSamples = async (frameSamples = []) => {
   );
 };
 
-const buildFrameFallbackVideoAnalysisPrompt = ({ video, metadata, frameSamples = [] }) => {
+const buildFrameFallbackVideoAnalysisPrompt = ({ video, metadata, frameSamples = [], analysisOptions = null }) => {
   const frameTimeline = frameSamples
     .map((sample) => `${sample.label}=${Number(sample.timeSeconds).toFixed(2)}秒`)
     .join('；');
@@ -1194,7 +1220,7 @@ const buildFrameFallbackVideoAnalysisPrompt = ({ video, metadata, frameSamples =
     '你需要把这些关键帧当作整片视频的时间采样来理解剧情推进、人物连续性、场景复现关系、镜头边界和动作节奏。',
     '时间锚点与小镜头时间仍然必须填写整片绝对秒数，不能只写图片序号区间。',
     '如果两张关键帧之间存在明显动作跳变、机位变化、场景变化或说话节奏变化，要据此尽量还原中间真实发生的切换，并合理细分片段和小镜头。',
-    buildVideoAnalysisPrompt({ video, metadata })
+    buildVideoAnalysisPrompt({ video, metadata, analysisOptions })
   ].join('\n');
 };
 
@@ -1251,7 +1277,7 @@ const analyzeVideoWithFrameFallback = async ({
 
   try {
     const { authVariant, model: resolvedModel, responsePayload, responseText } = await callRemoteGemini({
-      prompt: buildFrameFallbackVideoAnalysisPrompt({ video, metadata, frameSamples }),
+      prompt: buildFrameFallbackVideoAnalysisPrompt({ video, metadata, frameSamples, analysisOptions }),
       imageAbsolutePaths: frameSamples.map((sample) => sample.absolutePath),
       requestTimeoutOverrideMs: WHOLE_VIDEO_FRAME_FALLBACK_TIMEOUT_MS,
       model: env.GEMINI_SEGMENT_MODEL || env.GEMINI_MODEL
@@ -1496,12 +1522,18 @@ const callRemoteGemini = async ({
   throw lastError ?? new Error('Gemini request failed.');
 };
 
-const buildVideoAnalysisPrompt = ({ video, metadata }) => {
+const buildVideoAnalysisPrompt = ({ video, metadata, analysisOptions = null }) => {
+  const normalizedOptions = {
+    extractSubtitles: Boolean(analysisOptions?.extractSubtitles ?? analysisOptions?.extract_subtitles),
+    parseAudio: Boolean(analysisOptions?.parseAudio ?? analysisOptions?.parse_audio)
+  };
+
   return [
     '你是一名资深视频理解与影视拆解助手。',
     '请对输入的整条视频做一次完整的整体视频理解，并严格返回 JSON。',
     '不要输出 Markdown，不要输出解释，不要输出额外文本。',
-    '这次返回必须一次性包含整片剧情、角色、场景资源、大片段和每个大片段下的全部小镜头信息。',
+    '这次整片分析只返回剧情、角色、大剧情片段和每个大片段下的小镜头真值。',
+    '场景资源库会由后端根据 timeAnchors 派生，镜头字幕、语音和角色状态引用会在后续切片阶段继续提取，所以这次不要返回 backgrounds、speech 或 characterStateRefs。',
     '返回结构必须完全符合：',
     JSON.stringify(
       {
@@ -1513,29 +1545,7 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
             appearancePrompt: '角色完整形象设定',
             personalityPrompt: '角色的性格气质设定',
             representativeFrameTime: 1.2,
-            representativeFrameNote: '该角色的典型帧说明',
-            stateTimeline: [
-              {
-                id: 'state_1',
-                startTime: 0,
-                endTime: 6.4,
-                stateName: '基础状态',
-                summary: '角色当前阶段的外形、服装、身体完整度和情绪状态。',
-                continuityPrompt: '后续镜头继续保持该状态，不要让伤势、服装破损或妆造突然消失。',
-                representativeFrameTime: 1.4,
-                representativeFrameNote: '最能代表这个状态的画面说明'
-              }
-            ]
-          }
-        ],
-        backgrounds: [
-          {
-            id: 'background_1',
-            name: '场景名称',
-            description: '片段或场景背景描述',
-            scenePrompt: '可直接用于生成该场景的中文提示词',
-            representativeFrameTime: 2.8,
-            representativeFrameNote: '该场景的典型帧说明'
+            representativeFrameNote: '该角色的典型帧说明'
           }
         ],
         timeAnchors: [
@@ -1543,10 +1553,9 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
             startTime: 0,
             endTime: 7,
             sceneSummary: '片段解释',
-            scenePrompt: '该片段可直接复用的场景提示词',
+            scenePrompt: '该片段可直接复用的片段提示词',
             representativeFrameTime: 1.6,
-            backgroundId: 'background_1',
-            backgroundAction: 'create_new',
+            representativeFrameNote: '该大片段的典型帧说明',
             backgroundName: '场景名称',
             shots: [
               {
@@ -1554,35 +1563,11 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
                 startTime: 0,
                 endTime: 2,
                 summary: '镜头解释',
-                prompt: '@角色名 位于画面中的明确位置，在 #场景名称 中完成该镜头动作，包含景别、机位、运动方向、视线和遮挡关系的可编辑中文提示词',
+                prompt: '@角色名 位于画面中的明确位置，在 #场景名称 中完成该镜头动作，包含景别、机位、运动方向、视线和遮挡关系的可编辑中文提示词，不要字幕',
                 sceneNames: ['场景名称'],
                 characterNames: ['角色名'],
                 representativeFrameTime: 1.1,
-                representativeFrameNote: '该镜头的典型帧说明',
-                speech: {
-                  transcript: '镜头对白全文，没有对白时返回空字符串',
-                  subtitleLines: [
-                    {
-                      id: 'subtitle_1',
-                      startTime: 0,
-                      endTime: 0.9,
-                      text: '逐句字幕文本'
-                    }
-                  ],
-                  speechStyle: '语速、停顿、情绪、语气、口型明显程度、说话力度等中文说明',
-                  hasDialogue: true,
-                  extractionStatus: 'completed',
-                  extractionError: '',
-                  sourceOfTruth: 'extracted'
-                },
-                characterStateRefs: [
-                  {
-                    characterName: '角色名',
-                    stateId: 'state_1',
-                    stateName: '基础状态',
-                    continuityPrompt: '当前镜头继续保持角色该阶段的身体与造型状态'
-                  }
-                ]
+                representativeFrameNote: '该镜头的典型帧说明'
               }
             ]
           }
@@ -1593,46 +1578,28 @@ const buildVideoAnalysisPrompt = ({ video, metadata }) => {
     ),
     `视频文件名：${video.filename}`,
     `视频时长（秒）：${metadata.duration ?? 'unknown'}`,
+    `分析选项：${JSON.stringify(normalizedOptions)}`,
     '要求：',
     '1. plot 用中文概括整条视频的主要剧情、事件推进和结局走向，适合后续片段生成使用。',
-    '2. characters 至少提取主要角色，name 要稳定，appearancePrompt 必须是可直接用于视频生成的人物外观设定。',
-    '3. 每个 character 还必须返回 personalityPrompt，用中文概括角色的性格气质、情绪底色、行为风格或表演状态，方便后续角色资源与生成提示词复用。',
-    '4. 每个 character 都要返回 representativeFrameTime，表示最能代表该角色外观的时间点（单位秒）；representativeFrameNote 简要说明为什么选择该帧。',
-    '5. 每个 character 都必须返回 stateTimeline，用整片绝对秒数描述这个角色在全片中的阶段性状态变化，例如完好、受伤、包扎、衣物破损、沾血、妆造变化、疲惫加剧、姿势残缺等。',
-    '6. stateTimeline 必须按时间升序，startTime 和 endTime 是整片绝对秒数；允许时间上有空洞，但不要重叠；continuityPrompt 必须直接服务后续镜头连续性生成。',
-    '7. 如果某个角色在整片里没有明显状态变化，也要至少返回 1 个覆盖主要时段的基础状态。',
-    '8. backgrounds 需要尽量多提取对后续重生成有价值的可复用场景资源，不只提大场景；同一大场景中的稳定子空间、机位常驻区域、布景核心角落、走廊、门口、窗边、吧台、沙发区等，只要能独立复用，都可以沉淀成单独场景资源。',
-    '9. 每个 background 都要返回 scenePrompt，内容是可直接用于生成该场景的中文场景提示词，同时返回 representativeFrameTime 和 representativeFrameNote。',
-    '10. 先识别整片有哪些可复用场景，并把它们沉淀到 backgrounds 这个场景资源库里；如果同一大场景内部有多个视觉差异稳定且值得复用的子空间，也要拆开沉淀。',
-    '11. timeAnchors 必须覆盖完整视频，startTime 和 endTime 为数字秒，严格按时间升序，不要重叠，不要遗漏关键内容。',
-    '12. 片段切分必须以场景切换为硬边界；只有在同一场景内动作阶段明显不同且确实需要独立生成时，才继续细分。',
-    '13. 每个 timeAnchor 代表一个后续可独立生成的大剧情片段，而不是纯观感镜头；片段边界要尽量保证动作完整、人物连续、场景切换清晰、前后文衔接稳定。',
-    '14. 避免输出明显过短且没有独立生成价值的片段；如果视频较短，也要保证切分结果仍然覆盖全片。',
-    '15. 每个 timeAnchor 都要给出 sceneSummary 和 scenePrompt；sceneSummary 用中文解释该片段发生了什么，scenePrompt 必须是可直接复用的片段场景提示词，包含场景、光线、主体关系、空间结构和镜头氛围，不要只写事件摘要。',
-    '16. 每个 timeAnchor 都必须绑定 backgroundId、backgroundAction、backgroundName。',
-    '17. 同一 backgroundId 首次出现的片段标记为 create_new，后续再次出现的同场景片段标记为 reuse_existing。',
-    '18. 每个 timeAnchor 都要返回 representativeFrameTime，且该时间点必须落在 startTime 到 endTime 之间；优先选择最适合做预览、最能代表人物或场景的画面，而不是机械取中点。',
-    '19. 如果同一场景在多个片段重复出现，允许每个片段返回更贴合该片段语境的 scenePrompt，但 backgroundId 必须保持一致。',
-    '20. 每个 timeAnchor 内都必须返回 shots 数组，用于描述该大片段下的小镜头；shots 是后续小镜头切片与生成的唯一真值来源，同时也是字幕抽取、口型生成和状态连续性控制的唯一真值来源。',
-    '21. shots 必须尽量按真实镜头切点拆分，优先对齐真实剪辑边界、机位变化、镜头运动变化、景别变化、构图重心变化、主体关系变化、场景切换、视线反打、人物进出画、明显动作 beat、焦点转移、对白换气节点和说话节奏断点，不要机械均分时间。',
-    '22. 如果同一连续动作里出现了明显的左/中/右站位变化、前后景关系变化、镜头角度变化、横移推拉变化、遮挡关系变化、表演节奏断点、口型状态切换或说话人主次变化，也应该继续拆成新的 shot。',
-    '23. 对 60 秒以内的视频，要尽量把观众能明显感知到的真实镜头都拆出来；不要把多个连续 cut、多个表演 beat 或多个构图中心合并成一个 shot。',
-    '24. 如果没有硬切，也要按动作阶段、视线关系、说话段落、镜头运动阶段和构图稳定区间细分 shot；除非画面长时间稳定且动作单一，否则单个 shot 尽量不要超过 4 秒。',
-    '25. shots 必须按整片绝对时间返回 startTime 和 endTime，严格落在所属 timeAnchor 范围内，按时间升序、无重叠，并尽量覆盖该大片段；timeAnchor 和 shot 的时间请尽量精确到 0.1 秒，不要只给粗略整秒。',
-    '26. 每个 shot 都要返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote、speech、characterStateRefs；sceneNames 和 characterNames 都不能为空。',
-    '27. shot.summary 不能只写发生了什么，还要简要点出镜头核心动作、主体关系、构图变化或切分依据，让人能看出为什么这里单独成镜头。',
-    '28. representativeFrameTime 必须选择该镜头最有代表性的画面，不允许机械取中点；优先选择最适合作为预览图和生成参考图、最能体现该镜头构图、动作状态和人物表情的画面。',
-    '29. representativeFrameNote 需要说明这个时间点对应的关键画面，例如哪个动作定格、哪个表情瞬间、哪个构图最稳定。',
-    '30. shot.prompt 必须直接服务镜头级视频生成，必须写清：角色数量、谁在前景/中景/后景、人物在画面中的左/中/右位置、远近层次、朝向与视线方向、肢体姿态、运动轨迹、进出画方式、遮挡关系、镜头景别、拍摄角度、镜头运动、光线氛围、说话状态或口型是否明显，以及与前后镜头的连续关系。',
-    '31. shot.prompt 必须同时使用至少一个 @角色名 和至少一个 #场景名 引用，不要把资源正文直接展开，也不要只重复大片段摘要。',
-    '32. 如果一个 shot 涉及多个场景，需要在 sceneNames 中全部列出，并在 prompt 中按顺序引用对应的 #场景名。',
-    '33. 如果一个 shot 涉及多个角色，需要明确每个角色各自的位置、主次关系、视线关系和表演状态，而不是只列名字；如果角色是不完整出镜、背影、手部或 POV，也必须绑定稳定的人物名。',
-    '34. 每个 shot 都必须返回 speech：如果有对白，transcript 填完整对白全文，subtitleLines 按当前小镜头本地时间返回逐句字幕，speechStyle 用中文概括语速、停顿、情绪、语气、口型明显程度和说话力度；如果没有对白，也要返回 hasDialogue=false 的空结构。',
-    '35. subtitleLines[*].startTime 和 endTime 是相对当前 shot 本地时间，不是整片绝对秒数。',
-    '36. 每个 shot 都必须返回 characterStateRefs，并覆盖当前镜头实际出现的角色；对每个角色都要绑定最贴切的 stateId/stateName/continuityPrompt，不允许丢主角状态。',
-    '37. 当角色在后续镜头中出现伤势、断肢、包扎、服装破损、血迹、妆发变化等延续性状态时，后续 shot 的 characterStateRefs 必须继续引用对应状态，不要让状态突然恢复成基础状态。',
-    '38. 如果角色较少，也至少保证 characters 返回 1 个对象。',
-    '39. 输出必须是合法 JSON，字段名保持与示例完全一致。'
+    '2. characters 只返回真正重要的角色，name 要稳定；如果无法识别正式名字，就使用稳定标签，例如 主角A、反派A。',
+    '3. appearancePrompt 必须是可直接用于视频生成的人物外观设定；personalityPrompt 用中文概括性格气质、情绪底色和表演风格。',
+    '4. 每个 character 都要返回 representativeFrameTime 和 representativeFrameNote，方便后续抽典型帧生成三视图。',
+    '5. timeAnchors 必须覆盖完整视频，startTime 和 endTime 用整片绝对秒数，按时间升序、无重叠。',
+    '6. 每个 timeAnchor 代表一个后续可独立生成的大剧情片段，边界优先对齐场景变化和完整动作阶段，不要机械均分。',
+    '7. 每个 timeAnchor 都要返回 sceneSummary、scenePrompt、backgroundName、representativeFrameTime、representativeFrameNote。',
+    '8. 同一场景反复出现时，backgroundName 必须保持稳定，方便后端把它们合并成同一个场景资源。',
+    '9. 每个 timeAnchor 内都必须返回 shots；shots 是后续小镜头切片与生成的唯一真值来源。',
+    '10. shots 必须尽量按真实镜头边界细分，优先对齐剪辑点、景别变化、机位变化、人物左中右站位变化、动作 beat、视线切换、焦点转移和说话节奏变化。',
+    '11. 对 60 秒左右的视频，要尽量把观众能明显感知到的真实镜头都拆出来；除非画面长时间稳定且动作单一，否则单个 shot 尽量不要超过 4 秒。',
+    '12. 每个 shot 的 startTime 和 endTime 都是整片绝对秒数，严格落在所属 timeAnchor 内，尽量精确到 0.1 秒。',
+    '13. 每个 shot 都必须返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote，sceneNames 和 characterNames 都不能为空。',
+    '14. shot.summary 要说明镜头核心动作、主体关系和切分依据，而不是只复述剧情。',
+    '15. representativeFrameTime 必须选该镜头最有代表性的画面，不要机械取中点；representativeFrameNote 说明为什么这帧最适合作为预览和参考图。',
+    '16. shot.prompt 必须直接服务镜头级视频生成，并同时包含至少一个 @角色名 和至少一个 #场景名。',
+    '17. shot.prompt 必须写清角色数量、主次关系、人物左中右位置、前景/中景/后景层次、朝向、视线、姿态、动作轨迹、进出画方式、遮挡关系、景别、机位角度、镜头运动和光线氛围。',
+    '18. 如果角色是不完整出镜、背影、手部、反打或 POV，也必须绑定稳定的人物名；如果一个 shot 涉及多个场景或多个角色，需要在 sceneNames 和 characterNames 中列全。',
+    '19. 所有 prompt 都要明确不要字幕、不要文字、不要 UI、不要水印。',
+    '20. 输出必须是合法 JSON，字段名保持与示例完全一致。'
   ].join('\n');
 };
 
@@ -1852,13 +1819,13 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath, analysisOption
 
   try {
     const { authVariant, model: resolvedModel, responsePayload, responseText } = await callRemoteGemini({
-      prompt: buildVideoAnalysisPrompt({ video, metadata }),
+      prompt: buildVideoAnalysisPrompt({ video, metadata, analysisOptions }),
       videoAbsolutePath,
       requestTimeoutOverrideMs: WHOLE_VIDEO_PRIMARY_UPLOAD_TIMEOUT_MS,
       model: WHOLE_VIDEO_ANALYSIS_MODEL,
       allowModelFallback: false,
       allowAuthVariantFallback: false,
-      maxAttempts: 1
+      maxAttempts: WHOLE_VIDEO_ANALYSIS_MAX_ATTEMPTS
     });
     const parsedPayload = parseJsonPayload(responseText, '整片分析模型');
     return normalizeVideoAnalysisPayload({

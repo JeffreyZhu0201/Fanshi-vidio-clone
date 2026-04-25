@@ -179,18 +179,17 @@ describe('geminiService', () => {
     expect(parts[1].text).toContain('personalityPrompt');
     expect(parts[1].text).toContain('scenePrompt');
     expect(parts[1].text).toContain('后续可独立生成的大剧情片段');
-    expect(parts[1].text).toContain('backgroundId');
-    expect(parts[1].text).toContain('backgroundAction');
-    expect(parts[1].text).toContain('真实剪辑边界');
+    expect(parts[1].text).toContain('不要返回 backgrounds、speech 或 characterStateRefs');
+    expect(parts[1].text).toContain('backgroundName');
+    expect(parts[1].text).toContain('剪辑点');
     expect(parts[1].text).toContain('shots 是后续小镜头切片与生成的唯一真值来源');
-    expect(parts[1].text).toContain('人物在画面中的左/中/右位置');
-    expect(parts[1].text).toContain('前景/中景/后景');
-    expect(parts[1].text).toContain('视线反打');
+    expect(parts[1].text).toContain('人物左中右位置');
+    expect(parts[1].text).toContain('前景/中景/后景层次');
     expect(parts[1].text).toContain('进出画方式');
-    expect(parts[1].text).toContain('一次性包含整片剧情、角色、场景资源、大片段和每个大片段下的全部小镜头信息');
+    expect(parts[1].text).toContain('这次整片分析只返回剧情、角色、大剧情片段和每个大片段下的小镜头真值');
     expect(parts[1].text).toContain('观众能明显感知到的真实镜头都拆出来');
-    expect(parts[1].text).toContain('时间请尽量精确到 0.1 秒');
-    expect(parts[1].text).toContain('representativeFrameNote 需要说明这个时间点对应的关键画面');
+    expect(parts[1].text).toContain('尽量精确到 0.1 秒');
+    expect(parts[1].text).toContain('分析选项');
     expect(requestBody.generationConfig).toMatchObject({
       temperature: 0.2,
       responseMimeType: 'application/json'
@@ -233,17 +232,17 @@ describe('geminiService', () => {
     requestExternalJsonMock.mockReset();
     requestExternalJsonMock.mockResolvedValueOnce({
       response: {
-        status: 429
+        status: 404
       },
       responseText: JSON.stringify({
         error: {
-          message: '当前分组上游负载已饱和，请稍后再试',
+          message: 'model not found',
           code: 'model_not_found'
         }
       }),
       responsePayload: {
         error: {
-          message: '当前分组上游负载已饱和，请稍后再试',
+          message: 'model not found',
           code: 'model_not_found'
         }
       }
@@ -267,9 +266,125 @@ describe('geminiService', () => {
     );
   });
 
+  test('retries whole-video analysis on transient 429 using the same model and endpoint', async () => {
+    requestExternalJsonMock.mockReset();
+    requestExternalJsonMock
+      .mockResolvedValueOnce({
+        response: {
+          status: 429
+        },
+        responseText: JSON.stringify({
+          error: {
+            message: '当前分组上游负载已饱和，请稍后再试',
+            code: null
+          }
+        }),
+        responsePayload: {
+          error: {
+            message: '当前分组上游负载已饱和，请稍后再试',
+            code: null
+          }
+        }
+      })
+      .mockResolvedValue({
+        response: {
+          status: 200
+        },
+        responseText: JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      plot: '剧情摘要',
+                      characters: [
+                        {
+                          id: 'character_1',
+                          name: '主角',
+                          appearancePrompt: '角色外观',
+                          personalityPrompt: '冷静克制，观察力强',
+                          representativeFrameTime: 1.2,
+                          representativeFrameNote: '人物正面稳定镜头'
+                        }
+                      ],
+                      timeAnchors: [
+                        {
+                          startTime: 0,
+                          endTime: 3,
+                          sceneSummary: '镜头摘要',
+                          scenePrompt: '镜头场景提示词',
+                          representativeFrameTime: 1.5,
+                          backgroundName: '咖啡馆内景'
+                        }
+                      ]
+                    })
+                  }
+                ]
+              }
+            }
+          ]
+        }),
+        responsePayload: {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      plot: '剧情摘要',
+                      characters: [
+                        {
+                          id: 'character_1',
+                          name: '主角',
+                          appearancePrompt: '角色外观',
+                          personalityPrompt: '冷静克制，观察力强',
+                          representativeFrameTime: 1.2,
+                          representativeFrameNote: '人物正面稳定镜头'
+                        }
+                      ],
+                      timeAnchors: [
+                        {
+                          startTime: 0,
+                          endTime: 3,
+                          sceneSummary: '镜头摘要',
+                          scenePrompt: '镜头场景提示词',
+                          representativeFrameTime: 1.5,
+                          backgroundName: '咖啡馆内景'
+                        }
+                      ]
+                    })
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      });
+
+    const result = await analyzeVideo({
+      video: {
+        filename: 'sample.mp4'
+      },
+      metadata: {
+        duration: 3
+      },
+      videoAbsolutePath: sampleVideoPath
+    });
+
+    expect(result.timeAnchors).toHaveLength(1);
+    expect(requestExternalJsonMock).toHaveBeenCalledTimes(2);
+    expect(requestExternalJsonMock.mock.calls[0][0]).toBe(
+      'https://yunwu.ai/v1beta/models/gemini-2.5-pro:generateContent?key=test-token'
+    );
+    expect(requestExternalJsonMock.mock.calls[1][0]).toBe(
+      'https://yunwu.ai/v1beta/models/gemini-2.5-pro:generateContent?key=test-token'
+    );
+  });
+
   test('surfaces a clear timeout error for whole-video analysis', async () => {
     requestExternalJsonMock.mockReset();
-    requestExternalJsonMock.mockRejectedValueOnce(new Error('The operation was aborted due to timeout'));
+    requestExternalJsonMock.mockRejectedValue(new Error('The operation was aborted due to timeout'));
 
     await expect(
       analyzeVideo({
@@ -409,6 +524,9 @@ describe('geminiService', () => {
       backgroundId: 'background_cafe',
       backgroundAction: 'reuse_existing',
       backgroundName: '咖啡馆内景'
+    });
+    expect(result.characters[0].stateTimeline[0]).toMatchObject({
+      stateName: '基础状态'
     });
   });
 
