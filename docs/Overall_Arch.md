@@ -484,6 +484,7 @@ MainPage 风格选择
 ```text
 shot.prompt
 -> 展开 @角色 / #场景
+-> 读取整片理解里的 stateTimeline / continuityPrompt
 -> 插入全局风格硬约束
 -> 准备典型帧 / 三视图 / 场景图 / 源视频 / 音频
 -> 如有对白则先压缩超长音频
