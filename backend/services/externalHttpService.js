@@ -11,7 +11,7 @@ const hasConfiguredProxy = Boolean(
 );
 const MAX_NATIVE_REDIRECTS = 5;
 const UNDICI_TLS_FALLBACK_ERROR_PATTERN =
-  /before secure tls connection was established|client network socket disconnected|socket disconnected|tls connection|econnreset/iu;
+  /before secure tls connection was established|client network socket disconnected|socket disconnected|tls connection|econnreset|http\/2: stream half-closed|stream half-closed|unexpected eof|h2 stream|nghttp2_enhance_your_calm/iu;
 const nativeFallbackOrigins = new Set();
 
 const sharedDispatcher = hasConfiguredProxy ? new EnvHttpProxyAgent() : null;
@@ -410,7 +410,31 @@ const requestExternalJson = async (
   return {
     response,
     responseText,
-    responsePayload: responseText ? JSON.parse(responseText) : {}
+    responsePayload: (() => {
+      if (!responseText) {
+        return {};
+      }
+
+      try {
+        return JSON.parse(responseText);
+      } catch (error) {
+        const contentType = String(response.headers.get('content-type') ?? '').trim() || 'unknown';
+        const responsePreview = responseText
+          .replace(/\s+/gu, ' ')
+          .trim()
+          .slice(0, 240);
+        const parseError = new Error(
+          `External request expected JSON but received non-JSON response (status ${response.status}, content-type ${contentType}): ${responsePreview || '[empty body]'}`
+        );
+
+        parseError.statusCode = response.status;
+        parseError.contentType = contentType;
+        parseError.responsePreview = responsePreview;
+        parseError.cause = error;
+
+        throw parseError;
+      }
+    })()
   };
 };
 

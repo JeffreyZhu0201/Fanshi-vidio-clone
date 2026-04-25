@@ -147,6 +147,26 @@ const normalizeAnalysisCharacters = (characters = [], { videoDuration = 0 } = {}
         return null;
       }
 
+      const representativeFrameTime = normalizeOptionalNumber(
+        character?.representativeFrameTime ?? character?.representative_frame_time
+      );
+      const representativeFrameNote = normalizeOptionalString(
+        character?.representativeFrameNote ??
+          character?.representative_frame_note ??
+          character?.representativeFrameReason ??
+          character?.representative_frame_reason
+      );
+      const normalizedStateTimeline = normalizeCharacterStateTimeline(
+        character?.stateTimeline ?? character?.state_timeline ?? [],
+        {
+          fallbackCharacterName: name,
+          videoDuration
+        }
+      );
+      const safeVideoDuration = Number.isFinite(Number(videoDuration)) && Number(videoDuration) > 0
+        ? Number(videoDuration)
+        : Math.max(0.3, Number(representativeFrameTime ?? 0.3));
+
       return {
         id: String(character?.id ?? `character_${characterIndex + 1}`).trim() || `character_${characterIndex + 1}`,
         name,
@@ -161,22 +181,24 @@ const normalizeAnalysisCharacters = (characters = [], { videoDuration = 0 } = {}
             character?.personality ??
             character?.traits
         ),
-        representativeFrameTime: normalizeOptionalNumber(
-          character?.representativeFrameTime ?? character?.representative_frame_time
-        ),
-        representativeFrameNote: normalizeOptionalString(
-          character?.representativeFrameNote ??
-            character?.representative_frame_note ??
-            character?.representativeFrameReason ??
-            character?.representative_frame_reason
-        ),
-        stateTimeline: normalizeCharacterStateTimeline(
-          character?.stateTimeline ?? character?.state_timeline ?? [],
-          {
-            fallbackCharacterName: name,
-            videoDuration
-          }
-        )
+        representativeFrameTime,
+        representativeFrameNote,
+        stateTimeline: normalizedStateTimeline.length
+          ? normalizedStateTimeline
+          : [
+              {
+                id: `${String(character?.id ?? `character_${characterIndex + 1}`)}_state_base`,
+                startTime: 0,
+                endTime: Number(safeVideoDuration.toFixed(2)),
+                stateName: '基础状态',
+                summary: `${name} 保持基础外形、服装、身体完整度和情绪状态。`,
+                continuityPrompt: `后续镜头持续保持 ${name} 当前基础形象、服装和身体状态，不要突然改变。`,
+                representativeFrameTime:
+                  representativeFrameTime ??
+                  Number((safeVideoDuration / 2).toFixed(2)),
+                representativeFrameNote: representativeFrameNote || '该帧用于代表角色的基础连续性状态。'
+              }
+            ]
       };
     })
     .filter(Boolean);

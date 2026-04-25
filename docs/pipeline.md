@@ -24,7 +24,10 @@
 - 视频上传可以正常完成，重复上传拦截和 hash 文件名落盘正常
 - 前端开发页现在可以通过 `https://frp-fox.com:42734` 访问
 - Gemini 整片理解可以返回真实结果，不再只会掉回 mock
-- 整片理解现在固定只调用一次 `Gemini-2.5-pro`
+- 整片理解现在固定主用 `Gemini-2.5-pro`
+- 整片理解的当前稳定合同是：`plot + characters + time_anchors + shots`
+- 场景资源 `backgrounds` 现在由后端根据 `time_anchors[*].backgroundName / scenePrompt` 本地派生
+- 一条真实 `66 秒` 视频已经跑通整片分析，返回 `5` 个大片段，首个大片段返回 `6` 个小镜头
 - 角色三视图 / 场景图的 Gemini 生图链路已经从 `fetch failed` 修到可真实出图
 - Gemini、Gemini 生图、Seedance 现在都已经统一走 Node.js 外部请求层
 - 对 `yunwu.ai` 这类在当前代理环境下会触发 TLS 握手断开的地址，统一请求层会在 `undici` 失败后自动切到 Node 原生 `http/https` 直连回退
@@ -66,6 +69,8 @@
 - Seedance 单次生成时长现在按 `15s` 上限保护；如果镜头过长，后端会先报“需要继续切细”，不会把超长镜头直接丢给远端
 - 前端现在会展示“本次实际发送给 Seedance 的参考图 / 参考视频 / 参考音频”清单，能直接核对这次是否真的用了典型帧、角色三视图和场景图
 - `POST /api/segments/split` 之前会在切分循环里再次调用 Gemini 做每个大片段分析，导致切分任务长时间停留在处理中、前端迟迟不出现片段卡；现在 split 只做本地切片、镜头资产构建和入库，直接使用整片分析结果建卡
+- Gemini 整片分析之前经常收到上游 HTML 500 页，最后在后端表现成 `Unexpected token '<'`；现在后端会明确报“远端返回非 JSON”，并且整片分析 prompt 已压缩到当前上游可稳定接受的大小
+- `Gemini-2.5-pro` 整片分析遇到上游 `429` 时，现在会在同模型上自动重试，不会切到别的文本模型
 
 当前仍要实事求是说明的部分：
 
@@ -130,12 +135,15 @@
 
 - `plot`
 - `characters`
-- `characters[*].stateTimeline`
 - `backgrounds`
 - `time_anchors`
 - `time_anchors[*].shots`
-- `time_anchors[*].shots[*].speech`
-- `time_anchors[*].shots[*].characterStateRefs`
+
+说明：
+
+- `backgrounds` 不是 Gemini 直接返回的主合同字段，而是后端根据 `time_anchors[*].backgroundName / scenePrompt` 本地派生
+- `characters[*].stateTimeline` 如果 Gemini 未返回，后端会自动补一个覆盖整片的基础状态，保证后续连续性链路不空
+- `time_anchors[*].shots[*].speech` 和 `characterStateRefs` 不是整片分析阶段直接返回，而是在 `segments/split` 之后按小镜头单独补齐
 
 当前规则：
 
@@ -143,16 +151,18 @@
 - 大片段时间和小镜头时间都用整片绝对秒数
 - 角色状态时间线也用整片绝对秒数
 - 小镜头字幕时间是相对当前小镜头本地时间
-- 整片理解固定只走一次 `Gemini-2.5-pro`
+- 整片理解固定主用 `Gemini-2.5-pro`
 - 分析选项默认 `extractSubtitles=true`、`parseAudio=true`
 - 不再自动切备用文本模型
 - 不再自动走关键帧回退
 - 不再自动掉回 mock 整片分析
-- 整片理解 prompt 已加强到“更细镜头切分 + 更精确时间点”，要求尽量把观众能感知到的真实镜头都拆出来
+- 整片理解 prompt 已收敛到更轻的单次合同，但仍要求尽量把观众能感知到的真实镜头都拆出来
 - `timeAnchor` 和 `shot` 的时间要求尽量精确到 `0.1` 秒
 - 整片分析后端长超时默认 `600000ms`，可通过 `GEMINI_WHOLE_VIDEO_TIMEOUT_MS` 调整
 - 外部请求已经统一改成 Node.js 外部请求层，默认先走 `undici` 并通过系统代理出网，不再依赖 `curl`
-- 如果 `undici` 在 TLS 握手阶段报 `fetch failed / ECONNRESET / before secure TLS connection was established`，会自动改用 Node 原生 `http/https` 直连回退，避免整片分析直接中断
+- 如果 `undici` 在 TLS 握手阶段报 `fetch failed / ECONNRESET / before secure TLS connection was established / NGHTTP2_ENHANCE_YOUR_CALM`，会自动改用 Node 原生 `http/https` 直连回退，避免整片分析直接中断
+- 如果上游返回 HTML 或其它非 JSON 内容，后端会明确标记为“远端返回非 JSON”，不再只剩 `Unexpected token '<'`
+- 如果上游返回 `429`，会在同一个 `Gemini-2.5-pro` 上自动重试
 - 如果 `PUBLIC_ASSET_BASE_URL` 返回自签证书，图片和音频参考会自动改成内联 `data:`，视频参考则继续要求公网可访问 URL
 - 后端启动时会自动检查 `analyses.analysis_options` 列是否存在，避免旧数据库在点击“整片分析”时直接 500
 
@@ -168,7 +178,8 @@
 - 把 `time_anchors[*].shots` 写进 `segment.analysis.shots`
 - 给每个小镜头切出独立源视频
 - 给每个小镜头抽独立典型帧
-- 如果整片分析已带 `speech`，会直接复用，不再在 split 阶段重新调 Gemini 提取
+- 如果开启了 `extractSubtitles / parseAudio`，会在 split 阶段为每个小镜头继续切音频、提取 `speech`、写 SRT
+- split 阶段还会根据角色状态时间线，把每个小镜头的 `characterStateRefs` 本地补齐
 
 当前规则：
 
