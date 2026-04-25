@@ -978,6 +978,28 @@ const trimDownloadedSeedDanceVideo = async ({
   };
 };
 
+const validateDownloadedSeedDanceVideo = async ({
+  downloadedAsset,
+  expectAudioTrack = false,
+  contextLabel = 'Seedance 生成结果'
+}) => {
+  if (!downloadedAsset?.filePath) {
+    return {
+      hasAudio: null,
+      audioCodec: null
+    };
+  }
+
+  const metadata = await getVideoMetadata(resolveUploadPath(downloadedAsset.filePath));
+
+  if (expectAudioTrack && metadata?.hasAudio === false) {
+    await removeFileIfExists(downloadedAsset.filePath);
+    throw new Error(`${contextLabel}缺少音轨，已判定为失败，请重试。`);
+  }
+
+  return metadata;
+};
+
 const createRemoteGenerationTask = async ({
   prompt,
   sourcePublicUrl = '',
@@ -1204,7 +1226,8 @@ const finalizeRemoteGenerationResult = async ({
   completedTask,
   taskId,
   basename,
-  targetDurationSeconds
+  targetDurationSeconds,
+  expectAudioTrack = false
 }) => {
   const requestedDuration = normalizeRequestedSeedDanceDuration(targetDurationSeconds);
   const providerDuration = resolveSeedDanceProviderDuration(targetDurationSeconds);
@@ -1220,6 +1243,12 @@ const finalizeRemoteGenerationResult = async ({
       targetDurationSeconds: requestedDuration
     });
   }
+
+  await validateDownloadedSeedDanceVideo({
+    downloadedAsset,
+    expectAudioTrack,
+    contextLabel: 'Seedance 远端结果'
+  });
 
   return {
     filePath: downloadedAsset.filePath,
@@ -1239,7 +1268,8 @@ const resumeRemoteGenerationTask = async ({
   remoteTaskId,
   basename = 'generated-segment',
   duration,
-  onProgress
+  onProgress,
+  expectAudioTrack = false
 }) => {
   const safeRemoteTaskId = String(remoteTaskId ?? '').trim();
 
@@ -1255,7 +1285,8 @@ const resumeRemoteGenerationTask = async ({
     completedTask,
     taskId: safeRemoteTaskId,
     basename,
-    targetDurationSeconds: duration
+    targetDurationSeconds: duration,
+    expectAudioTrack
   });
 };
 
@@ -1270,6 +1301,7 @@ const generateSegment = async ({
   referenceVideos = [],
   referenceAudios = [],
   generateAudio = env.SEED_DANCE_GENERATE_AUDIO,
+  expectAudioTrack = Boolean(generateAudio),
   ratio,
   duration,
   onProgress
@@ -1330,7 +1362,8 @@ const generateSegment = async ({
         completedTask,
         taskId,
         basename,
-        targetDurationSeconds: requestedDuration
+        targetDurationSeconds: requestedDuration,
+        expectAudioTrack
       });
 
       return {

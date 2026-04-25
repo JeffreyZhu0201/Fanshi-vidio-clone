@@ -58,7 +58,7 @@ const getVideoMetadata = async (absolutePath) => {
       '-v',
       'error',
       '-show_entries',
-      'format=duration:stream=width,height,codec_name',
+      'format=duration:stream=codec_type,width,height,codec_name',
       '-of',
       'json',
       absolutePath
@@ -66,6 +66,7 @@ const getVideoMetadata = async (absolutePath) => {
 
     const parsed = JSON.parse(stdout);
     const videoStream = parsed.streams?.find((item) => item.width || item.height) ?? {};
+    const audioStream = parsed.streams?.find((item) => item.codec_type === 'audio') ?? {};
     const rawDurationSeconds = parsed.format?.duration ? Number(parsed.format.duration) : null;
 
     return {
@@ -74,6 +75,8 @@ const getVideoMetadata = async (absolutePath) => {
       width: videoStream.width ?? null,
       height: videoStream.height ?? null,
       codec: videoStream.codec_name ?? null,
+      hasAudio: audioStream.codec_name ? true : false,
+      audioCodec: audioStream.codec_name ?? null,
       engine: 'ffprobe'
     };
   } catch (error) {
@@ -88,6 +91,8 @@ const getVideoMetadata = async (absolutePath) => {
       width: null,
       height: null,
       codec: null,
+      hasAudio: null,
+      audioCodec: null,
       engine: 'mock'
     };
   }
