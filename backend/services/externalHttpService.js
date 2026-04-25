@@ -6,15 +6,32 @@ import { fetch as undiciFetch, EnvHttpProxyAgent } from 'undici';
 import env from '../config/env.js';
 import logger from '../utils/logger.js';
 
-const hasConfiguredProxy = Boolean(
-  String(process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.ALL_PROXY || '').trim()
-);
+const configuredProxyValues = [
+  process.env.HTTPS_PROXY,
+  process.env.HTTP_PROXY,
+  process.env.ALL_PROXY,
+  process.env.https_proxy,
+  process.env.http_proxy,
+  process.env.all_proxy
+]
+  .map((value) => String(value ?? '').trim())
+  .filter(Boolean);
+const hasConfiguredProxy = configuredProxyValues.length > 0;
+const shouldBypassConfiguredProxy = configuredProxyValues.some((value) => {
+  return /(?:127\.0\.0\.1|localhost|\[::1\]|::1):7890/iu.test(value);
+});
 const MAX_NATIVE_REDIRECTS = 5;
 const UNDICI_TLS_FALLBACK_ERROR_PATTERN =
   /before secure tls connection was established|client network socket disconnected|socket disconnected|socket hang up|tls connection|econnreset|econnrefused|connection refused|http\/2: stream half-closed|stream half-closed|unexpected eof|h2 stream|nghttp2_enhance_your_calm/iu;
 const nativeFallbackOrigins = new Set();
 
-const sharedDispatcher = hasConfiguredProxy ? new EnvHttpProxyAgent() : null;
+if (shouldBypassConfiguredProxy) {
+  logger.warn('External requests are bypassing the configured local :7890 proxy and using direct connections.', {
+    proxies: configuredProxyValues
+  });
+}
+
+const sharedDispatcher = hasConfiguredProxy && !shouldBypassConfiguredProxy ? new EnvHttpProxyAgent() : null;
 
 const getExternalDispatcher = () => {
   return sharedDispatcher || undefined;
@@ -99,6 +116,7 @@ const normalizeExternalRequestHeaders = (headers = {}) => {
   const normalizedHeaders = {};
   const requestHeaders = new Headers(headers);
   let hasAcceptEncoding = false;
+  let hasContentLength = false;
 
   requestHeaders.forEach((value, key) => {
     normalizedHeaders[key] = value;
@@ -106,11 +124,17 @@ const normalizeExternalRequestHeaders = (headers = {}) => {
     if (key.toLowerCase() === 'accept-encoding') {
       hasAcceptEncoding = true;
     }
+
+    if (key.toLowerCase() === 'content-length') {
+      hasContentLength = true;
+    }
   });
 
   if (!hasAcceptEncoding) {
     normalizedHeaders['accept-encoding'] = 'identity';
   }
+
+  normalizedHeaders.__hasContentLength = hasContentLength;
 
   return normalizedHeaders;
 };
@@ -197,6 +221,13 @@ const requestExternalBufferViaNativeHttp = async (
     .toUpperCase();
   const requestHeaders = normalizeExternalRequestHeaders(headers);
   const requestBody = normalizeExternalRequestBody(body);
+  const hasContentLengthHeader = Boolean(requestHeaders.__hasContentLength);
+  delete requestHeaders.__hasContentLength;
+
+  if (typeof requestBody !== 'undefined' && !hasContentLengthHeader) {
+    requestHeaders['content-length'] = Buffer.byteLength(requestBody);
+  }
+
   const activeRequestSignal = requestSignal ?? buildExternalRequestSignal({ timeoutMs, signal });
   const requestClient = requestUrl.protocol === 'https:' ? https : http;
 
@@ -300,7 +331,7 @@ const requestExternalBuffer = async (
 ) => {
   const requestOrigin = resolveExternalOrigin(url);
 
-  if (requestOrigin && nativeFallbackOrigins.has(requestOrigin)) {
+  if (shouldBypassConfiguredProxy || (requestOrigin && nativeFallbackOrigins.has(requestOrigin))) {
     return requestExternalBufferViaNativeHttp(url, {
       method,
       headers,
@@ -352,7 +383,6 @@ const requestExternalBuffer = async (
       body,
       timeoutMs,
       signal,
-      requestSignal: requestOptions.signal,
       redirect
     });
 

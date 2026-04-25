@@ -248,14 +248,6 @@ const callRemoteGeminiImage = async ({ prompt, model = imageModel }) => {
     for (const credentialCandidate of getGeminiImageCredentialCandidates()) {
       const requestVariants = [
         {
-          name: 'bearer+query-key',
-          url: appendKeyQuery(resolveGeminiImageEndpoint(modelCandidate), credentialCandidate.token),
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${credentialCandidate.token}`
-          }
-        },
-        {
           name: 'query-key',
           url: appendKeyQuery(resolveGeminiImageEndpoint(modelCandidate), credentialCandidate.token),
           headers: {
@@ -265,6 +257,14 @@ const callRemoteGeminiImage = async ({ prompt, model = imageModel }) => {
         {
           name: 'bearer',
           url: resolveGeminiImageEndpoint(modelCandidate),
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${credentialCandidate.token}`
+          }
+        },
+        {
+          name: 'bearer+query-key',
+          url: appendKeyQuery(resolveGeminiImageEndpoint(modelCandidate), credentialCandidate.token),
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${credentialCandidate.token}`

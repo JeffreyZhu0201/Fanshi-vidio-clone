@@ -1424,14 +1424,6 @@ const callRemoteGemini = async ({
       resolvedMode === 'google'
         ? [
             {
-              name: 'bearer+query-key',
-              url: appendKeyQuery(endpoint, env.GEMINI_API_KEY),
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${env.GEMINI_API_KEY}`
-              }
-            },
-            {
               name: 'query-key',
               url: appendKeyQuery(endpoint, env.GEMINI_API_KEY),
               headers: {
@@ -1441,6 +1433,14 @@ const callRemoteGemini = async ({
             {
               name: 'bearer',
               url: endpoint,
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${env.GEMINI_API_KEY}`
+              }
+            },
+            {
+              name: 'bearer+query-key',
+              url: appendKeyQuery(endpoint, env.GEMINI_API_KEY),
               headers: {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${env.GEMINI_API_KEY}`

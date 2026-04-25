@@ -263,6 +263,7 @@ React / Vite
 - 让资源图 prompt 带入当前风格模板
 - 当 `analysis_options.extractSubtitles / parseAudio` 开启时，在整片理解里一次性返回 shot 级 `speech`
 - 对较大视频先本地转整片分析代理视频，再把代理视频发给 Gemini，减少整段上传体积
+- 当前环境里如果检测到本地 `127.0.0.1:7890` 代理配置，Gemini 文本请求会直接绕过这条代理，改走 Node 原生 `http/https` 直连
 
 #### `shotSpeechService`
 
