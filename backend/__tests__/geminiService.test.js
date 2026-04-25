@@ -413,6 +413,106 @@ describe('geminiService', () => {
     );
   });
 
+  test('retries whole-video analysis on socket hang up and keeps the same model and endpoint', async () => {
+    requestExternalJsonMock.mockReset();
+    requestExternalJsonMock
+      .mockRejectedValueOnce(new Error('socket hang up'))
+      .mockResolvedValue({
+        response: {
+          status: 200
+        },
+        responseText: JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      plot: '剧情摘要',
+                      characters: [
+                        {
+                          id: 'character_1',
+                          name: '主角',
+                          appearancePrompt: '角色外观',
+                          personalityPrompt: '冷静克制，观察力强',
+                          representativeFrameTime: 1.2,
+                          representativeFrameNote: '人物正面稳定镜头'
+                        }
+                      ],
+                      timeAnchors: [
+                        {
+                          startTime: 0,
+                          endTime: 3,
+                          sceneSummary: '镜头摘要',
+                          scenePrompt: '镜头场景提示词',
+                          representativeFrameTime: 1.5,
+                          backgroundName: '咖啡馆内景'
+                        }
+                      ]
+                    })
+                  }
+                ]
+              }
+            }
+          ]
+        }),
+        responsePayload: {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      plot: '剧情摘要',
+                      characters: [
+                        {
+                          id: 'character_1',
+                          name: '主角',
+                          appearancePrompt: '角色外观',
+                          personalityPrompt: '冷静克制，观察力强',
+                          representativeFrameTime: 1.2,
+                          representativeFrameNote: '人物正面稳定镜头'
+                        }
+                      ],
+                      timeAnchors: [
+                        {
+                          startTime: 0,
+                          endTime: 3,
+                          sceneSummary: '镜头摘要',
+                          scenePrompt: '镜头场景提示词',
+                          representativeFrameTime: 1.5,
+                          backgroundName: '咖啡馆内景'
+                        }
+                      ]
+                    })
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      });
+
+    const result = await analyzeVideo({
+      video: {
+        filename: 'sample.mp4'
+      },
+      metadata: {
+        duration: 3
+      },
+      videoAbsolutePath: sampleVideoPath
+    });
+
+    expect(result.timeAnchors).toHaveLength(1);
+    expect(requestExternalJsonMock).toHaveBeenCalledTimes(2);
+    expect(requestExternalJsonMock.mock.calls[0][0]).toBe(
+      'https://yunwu.ai/v1beta/models/gemini-2.5-pro:generateContent?key=test-token'
+    );
+    expect(requestExternalJsonMock.mock.calls[1][0]).toBe(
+      'https://yunwu.ai/v1beta/models/gemini-2.5-pro:generateContent?key=test-token'
+    );
+  });
+
   test('surfaces a clear timeout error for whole-video analysis', async () => {
     requestExternalJsonMock.mockReset();
     requestExternalJsonMock.mockRejectedValue(new Error('The operation was aborted due to timeout'));
@@ -430,6 +530,27 @@ describe('geminiService', () => {
     ).rejects.toThrow(
       'Gemini-2.5-pro 整片分析超时：整段视频上传与理解超过 600 秒，请稍后重试，或调大后端 GEMINI_WHOLE_VIDEO_TIMEOUT_MS。'
     );
+  });
+
+  test('surfaces a clear retry-exhausted message for socket hang up during whole-video analysis', async () => {
+    requestExternalJsonMock.mockReset();
+    requestExternalJsonMock.mockRejectedValue(new Error('socket hang up'));
+
+    await expect(
+      analyzeVideo({
+        video: {
+          filename: 'sample.mp4'
+        },
+        metadata: {
+          duration: 3
+        },
+        videoAbsolutePath: sampleVideoPath
+      })
+    ).rejects.toThrow(
+      'Gemini-2.5-pro 整片分析失败：远端连接中途断开或网络不稳定（socket hang up），已自动重试 3 次仍未成功，请稍后重试。'
+    );
+
+    expect(requestExternalJsonMock).toHaveBeenCalledTimes(3);
   });
 
   test('backfills background bindings and reuse action when Gemini omits explicit linkage', async () => {

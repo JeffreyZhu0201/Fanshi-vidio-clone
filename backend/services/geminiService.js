@@ -96,7 +96,7 @@ const isNetworkLikeGeminiError = (error) => {
     return false;
   }
 
-  return /fetch failed|connect timeout|tls connection|socket disconnected|econnreset|enotfound|eai_again|timed out|timeout|aborted|unexpected eof/iu.test(
+  return /fetch failed|connect timeout|tls connection|socket disconnected|socket hang up|econnreset|enotfound|eai_again|timed out|timeout|aborted|unexpected eof/iu.test(
     normalizedMessage
   );
 };
@@ -1653,13 +1653,18 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath, analysisOption
       message: describeGeminiTransportError(error)
     });
 
+    const transportMessage = describeGeminiTransportError(error);
     const exposedError = isGeminiTimeoutError(error)
       ? new Error(
           `Gemini-2.5-pro 整片分析超时：整段视频上传与理解超过 ${Math.round(
             WHOLE_VIDEO_PRIMARY_UPLOAD_TIMEOUT_MS / 1000
           )} 秒，请稍后重试，或调大后端 GEMINI_WHOLE_VIDEO_TIMEOUT_MS。`
         )
-      : new Error(`Gemini-2.5-pro 整片分析失败：${describeGeminiTransportError(error)}`);
+      : isNetworkLikeGeminiError(error)
+        ? new Error(
+            `Gemini-2.5-pro 整片分析失败：远端连接中途断开或网络不稳定（${transportMessage || 'network error'}），已自动重试 ${WHOLE_VIDEO_ANALYSIS_MAX_ATTEMPTS} 次仍未成功，请稍后重试。`
+          )
+        : new Error(`Gemini-2.5-pro 整片分析失败：${transportMessage}`);
     exposedError.statusCode =
       Number(error?.statusCode ?? 0) >= 400 && Number(error?.statusCode ?? 0) < 500
         ? Number(error.statusCode)

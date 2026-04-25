@@ -123,6 +123,7 @@
 - 不再自动掉回 mock 分析
 - 提示词现在是“固定结构段 + 风格段”
 - 风格段来自当前 `styleMode`
+- 对 `429`、`socket hang up`、`ECONNRESET` 这类瞬时上游异常会在同模型、同端点上自动重试
 
 返回主结果：
 
@@ -141,6 +142,7 @@
 
 - 当 `extractSubtitles` 或 `parseAudio` 开启时，小镜头 `speech` 会在整片分析时直接返回
 - split 阶段不再逐个小镜头重新调 Gemini 做 speech 解析，只做本地音频切片和 SRT 落盘
+- 如果整片分析连续出现 `socket hang up`，最终错误会明确提示这是“远端连接中途断开或网络不稳定”
 
 ### 3.4 大片段与小镜头切分
 
