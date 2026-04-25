@@ -28,10 +28,18 @@ import {
   mergeVideos,
   padAudioClipToDuration
 } from './ffmpegService.js';
+import {
+  MAX_SEED_DANCE_REFERENCE_AUDIO_COMPRESSION_RATIO,
+  MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS,
+  buildDialogueDeliveryConstraint,
+  resolveDialogueTimingPlan,
+  scaleSubtitleLinesForCompression
+} from './dialogueTimingService.js';
 import { broadcastRealtimeEvent } from './realtimeService.js';
 import {
   assertSeedDanceReady,
   generateSegment as generateWithSeedDance,
+  resolveSeedDanceProviderDuration,
   resumeRemoteGenerationTask
 } from './seedDanceService.js';
 import { rebuildShotAssetsForSegment, shotAssetsNeedRebuild } from './shotAssetService.js';
@@ -49,8 +57,6 @@ import { normalizeCharacterStateRefs } from './characterStateService.js';
 const SHOT_TASK_EVENT = 'shot:progress';
 const SHOT_ASSEMBLY_EVENT = 'shot-assembly:progress';
 const inflightShotGenerationTaskProcesses = new Map();
-const MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS = 1.8;
-const MAX_SEED_DANCE_REFERENCE_AUDIO_COMPRESSION_RATIO = 1.5;
 
 const normalizeOptionalNumber = (value) => {
   const parsedValue = Number(value);
@@ -190,34 +196,6 @@ const buildShotCharacterStateSignature = (shot) => {
   );
 };
 
-const scaleSubtitleLinesForCompression = (subtitleLines = [], compressionRatio = 1, targetDurationSeconds = 0) => {
-  if (!Array.isArray(subtitleLines) || !subtitleLines.length) {
-    return [];
-  }
-
-  const safeCompressionRatio = Number(compressionRatio);
-  const safeTargetDurationSeconds = Math.max(0.3, Number(targetDurationSeconds) || 0.3);
-
-  if (!Number.isFinite(safeCompressionRatio) || safeCompressionRatio <= 0) {
-    return subtitleLines;
-  }
-
-  return subtitleLines.map((line, lineIndex) => {
-    const scaledStartTime = Math.max(0, Number(line.startTime ?? 0) / safeCompressionRatio);
-    const scaledEndTime = Math.max(
-      scaledStartTime + 0.05,
-      Number(line.endTime ?? line.startTime ?? 0) / safeCompressionRatio
-    );
-
-    return {
-      id: String(line.id ?? `subtitle_${lineIndex + 1}`),
-      startTime: Number(Math.min(safeTargetDurationSeconds, scaledStartTime).toFixed(2)),
-      endTime: Number(Math.min(safeTargetDurationSeconds, scaledEndTime).toFixed(2)),
-      text: String(line.text ?? '').trim()
-    };
-  });
-};
-
 const estimateTranscriptDurationSeconds = (speech = null) => {
   const normalizedSpeech = normalizeShotSpeech(speech ?? null, {
     durationSeconds: 9999,
@@ -268,24 +246,28 @@ const prepareDialogueGenerationPayload = async ({
     ...speechForGeneration,
     transcript
   });
+  const providerDurationSeconds = resolveSeedDanceProviderDuration(shotDurationSeconds);
 
   if (!sourceAudioAbsolutePath) {
-    const estimatedCompressionRatio =
-      estimatedTranscriptDurationSeconds > 0 && shotDurationSeconds > 0
-        ? estimatedTranscriptDurationSeconds / shotDurationSeconds
-        : 1;
+    const dialogueTimingPlan = resolveDialogueTimingPlan({
+      shotDurationSeconds,
+      providerDurationSeconds,
+      estimatedTranscriptDurationSeconds
+    });
+    const estimatedCompressionRatio = dialogueTimingPlan.requiredCompressionRatio;
 
     if (estimatedCompressionRatio > MAX_SEED_DANCE_REFERENCE_AUDIO_COMPRESSION_RATIO) {
       throw new AppError(
         `当前镜头对白按文字估算需要约 ${estimatedTranscriptDurationSeconds.toFixed(2)} 秒，已超过镜头 ${shotDurationSeconds.toFixed(
           2
-        )} 秒可承载范围，请先拆镜头或缩短台词。`,
+        )} 秒可承载范围；需要压缩到 ${estimatedCompressionRatio.toFixed(2)}x，超过 1.5x 上限，请先拆镜头或缩短台词。`,
         409,
         {
           segment_id: segment?.id,
           shot_id: shot?.id,
           estimated_transcript_duration_seconds: estimatedTranscriptDurationSeconds,
-          shot_duration_seconds: shotDurationSeconds
+          shot_duration_seconds: shotDurationSeconds,
+          required_compression_ratio: Number(estimatedCompressionRatio.toFixed(3))
         }
       );
     }
@@ -293,12 +275,24 @@ const prepareDialogueGenerationPayload = async ({
     speechForGeneration = {
       ...speechForGeneration,
       transcript,
-      fitWithinDuration: estimatedCompressionRatio > 1.02,
+      subtitleLines:
+        estimatedCompressionRatio > 1.001
+          ? scaleSubtitleLinesForCompression(
+              speechForGeneration.subtitleLines,
+              estimatedCompressionRatio,
+              dialogueTimingPlan.dialogueCompletionTimeSeconds
+            )
+          : speechForGeneration.subtitleLines,
+      fitWithinDuration:
+        estimatedCompressionRatio > 1.02 ||
+        dialogueTimingPlan.providerTailPaddingSeconds > 0.05 ||
+        dialogueTimingPlan.trimSafetyTailSeconds > 0.02,
       deliveryRateMultiplier: estimatedCompressionRatio > 1 ? Number(estimatedCompressionRatio.toFixed(2)) : 1,
-      deliveryConstraint:
-        estimatedCompressionRatio > 1.02
-          ? `当前镜头只有 ${shotDurationSeconds.toFixed(2)} 秒，需要略微加快语速并压缩停顿，完整说完全部台词。`
-          : ''
+      dialogueCompletionTimeSeconds: dialogueTimingPlan.dialogueCompletionTimeSeconds,
+      providerTargetDurationSeconds: dialogueTimingPlan.providerDurationSeconds,
+      trimSafetyTailSeconds: dialogueTimingPlan.trimSafetyTailSeconds,
+      providerTailPaddingSeconds: dialogueTimingPlan.providerTailPaddingSeconds,
+      deliveryConstraint: buildDialogueDeliveryConstraint(dialogueTimingPlan)
     };
 
     return {
@@ -311,10 +305,13 @@ const prepareDialogueGenerationPayload = async ({
 
   const audioMetadata = await getVideoMetadata(sourceAudioAbsolutePath);
   const originalAudioDurationSeconds = Number(audioMetadata?.durationSecondsExact ?? audioMetadata?.duration ?? 0);
-  const compressionRatio =
-    originalAudioDurationSeconds > 0 && shotDurationSeconds > 0
-      ? originalAudioDurationSeconds / shotDurationSeconds
-      : 1;
+  const dialogueTimingPlan = resolveDialogueTimingPlan({
+    shotDurationSeconds,
+    providerDurationSeconds,
+    sourceAudioDurationSeconds: originalAudioDurationSeconds,
+    estimatedTranscriptDurationSeconds
+  });
+  const compressionRatio = dialogueTimingPlan.requiredCompressionRatio;
 
   if (compressionRatio > MAX_SEED_DANCE_REFERENCE_AUDIO_COMPRESSION_RATIO) {
     throw new AppError(
@@ -332,10 +329,16 @@ const prepareDialogueGenerationPayload = async ({
     );
   }
 
+  let effectiveAudioDurationSeconds = originalAudioDurationSeconds;
+
   if (compressionRatio > 1.001) {
-    const compressedAudio = await compressAudioClipToDuration(sourceAudioAbsolutePath, shotDurationSeconds, {
+    const compressedAudio = await compressAudioClipToDuration(
+      sourceAudioAbsolutePath,
+      dialogueTimingPlan.dialogueCompletionTimeSeconds,
+      {
       basename: `segment-${segment.id}-${shot.id}-task-${taskId}-speech-audio-fitted`
-    });
+      }
+    );
 
     if (!compressedAudio?.filePath) {
       throw new AppError('参考音频压缩失败，已停止本次镜头生成，请稍后重试。', 500, {
@@ -346,28 +349,76 @@ const prepareDialogueGenerationPayload = async ({
 
     effectiveAudioAbsolutePath = resolveUploadPath(compressedAudio.filePath);
     effectiveAudioPublicUrl = toAbsolutePublicUploadUrl(compressedAudio.filePath) || compressedAudio.fileUrl || '';
+    effectiveAudioDurationSeconds = dialogueTimingPlan.dialogueCompletionTimeSeconds;
     speechForGeneration = {
       ...speechForGeneration,
       transcript,
       subtitleLines: scaleSubtitleLinesForCompression(
         speechForGeneration.subtitleLines,
         compressionRatio,
-        shotDurationSeconds
+        dialogueTimingPlan.dialogueCompletionTimeSeconds
       ),
       fitWithinDuration: true,
       deliveryRateMultiplier: Number(compressionRatio.toFixed(2)),
-      deliveryConstraint: `对白参考音频已压缩到 ${shotDurationSeconds.toFixed(
-        2
-      )} 秒内，请完整说完全部台词，不要截断尾句。`
+      dialogueCompletionTimeSeconds: dialogueTimingPlan.dialogueCompletionTimeSeconds,
+      providerTargetDurationSeconds: dialogueTimingPlan.providerDurationSeconds,
+      trimSafetyTailSeconds: dialogueTimingPlan.trimSafetyTailSeconds,
+      providerTailPaddingSeconds: dialogueTimingPlan.providerTailPaddingSeconds,
+      deliveryConstraint: buildDialogueDeliveryConstraint(dialogueTimingPlan)
     };
     generationWarnings.push(
-      `小镜头参考音频长于镜头时长，已按 ${compressionRatio.toFixed(2)}x 压缩后再发送`
+      `小镜头参考音频长于镜头时长，已先按 ${compressionRatio.toFixed(2)}x 压缩到前 ${dialogueTimingPlan.dialogueCompletionTimeSeconds.toFixed(
+        2
+      )} 秒内`
     );
   } else {
     speechForGeneration = {
       ...speechForGeneration,
-      transcript
+      transcript,
+      fitWithinDuration:
+        dialogueTimingPlan.providerTailPaddingSeconds > 0.05 || dialogueTimingPlan.trimSafetyTailSeconds > 0.02,
+      dialogueCompletionTimeSeconds: dialogueTimingPlan.dialogueCompletionTimeSeconds,
+      providerTargetDurationSeconds: dialogueTimingPlan.providerDurationSeconds,
+      trimSafetyTailSeconds: dialogueTimingPlan.trimSafetyTailSeconds,
+      providerTailPaddingSeconds: dialogueTimingPlan.providerTailPaddingSeconds,
+      deliveryConstraint: buildDialogueDeliveryConstraint(dialogueTimingPlan)
     };
+  }
+
+  if (
+    effectiveAudioAbsolutePath &&
+    dialogueTimingPlan.finalReferenceAudioDurationSeconds > effectiveAudioDurationSeconds + 0.01
+  ) {
+    const paddedAudio = await padAudioClipToDuration(
+      effectiveAudioAbsolutePath,
+      dialogueTimingPlan.finalReferenceAudioDurationSeconds,
+      {
+        basename: `segment-${segment.id}-${shot.id}-task-${taskId}-speech-audio-padded`
+      }
+    );
+
+    if (paddedAudio?.filePath) {
+      effectiveAudioAbsolutePath = resolveUploadPath(paddedAudio.filePath);
+      effectiveAudioPublicUrl = toAbsolutePublicUploadUrl(paddedAudio.filePath) || paddedAudio.fileUrl || '';
+      effectiveAudioDurationSeconds = dialogueTimingPlan.finalReferenceAudioDurationSeconds;
+      generationWarnings.push(
+        `对白参考音频已补到 ${dialogueTimingPlan.finalReferenceAudioDurationSeconds.toFixed(
+          2
+        )} 秒，确保裁回镜头前台词完整、后段只保留静音缓冲`
+      );
+    } else if (effectiveAudioDurationSeconds < MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS) {
+      generationWarnings.push(
+        `小镜头参考音频不足 ${MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS} 秒，补静音失败，已仅使用文本对白约束`
+      );
+      effectiveAudioAbsolutePath = '';
+      effectiveAudioPublicUrl = '';
+    } else {
+      generationWarnings.push(
+        `对白参考音频未能补到 ${dialogueTimingPlan.finalReferenceAudioDurationSeconds.toFixed(
+          2
+        )} 秒，将继续使用当前音频并依赖提示词约束控制对白完成点`
+      );
+    }
   }
 
   return {
@@ -1283,36 +1334,6 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
       effectiveShotSourceAudioPublicUrl = dialoguePayload.effectiveAudioPublicUrl;
       speechForGeneration = dialoguePayload.speechForGeneration;
       generationWarnings.push(...dialoguePayload.generationWarnings);
-    }
-
-    if (
-      shouldGenerateDialogue &&
-      effectiveShotSourceAudioAbsolutePath &&
-      Number(shot?.durationSeconds ?? 0) > 0 &&
-      Number(shot.durationSeconds) < MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS
-    ) {
-      const paddedAudio = await padAudioClipToDuration(
-        effectiveShotSourceAudioAbsolutePath,
-        MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS,
-        {
-          basename: `segment-${segment.id}-${task.shotId}-task-${task.id}-speech-audio-padded`
-        }
-      );
-
-      if (paddedAudio?.filePath) {
-        effectiveShotSourceAudioAbsolutePath = resolveUploadPath(paddedAudio.filePath);
-        effectiveShotSourceAudioPublicUrl =
-          toAbsolutePublicUploadUrl(paddedAudio.filePath) || paddedAudio.fileUrl || '';
-        generationWarnings.push(
-          `小镜头参考音频不足 ${MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS} 秒，已自动补静音后再发送`
-        );
-      } else {
-        generationWarnings.push(
-          `小镜头参考音频不足 ${MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS} 秒，补静音失败，已仅使用文本对白约束`
-        );
-        effectiveShotSourceAudioAbsolutePath = '';
-        effectiveShotSourceAudioPublicUrl = '';
-      }
     }
 
     let backgroundAsset = null;

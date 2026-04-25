@@ -1027,6 +1027,15 @@ const buildSeedDanceReconstructionPrompt = ({
   const speechStyle = String(speech?.speechStyle ?? '').trim();
   const speechSubtitleLines = Array.isArray(speech?.subtitleLines) ? speech.subtitleLines : [];
   const speechDeliveryRateMultiplier = Number(speech?.deliveryRateMultiplier ?? speech?.delivery_rate_multiplier ?? 1);
+  const speechDialogueCompletionTimeSeconds = Number(
+    speech?.dialogueCompletionTimeSeconds ?? speech?.dialogue_completion_time_seconds ?? 0
+  );
+  const speechProviderTargetDurationSeconds = Number(
+    speech?.providerTargetDurationSeconds ?? speech?.provider_target_duration_seconds ?? 0
+  );
+  const speechTrimSafetyTailSeconds = Number(
+    speech?.trimSafetyTailSeconds ?? speech?.trim_safety_tail_seconds ?? 0
+  );
   const shouldFitDialogueWithinShot =
     Boolean(speech?.fitWithinDuration ?? speech?.fit_within_duration) ||
     speechDeliveryRateMultiplier > 1.001 ||
@@ -1073,6 +1082,22 @@ const buildSeedDanceReconstructionPrompt = ({
     isShot && hasDialogue && speechTranscript ? `对白文本真值：${speechTranscript}` : '',
     isShot && hasDialogue && speechTimingSummary ? `字幕节奏参考：${speechTimingSummary}` : '',
     isShot && hasDialogue && speechStyle ? `说话方式：${speechStyle}` : '',
+    isShot && hasDialogue && speechDialogueCompletionTimeSeconds > 0
+      ? `对白必须在前 ${speechDialogueCompletionTimeSeconds.toFixed(2)} 秒内完整结束。`
+      : '',
+    isShot &&
+    hasDialogue &&
+    speechProviderTargetDurationSeconds > Number(durationSeconds ?? 0) + 0.05 &&
+    Number.isFinite(Number(durationSeconds))
+      ? `如果供应商内部按 ${speechProviderTargetDurationSeconds.toFixed(2)} 秒生成后再裁回当前镜头 ${Number(
+          durationSeconds
+        ).toFixed(2)} 秒，也要保证对白集中在前 ${speechDialogueCompletionTimeSeconds.toFixed(
+          2
+        )} 秒说完，后段只保留闭口和自然呼吸。`
+      : '',
+    isShot && hasDialogue && speechTrimSafetyTailSeconds > 0.02
+      ? `镜头末尾预留约 ${speechTrimSafetyTailSeconds.toFixed(2)} 秒收口缓冲，不要把最后一个字贴边说完。`
+      : '',
     isShot && hasDialogue && shouldFitDialogueWithinShot && Number.isFinite(Number(durationSeconds))
       ? `必须把完整对白压缩在当前镜头 ${Number(durationSeconds).toFixed(2)} 秒内说完，允许适度加快语速和压缩停顿，但不要截断台词结尾。`
       : '',
