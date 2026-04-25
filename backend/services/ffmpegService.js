@@ -25,6 +25,20 @@ const SLICE_VIDEO_TRANSCODE_CANDIDATES = [
     args: ['-c:v', 'mpeg4', '-q:v', '5', '-c:a', 'aac']
   }
 ];
+const ANALYSIS_PROXY_TRANSCODE_CANDIDATES = [
+  {
+    engine: 'ffmpeg-analysis-proxy-libx264',
+    args: ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '32', '-pix_fmt', 'yuv420p']
+  },
+  {
+    engine: 'ffmpeg-analysis-proxy-openh264',
+    args: ['-c:v', 'libopenh264', '-b:v', '700k', '-pix_fmt', 'yuv420p']
+  },
+  {
+    engine: 'ffmpeg-analysis-proxy-mpeg4',
+    args: ['-c:v', 'mpeg4', '-q:v', '12']
+  }
+];
 
 const isBinaryAvailable = async (binaryName) => {
   if (binaryAvailability.has(binaryName)) {
@@ -500,6 +514,81 @@ const extractVideoFrame = async (
   }
 };
 
+const transcodeVideoForAnalysis = async (
+  absoluteSourcePath,
+  {
+    basename = 'analysis-proxy',
+    directory = 'analysis-proxies',
+    extension = '.mp4',
+    maxLongSide = 720,
+    maxFps = 6,
+    includeAudio = true,
+    audioBitrateKbps = 48
+  } = {}
+) => {
+  const ffmpegAvailable = await isBinaryAvailable('ffmpeg');
+
+  if (!ffmpegAvailable) {
+    return null;
+  }
+
+  const safeMaxLongSide = Math.max(240, Number(maxLongSide) || 720);
+  const safeMaxFps = Math.max(1, Number(maxFps) || 6);
+  const safeAudioBitrateKbps = Math.max(24, Number(audioBitrateKbps) || 48);
+  const relativePath = createOutputRelativePath(directory, basename, extension);
+  const absoluteTargetPath = resolveUploadPath(relativePath);
+  const videoFilter = [
+    `scale=${safeMaxLongSide}:${safeMaxLongSide}:force_original_aspect_ratio=decrease`,
+    `fps=${safeMaxFps}`,
+    'pad=ceil(iw/2)*2:ceil(ih/2)*2'
+  ].join(',');
+  await ensureParentDirectory(absoluteTargetPath);
+
+  let lastError = null;
+
+  for (const candidate of ANALYSIS_PROXY_TRANSCODE_CANDIDATES) {
+    try {
+      const commandArgs = [
+        '-y',
+        '-i',
+        absoluteSourcePath,
+        '-map',
+        '0:v:0',
+        '-vf',
+        videoFilter,
+        ...candidate.args
+      ];
+
+      if (includeAudio) {
+        commandArgs.push('-map', '0:a:0?', '-c:a', 'aac', '-b:a', `${safeAudioBitrateKbps}k`, '-ac', '1', '-ar', '32000');
+      } else {
+        commandArgs.push('-an');
+      }
+
+      commandArgs.push('-movflags', '+faststart', absoluteTargetPath);
+
+      await execFileAsync('ffmpeg', commandArgs);
+
+      return {
+        absolutePath: absoluteTargetPath,
+        filePath: relativePath,
+        fileUrl: toPublicUploadUrl(relativePath),
+        engine: candidate.engine,
+        includeAudio: Boolean(includeAudio)
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  logger.warn('FFmpeg analysis proxy transcode failed, falling back to original source video.', {
+    message: lastError?.message || 'unknown',
+    absoluteSourcePath
+  });
+  await rm(absoluteTargetPath, { force: true });
+  return null;
+};
+
 const mergeVideos = async (absoluteInputPaths, { basename = 'merged-video', onProgress } = {}) => {
   if (!absoluteInputPaths.length) {
     throw new Error('No input files available for merging.');
@@ -583,5 +672,6 @@ export {
   compressAudioClipToDuration,
   padAudioClipToDuration,
   mergeVideos,
-  extractVideoFrame
+  extractVideoFrame,
+  transcodeVideoForAnalysis
 };

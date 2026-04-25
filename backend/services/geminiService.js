@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import env from '../config/env.js';
@@ -11,7 +11,7 @@ import {
 } from '../../shared/promptBlueprints.js';
 import { requestExternalJson } from './externalHttpService.js';
 import { removeFileIfExists, resolveUploadPath } from './fileService.js';
-import { extractVideoFrame } from './ffmpegService.js';
+import { extractVideoFrame, transcodeVideoForAnalysis } from './ffmpegService.js';
 import {
   hydrateCharacterStateRefsForAnchors,
   normalizeCharacterStateRefs,
@@ -50,6 +50,10 @@ const WHOLE_VIDEO_PRIMARY_UPLOAD_TIMEOUT_MS = Math.max(
 );
 const WHOLE_VIDEO_FRAME_FALLBACK_TIMEOUT_MS = 60 * 1000;
 const WHOLE_VIDEO_ANALYSIS_MAX_ATTEMPTS = 3;
+const WHOLE_VIDEO_ANALYSIS_PROXY_MIN_SOURCE_BYTES = 3 * 1024 * 1024;
+const WHOLE_VIDEO_ANALYSIS_PROXY_MIN_DURATION_SECONDS = 10;
+const WHOLE_VIDEO_ANALYSIS_PROXY_MAX_LONG_SIDE = 720;
+const WHOLE_VIDEO_ANALYSIS_PROXY_MAX_FPS = 6;
 
 const extractJsonObject = (value = '') => {
   const cleanedValue = stripMarkdownCodeFence(value);
@@ -130,6 +134,13 @@ const normalizeOptionalNumber = (value) => {
 const normalizeOptionalString = (value, fallback = '') => {
   const normalizedValue = String(value ?? '').trim();
   return normalizedValue || fallback;
+};
+
+const sanitizeBasenamePart = (value = '') => {
+  return String(value ?? '')
+    .trim()
+    .replace(/[^\p{L}\p{N}_-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '');
 };
 
 const normalizeBackgroundAction = (value) => {
@@ -1621,10 +1632,38 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath, analysisOption
     throw error;
   }
 
+  const normalizedAnalysisOptions = analysisOptions ?? null;
+  let analysisInputAbsolutePath = videoAbsolutePath;
+  let analysisInputCleanupPath = '';
+
   try {
+    const sourceStats = videoAbsolutePath ? await stat(videoAbsolutePath).catch(() => null) : null;
+    const safeDurationSeconds = Number(metadata?.duration ?? 0) || 0;
+    const shouldUseAnalysisProxy =
+      Boolean(videoAbsolutePath) &&
+      (safeDurationSeconds >= WHOLE_VIDEO_ANALYSIS_PROXY_MIN_DURATION_SECONDS ||
+        Number(sourceStats?.size ?? 0) >= WHOLE_VIDEO_ANALYSIS_PROXY_MIN_SOURCE_BYTES);
+
+    if (shouldUseAnalysisProxy) {
+      const proxyAsset = await transcodeVideoForAnalysis(videoAbsolutePath, {
+        basename:
+          `${sanitizeBasenamePart(video?.id || video?.filename || 'video') || 'video'}-whole-analysis`,
+        includeAudio: Boolean(
+          normalizedAnalysisOptions?.extractSubtitles || normalizedAnalysisOptions?.parseAudio
+        ),
+        maxLongSide: WHOLE_VIDEO_ANALYSIS_PROXY_MAX_LONG_SIDE,
+        maxFps: WHOLE_VIDEO_ANALYSIS_PROXY_MAX_FPS
+      });
+
+      if (proxyAsset?.absolutePath) {
+        analysisInputAbsolutePath = proxyAsset.absolutePath;
+        analysisInputCleanupPath = proxyAsset.absolutePath;
+      }
+    }
+
     const { authVariant, model: resolvedModel, responsePayload, responseText } = await callRemoteGemini({
-      prompt: buildVideoAnalysisPrompt({ video, metadata, analysisOptions }),
-      videoAbsolutePath,
+      prompt: buildVideoAnalysisPrompt({ video, metadata, analysisOptions: normalizedAnalysisOptions }),
+      videoAbsolutePath: analysisInputAbsolutePath,
       requestTimeoutOverrideMs: WHOLE_VIDEO_PRIMARY_UPLOAD_TIMEOUT_MS,
       model: WHOLE_VIDEO_ANALYSIS_MODEL,
       allowModelFallback: false,
@@ -1635,7 +1674,7 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath, analysisOption
     return normalizeVideoAnalysisPayload({
       parsedPayload,
       metadata,
-      analysisOptions,
+      analysisOptions: normalizedAnalysisOptions,
       geminiResponse: buildGeminiResponseEnvelope({
         provider: 'remote-gemini',
         model: resolvedModel || WHOLE_VIDEO_ANALYSIS_MODEL,
@@ -1644,7 +1683,10 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath, analysisOption
         isMock: false,
         fallbackReason: '',
         remoteError: '',
-        rawResponse: responsePayload
+        rawResponse: {
+          usedAnalysisProxy: Boolean(analysisInputCleanupPath),
+          response: responsePayload
+        }
       })
     });
   } catch (error) {
@@ -1670,6 +1712,10 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath, analysisOption
         ? Number(error.statusCode)
         : 424;
     throw exposedError;
+  } finally {
+    if (analysisInputCleanupPath) {
+      await removeFileIfExists(analysisInputCleanupPath);
+    }
   }
 };
 

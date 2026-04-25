@@ -262,6 +262,7 @@ React / Vite
 - 让优化 prompt 带入当前风格模式
 - 让资源图 prompt 带入当前风格模板
 - 当 `analysis_options.extractSubtitles / parseAudio` 开启时，在整片理解里一次性返回 shot 级 `speech`
+- 对较大视频先本地转整片分析代理视频，再把代理视频发给 Gemini，减少整段上传体积
 
 #### `shotSpeechService`
 
