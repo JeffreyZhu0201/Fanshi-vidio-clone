@@ -21,6 +21,7 @@ import { generationSessionStorage, useGenerationStore } from '../store/generatio
 import { useVideoStore } from '../store/videoStore.js';
 import { downloadBlobInBrowser } from '../utils/browserDownload.js';
 import { sleep } from '../utils/sleep.js';
+import { DEFAULT_STYLE_MODE, normalizeStyleMode, resolveStyleTemplate } from '../../../shared/styleTemplates.js';
 
 const getGenerationErrorMessage = (error, phase = '片段生成') => {
   if (error?.statusCode === 404) {
@@ -248,6 +249,7 @@ const buildClientShotSummary = (segment, shots, currentSummary = null) => {
 const useGeneration = () => {
   const currentVideo = useVideoStore((state) => state.currentVideo);
   const analysis = useAnalysisStore((state) => state.analysis);
+  const analysisOptions = useAnalysisStore((state) => state.analysisOptions);
   const segments = useGenerationStore((state) => state.segments);
   const backgroundAssets = useGenerationStore((state) => state.backgroundAssets);
   const backgroundAssetsLoading = useGenerationStore((state) => state.backgroundAssetsLoading);
@@ -290,6 +292,19 @@ const useGeneration = () => {
       .toLowerCase();
 
     return /^[1-9]\d{0,2}:[1-9]\d{0,2}$/u.test(normalizedRatio) ? normalizedRatio : '16:9';
+  };
+
+  const getResolvedStyleMode = () => {
+    return normalizeStyleMode(useAnalysisStore.getState().analysisOptions?.styleMode ?? analysisOptions?.styleMode ?? DEFAULT_STYLE_MODE);
+  };
+
+  const getResolvedSegmentAnalysisStylePrompt = () => {
+    const currentAnalysisOptions = useAnalysisStore.getState().analysisOptions ?? analysisOptions ?? {};
+    return resolveStyleTemplate({
+      styleMode: getResolvedStyleMode(),
+      styleTemplates: currentAnalysisOptions.styleTemplates,
+      templateKey: 'segmentAnalysisStylePrompt'
+    });
   };
 
   const isVideoScopedRequestCancelled = (requestToken, videoId, tokenRef) => {
@@ -922,7 +937,10 @@ const useGeneration = () => {
     setAnalyzingSegmentId(segmentId);
 
     try {
-      const analyzedSegment = await analyzeSegment(segmentId);
+      const analyzedSegment = await analyzeSegment(segmentId, {
+        style_mode: getResolvedStyleMode(),
+        segment_analysis_style_prompt: getResolvedSegmentAnalysisStylePrompt()
+      });
 
       if (isVideoScopedRequestCancelled(requestToken, requestVideoId, segmentAnalysisRequestTokenRef)) {
         return null;
@@ -972,7 +990,9 @@ const useGeneration = () => {
     }
 
     try {
-      const optimizedPayload = await optimizePrompt(sourcePrompt, characters, backgrounds);
+      const optimizedPayload = await optimizePrompt(sourcePrompt, characters, backgrounds, {
+        style_mode: getResolvedStyleMode()
+      });
 
       if (isVideoScopedRequestCancelled(requestToken, requestVideoId, optimizeRequestTokenRef)) {
         return null;
@@ -1030,6 +1050,7 @@ const useGeneration = () => {
     try {
       const optimizedPayload = await optimizePrompt(sourceShotPrompt, characters, backgrounds, {
         mode: 'shot_generation',
+        style_mode: getResolvedStyleMode(),
         segment_prompt: sourceSegmentPrompt,
         shot_prompt: sourceShotPrompt,
         scene_names: sceneNames,
@@ -1115,7 +1136,12 @@ const useGeneration = () => {
     }
 
     try {
-      const startPayload = await generateSegment(segmentId, sourcePrompt, getResolvedVideoRatio());
+      const startPayload = await generateSegment(
+        segmentId,
+        sourcePrompt,
+        getResolvedVideoRatio(),
+        getResolvedStyleMode()
+      );
       activeTaskId = startPayload.task_id ?? '';
 
       if (isGenerationPollingCancelled(segmentId, requestToken, requestVideoId)) {
@@ -1221,7 +1247,13 @@ const useGeneration = () => {
     }
 
     try {
-      const startPayload = await generateShot(segmentId, shotId, sourcePrompt, getResolvedVideoRatio());
+      const startPayload = await generateShot(
+        segmentId,
+        shotId,
+        sourcePrompt,
+        getResolvedVideoRatio(),
+        getResolvedStyleMode()
+      );
       activeTaskId = startPayload.task_id ?? '';
 
       if (isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
@@ -1314,7 +1346,8 @@ const useGeneration = () => {
           shot_id: shot.id,
           prompt: String(shot.prompt ?? '').trim() || String(shot.summary ?? '').trim()
         })),
-        getResolvedVideoRatio()
+        getResolvedVideoRatio(),
+        getResolvedStyleMode()
       );
       const nextSummary = {
         segment_id: segmentId,

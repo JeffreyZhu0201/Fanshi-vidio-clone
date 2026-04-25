@@ -1,5 +1,7 @@
 import Joi from 'joi';
 
+import { DEFAULT_STYLE_MODE } from '../../shared/styleTemplates.js';
+
 const videoRatioSchema = Joi.string()
   .trim()
   .pattern(/^[1-9]\d{0,2}:[1-9]\d{0,2}$/)
@@ -32,12 +34,26 @@ const uploadVideoBodySchema = Joi.object({
   project_name: Joi.string().trim().max(255).allow('')
 });
 
+const editableStyleTemplateSetSchema = Joi.object({
+  videoAnalysisStylePrompt: Joi.string().allow('').default(''),
+  segmentAnalysisStylePrompt: Joi.string().allow('').default('')
+}).default({
+  videoAnalysisStylePrompt: '',
+  segmentAnalysisStylePrompt: ''
+});
+
 const analysisOptionsSchema = Joi.object({
   extractSubtitles: Joi.boolean().default(true),
-  parseAudio: Joi.boolean().default(true)
+  parseAudio: Joi.boolean().default(true),
+  styleMode: Joi.string().trim().valid('realistic', 'comic_drama').default(DEFAULT_STYLE_MODE),
+  styleTemplates: Joi.object({
+    realistic: editableStyleTemplateSetSchema,
+    comic_drama: editableStyleTemplateSetSchema
+  }).default()
 }).default({
   extractSubtitles: true,
-  parseAudio: true
+  parseAudio: true,
+  styleMode: DEFAULT_STYLE_MODE
 });
 
 const analyzeVideoBodySchema = Joi.object({
@@ -92,7 +108,8 @@ const optimizePromptBodySchema = Joi.object({
         })
       )
     )
-    .default([])
+    .default([]),
+  style_mode: Joi.string().trim().valid('realistic', 'comic_drama').optional()
 });
 
 const timeAnchorSchema = Joi.object({
@@ -135,19 +152,22 @@ const splitVideoBodySchema = Joi.object({
 const generateSegmentBodySchema = Joi.object({
   segment_id: Joi.number().integer().positive().required(),
   prompt: Joi.string().trim().min(1).required(),
-  ratio: videoRatioSchema.optional()
+  ratio: videoRatioSchema.optional(),
+  style_mode: Joi.string().trim().valid('realistic', 'comic_drama').optional()
 });
 
 const generateShotBodySchema = Joi.object({
   segment_id: Joi.number().integer().positive().required(),
   shot_id: Joi.string().trim().min(1).required(),
   prompt: Joi.string().trim().min(1).required(),
-  ratio: videoRatioSchema.optional()
+  ratio: videoRatioSchema.optional(),
+  style_mode: Joi.string().trim().valid('realistic', 'comic_drama').optional()
 });
 
 const generateShotBatchBodySchema = Joi.object({
   segment_id: Joi.number().integer().positive().required(),
   ratio: videoRatioSchema.optional(),
+  style_mode: Joi.string().trim().valid('realistic', 'comic_drama').optional(),
   shots: Joi.array()
     .items(
       Joi.object({
@@ -157,6 +177,11 @@ const generateShotBatchBodySchema = Joi.object({
     )
     .default([])
 });
+
+const analyzeSegmentBodySchema = Joi.object({
+  style_mode: Joi.string().trim().valid('realistic', 'comic_drama').optional(),
+  segment_analysis_style_prompt: Joi.string().allow('').optional()
+}).default({});
 
 const subtitleLineSchema = Joi.object({
   id: Joi.string().trim().allow(''),
@@ -274,6 +299,7 @@ export {
   shotGenerationTaskIdParamSchema,
   uploadVideoBodySchema,
   analyzeVideoBodySchema,
+  analyzeSegmentBodySchema,
   optimizePromptBodySchema,
   splitVideoBodySchema,
   generateSegmentBodySchema,

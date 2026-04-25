@@ -335,6 +335,115 @@ const padAudioClipToDuration = async (
   };
 };
 
+const buildAtempoFilterChain = (tempoMultiplier) => {
+  const filters = [];
+  let remainingMultiplier = Number(tempoMultiplier);
+
+  if (!Number.isFinite(remainingMultiplier) || remainingMultiplier <= 0) {
+    return '';
+  }
+
+  while (remainingMultiplier > 2) {
+    filters.push('atempo=2');
+    remainingMultiplier /= 2;
+  }
+
+  while (remainingMultiplier < 0.5) {
+    filters.push('atempo=0.5');
+    remainingMultiplier /= 0.5;
+  }
+
+  filters.push(`atempo=${Number(remainingMultiplier.toFixed(6))}`);
+  return filters.join(',');
+};
+
+const compressAudioClipToDuration = async (
+  absoluteSourcePath,
+  targetDurationSeconds,
+  {
+    basename = 'shot-audio-fitted',
+    directory = 'audio',
+    extension = '.mp3',
+    originalDurationSeconds = null
+  } = {}
+) => {
+  const ffmpegAvailable = await isBinaryAvailable('ffmpeg');
+
+  if (!ffmpegAvailable) {
+    return null;
+  }
+
+  const safeTargetDurationSeconds = Number(targetDurationSeconds);
+  const safeOriginalDurationSeconds =
+    Number.isFinite(Number(originalDurationSeconds)) && Number(originalDurationSeconds) > 0
+      ? Number(originalDurationSeconds)
+      : Number((await getVideoMetadata(absoluteSourcePath))?.durationSecondsExact ?? 0);
+
+  if (
+    !Number.isFinite(safeTargetDurationSeconds) ||
+    safeTargetDurationSeconds <= 0 ||
+    !Number.isFinite(safeOriginalDurationSeconds) ||
+    safeOriginalDurationSeconds <= 0
+  ) {
+    return null;
+  }
+
+  const compressionRatio = safeOriginalDurationSeconds / safeTargetDurationSeconds;
+
+  if (compressionRatio <= 1.001) {
+    return {
+      duration: Number(Math.min(safeOriginalDurationSeconds, safeTargetDurationSeconds).toFixed(3)),
+      originalDuration: Number(safeOriginalDurationSeconds.toFixed(3)),
+      compressionRatio: Number(compressionRatio.toFixed(3)),
+      filePath: '',
+      fileUrl: '',
+      engine: 'audio-fit-skip'
+    };
+  }
+
+  const atempoFilter = buildAtempoFilterChain(compressionRatio);
+
+  if (!atempoFilter) {
+    return null;
+  }
+
+  const relativePath = createOutputRelativePath(directory, basename, extension);
+  const absoluteTargetPath = resolveUploadPath(relativePath);
+  await ensureParentDirectory(absoluteTargetPath);
+
+  try {
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-i',
+      absoluteSourcePath,
+      '-filter:a',
+      atempoFilter,
+      '-t',
+      String(Number(safeTargetDurationSeconds.toFixed(3))),
+      '-acodec',
+      extension === '.wav' ? 'pcm_s16le' : 'libmp3lame',
+      absoluteTargetPath
+    ]);
+  } catch (error) {
+    logger.warn('FFmpeg audio compression failed.', {
+      message: error.message,
+      absoluteSourcePath,
+      targetDurationSeconds: safeTargetDurationSeconds,
+      originalDurationSeconds: safeOriginalDurationSeconds
+    });
+    return null;
+  }
+
+  return {
+    duration: Number(safeTargetDurationSeconds.toFixed(3)),
+    originalDuration: Number(safeOriginalDurationSeconds.toFixed(3)),
+    compressionRatio: Number(compressionRatio.toFixed(3)),
+    filePath: relativePath,
+    fileUrl: toPublicUploadUrl(relativePath),
+    engine: 'ffmpeg-audio-compress'
+  };
+};
+
 const extractVideoFrame = async (
   absoluteSourcePath,
   timeSeconds,
@@ -466,6 +575,7 @@ export {
   splitVideo,
   sliceVideoClip,
   extractAudioClip,
+  compressAudioClipToDuration,
   padAudioClipToDuration,
   mergeVideos,
   extractVideoFrame

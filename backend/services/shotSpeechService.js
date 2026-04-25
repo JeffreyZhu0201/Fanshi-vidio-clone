@@ -1,5 +1,10 @@
 import { writeFile } from 'node:fs/promises';
 
+import {
+  DEFAULT_STYLE_MODE,
+  getEditableStyleTemplateDefaults,
+  normalizeStyleMode
+} from '../../shared/styleTemplates.js';
 import { analyzeShotSpeech as analyzeShotSpeechWithGemini } from './geminiService.js';
 import { extractAudioClip } from './ffmpegService.js';
 import {
@@ -13,10 +18,23 @@ import logger from '../utils/logger.js';
 
 const DEFAULT_ANALYSIS_OPTIONS = Object.freeze({
   extractSubtitles: true,
-  parseAudio: true
+  parseAudio: true,
+  styleMode: DEFAULT_STYLE_MODE,
+  styleTemplates: Object.freeze(getEditableStyleTemplateDefaults())
 });
 
 const normalizeAnalysisOptions = (value = null) => {
+  const nextStyleTemplates = getEditableStyleTemplateDefaults();
+  const inputStyleTemplates = value?.styleTemplates ?? value?.style_templates ?? null;
+
+  Object.keys(nextStyleTemplates).forEach((styleMode) => {
+    Object.keys(nextStyleTemplates[styleMode]).forEach((templateKey) => {
+      if (inputStyleTemplates?.[styleMode] && Object.prototype.hasOwnProperty.call(inputStyleTemplates[styleMode], templateKey)) {
+        nextStyleTemplates[styleMode][templateKey] = String(inputStyleTemplates[styleMode][templateKey] ?? '');
+      }
+    });
+  });
+
   return {
     extractSubtitles:
       typeof value?.extractSubtitles === 'boolean' || typeof value?.extract_subtitles === 'boolean'
@@ -25,7 +43,9 @@ const normalizeAnalysisOptions = (value = null) => {
     parseAudio:
       typeof value?.parseAudio === 'boolean' || typeof value?.parse_audio === 'boolean'
         ? Boolean(value?.parseAudio ?? value?.parse_audio)
-        : DEFAULT_ANALYSIS_OPTIONS.parseAudio
+        : DEFAULT_ANALYSIS_OPTIONS.parseAudio,
+    styleMode: normalizeStyleMode(value?.styleMode ?? value?.style_mode ?? DEFAULT_ANALYSIS_OPTIONS.styleMode),
+    styleTemplates: nextStyleTemplates
   };
 };
 

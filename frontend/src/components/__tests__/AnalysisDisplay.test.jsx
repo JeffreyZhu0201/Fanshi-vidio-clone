@@ -161,7 +161,8 @@ describe('AnalysisDisplay', () => {
       ],
       [],
       {
-        mode: 'character_resource'
+        mode: 'character_resource',
+        style_mode: 'realistic'
       }
     );
   });

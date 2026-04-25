@@ -2,6 +2,11 @@ import { Analysis, GenerationTask, Segment, ShotGenerationTask, Video } from '..
 import env from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { TASK_STATUS } from '../config/constants.js';
+import {
+  DEFAULT_STYLE_MODE,
+  normalizeStyleMode,
+  resolveStyleTemplate
+} from '../../shared/styleTemplates.js';
 import { ensureBackgroundAsset } from './backgroundAssetService.js';
 import {
   buildSeedDanceReconstructionPrompt,
@@ -16,7 +21,13 @@ import {
   getPromptSceneNames
 } from './generationService.js';
 import { publicUrlToRelativePath, resolveUploadPath, toAbsolutePublicUploadUrl } from './fileService.js';
-import { extractVideoFrame, mergeVideos, padAudioClipToDuration } from './ffmpegService.js';
+import {
+  compressAudioClipToDuration,
+  extractVideoFrame,
+  getVideoMetadata,
+  mergeVideos,
+  padAudioClipToDuration
+} from './ffmpegService.js';
 import { broadcastRealtimeEvent } from './realtimeService.js';
 import {
   assertSeedDanceReady,
@@ -39,6 +50,7 @@ const SHOT_TASK_EVENT = 'shot:progress';
 const SHOT_ASSEMBLY_EVENT = 'shot-assembly:progress';
 const inflightShotGenerationTaskProcesses = new Map();
 const MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS = 1.8;
+const MAX_SEED_DANCE_REFERENCE_AUDIO_COMPRESSION_RATIO = 1.5;
 
 const normalizeOptionalNumber = (value) => {
   const parsedValue = Number(value);
@@ -178,7 +190,200 @@ const buildShotCharacterStateSignature = (shot) => {
   );
 };
 
-const doesShotTaskMatchGenerationRequest = ({ task, shot, prompt, ratio }) => {
+const scaleSubtitleLinesForCompression = (subtitleLines = [], compressionRatio = 1, targetDurationSeconds = 0) => {
+  if (!Array.isArray(subtitleLines) || !subtitleLines.length) {
+    return [];
+  }
+
+  const safeCompressionRatio = Number(compressionRatio);
+  const safeTargetDurationSeconds = Math.max(0.3, Number(targetDurationSeconds) || 0.3);
+
+  if (!Number.isFinite(safeCompressionRatio) || safeCompressionRatio <= 0) {
+    return subtitleLines;
+  }
+
+  return subtitleLines.map((line, lineIndex) => {
+    const scaledStartTime = Math.max(0, Number(line.startTime ?? 0) / safeCompressionRatio);
+    const scaledEndTime = Math.max(
+      scaledStartTime + 0.05,
+      Number(line.endTime ?? line.startTime ?? 0) / safeCompressionRatio
+    );
+
+    return {
+      id: String(line.id ?? `subtitle_${lineIndex + 1}`),
+      startTime: Number(Math.min(safeTargetDurationSeconds, scaledStartTime).toFixed(2)),
+      endTime: Number(Math.min(safeTargetDurationSeconds, scaledEndTime).toFixed(2)),
+      text: String(line.text ?? '').trim()
+    };
+  });
+};
+
+const estimateTranscriptDurationSeconds = (speech = null) => {
+  const normalizedSpeech = normalizeShotSpeech(speech ?? null, {
+    durationSeconds: 9999,
+    fallbackStatus: 'idle'
+  });
+  const lastSubtitleEndTime = normalizedSpeech.subtitleLines.length
+    ? Number(normalizedSpeech.subtitleLines[normalizedSpeech.subtitleLines.length - 1].endTime ?? 0)
+    : 0;
+  const transcriptLength = Array.from(String(normalizedSpeech.transcript ?? '').replace(/\s+/gu, '')).length;
+  const heuristicTranscriptDuration = transcriptLength ? transcriptLength / 4.5 : 0;
+
+  return Number(Math.max(lastSubtitleEndTime, heuristicTranscriptDuration, 0).toFixed(2));
+};
+
+const resolveShotGenerationStyleMode = (styleMode = '', analysisOptions = null) => {
+  return normalizeStyleMode(styleMode || analysisOptions?.styleMode || analysisOptions?.style_mode || DEFAULT_STYLE_MODE);
+};
+
+const prepareDialogueGenerationPayload = async ({
+  segment,
+  shot,
+  shotSpeech,
+  shotDurationSeconds,
+  sourceAudioAbsolutePath = '',
+  sourceAudioPublicUrl = '',
+  taskId,
+  styleMode = ''
+}) => {
+  let effectiveAudioAbsolutePath = sourceAudioAbsolutePath;
+  let effectiveAudioPublicUrl = sourceAudioPublicUrl;
+  const generationWarnings = [];
+  let speechForGeneration = {
+    ...shotSpeech,
+    subtitleLines: Array.isArray(shotSpeech.subtitleLines) ? shotSpeech.subtitleLines : []
+  };
+
+  if (!speechForGeneration.hasDialogue) {
+    return {
+      effectiveAudioAbsolutePath,
+      effectiveAudioPublicUrl,
+      speechForGeneration,
+      generationWarnings
+    };
+  }
+
+  const transcript = speechForGeneration.transcript || buildTranscriptFromSubtitleLines(speechForGeneration.subtitleLines);
+  const estimatedTranscriptDurationSeconds = estimateTranscriptDurationSeconds({
+    ...speechForGeneration,
+    transcript
+  });
+
+  if (!sourceAudioAbsolutePath) {
+    const estimatedCompressionRatio =
+      estimatedTranscriptDurationSeconds > 0 && shotDurationSeconds > 0
+        ? estimatedTranscriptDurationSeconds / shotDurationSeconds
+        : 1;
+
+    if (estimatedCompressionRatio > MAX_SEED_DANCE_REFERENCE_AUDIO_COMPRESSION_RATIO) {
+      throw new AppError(
+        `当前镜头对白按文字估算需要约 ${estimatedTranscriptDurationSeconds.toFixed(2)} 秒，已超过镜头 ${shotDurationSeconds.toFixed(
+          2
+        )} 秒可承载范围，请先拆镜头或缩短台词。`,
+        409,
+        {
+          segment_id: segment?.id,
+          shot_id: shot?.id,
+          estimated_transcript_duration_seconds: estimatedTranscriptDurationSeconds,
+          shot_duration_seconds: shotDurationSeconds
+        }
+      );
+    }
+
+    speechForGeneration = {
+      ...speechForGeneration,
+      transcript,
+      fitWithinDuration: estimatedCompressionRatio > 1.02,
+      deliveryRateMultiplier: estimatedCompressionRatio > 1 ? Number(estimatedCompressionRatio.toFixed(2)) : 1,
+      deliveryConstraint:
+        estimatedCompressionRatio > 1.02
+          ? `当前镜头只有 ${shotDurationSeconds.toFixed(2)} 秒，需要略微加快语速并压缩停顿，完整说完全部台词。`
+          : ''
+    };
+
+    return {
+      effectiveAudioAbsolutePath,
+      effectiveAudioPublicUrl,
+      speechForGeneration,
+      generationWarnings
+    };
+  }
+
+  const audioMetadata = await getVideoMetadata(sourceAudioAbsolutePath);
+  const originalAudioDurationSeconds = Number(audioMetadata?.durationSecondsExact ?? audioMetadata?.duration ?? 0);
+  const compressionRatio =
+    originalAudioDurationSeconds > 0 && shotDurationSeconds > 0
+      ? originalAudioDurationSeconds / shotDurationSeconds
+      : 1;
+
+  if (compressionRatio > MAX_SEED_DANCE_REFERENCE_AUDIO_COMPRESSION_RATIO) {
+    throw new AppError(
+      `当前镜头参考音频约 ${originalAudioDurationSeconds.toFixed(2)} 秒，已超过镜头 ${shotDurationSeconds.toFixed(
+        2
+      )} 秒可承载范围；需要压缩到 ${compressionRatio.toFixed(2)}x，超过 1.5x 上限，请先拆镜头或缩短台词。`,
+      409,
+      {
+        segment_id: segment?.id,
+        shot_id: shot?.id,
+        reference_audio_duration_seconds: originalAudioDurationSeconds,
+        shot_duration_seconds: shotDurationSeconds,
+        required_compression_ratio: Number(compressionRatio.toFixed(3))
+      }
+    );
+  }
+
+  if (compressionRatio > 1.001) {
+    const compressedAudio = await compressAudioClipToDuration(sourceAudioAbsolutePath, shotDurationSeconds, {
+      basename: `segment-${segment.id}-${shot.id}-task-${taskId}-speech-audio-fitted`
+    });
+
+    if (!compressedAudio?.filePath) {
+      throw new AppError('参考音频压缩失败，已停止本次镜头生成，请稍后重试。', 500, {
+        segment_id: segment?.id,
+        shot_id: shot?.id
+      });
+    }
+
+    effectiveAudioAbsolutePath = resolveUploadPath(compressedAudio.filePath);
+    effectiveAudioPublicUrl = toAbsolutePublicUploadUrl(compressedAudio.filePath) || compressedAudio.fileUrl || '';
+    speechForGeneration = {
+      ...speechForGeneration,
+      transcript,
+      subtitleLines: scaleSubtitleLinesForCompression(
+        speechForGeneration.subtitleLines,
+        compressionRatio,
+        shotDurationSeconds
+      ),
+      fitWithinDuration: true,
+      deliveryRateMultiplier: Number(compressionRatio.toFixed(2)),
+      deliveryConstraint: `对白参考音频已压缩到 ${shotDurationSeconds.toFixed(
+        2
+      )} 秒内，请完整说完全部台词，不要截断尾句。`
+    };
+    generationWarnings.push(
+      `小镜头参考音频长于镜头时长，已按 ${compressionRatio.toFixed(2)}x 压缩后再发送`
+    );
+  } else {
+    speechForGeneration = {
+      ...speechForGeneration,
+      transcript
+    };
+  }
+
+  return {
+    effectiveAudioAbsolutePath,
+    effectiveAudioPublicUrl,
+    speechForGeneration: speechForGeneration
+      ? {
+          ...speechForGeneration,
+          styleMode: resolveShotGenerationStyleMode(styleMode)
+        }
+      : speechForGeneration,
+    generationWarnings
+  };
+};
+
+const doesShotTaskMatchGenerationRequest = ({ task, shot, prompt, ratio, styleMode = '' }) => {
   if (!task || !shot) {
     return false;
   }
@@ -187,6 +392,8 @@ const doesShotTaskMatchGenerationRequest = ({ task, shot, prompt, ratio }) => {
     String(task.shotId ?? '').trim() === String(shot.id ?? '').trim() &&
     normalizeComparablePrompt(task.prompt) === normalizeComparablePrompt(prompt) &&
     normalizeGenerationRatio(task.meta?.ratio) === normalizeGenerationRatio(ratio) &&
+    normalizeStyleMode(task.meta?.styleMode ?? task.meta?.style_mode ?? DEFAULT_STYLE_MODE) ===
+      resolveShotGenerationStyleMode(styleMode || task.meta?.styleMode || task.meta?.style_mode || DEFAULT_STYLE_MODE) &&
     String(task.meta?.speechSignature ?? '').trim() === buildShotSpeechSignature(shot) &&
     String(task.meta?.characterStateSignature ?? '').trim() === buildShotCharacterStateSignature(shot) &&
     areNumericTaskFieldsEqual(task.startTime, shot.startTime) &&
@@ -217,7 +424,8 @@ const getExistingReusableShotTask = ({
   latestCompletedTaskByShotId = new Map(),
   shot,
   prompt,
-  ratio
+  ratio,
+  styleMode = ''
 }) => {
   const latestAttemptTask = latestAttemptTaskByShotId.get(String(shot?.id ?? '').trim()) ?? null;
 
@@ -228,7 +436,8 @@ const getExistingReusableShotTask = ({
       task: latestAttemptTask,
       shot,
       prompt,
-      ratio
+      ratio,
+      styleMode
     })
   ) {
     return latestAttemptTask;
@@ -242,7 +451,8 @@ const getExistingReusableShotTask = ({
       task: latestCompletedTask,
       shot,
       prompt,
-      ratio
+      ratio,
+      styleMode
     })
   ) {
     return latestCompletedTask;
@@ -271,6 +481,7 @@ const createCompletedReuseTaskForBatch = async ({
   shot,
   prompt,
   ratio,
+  styleMode = '',
   startedAt,
   sourceTask
 }) => {
@@ -292,6 +503,7 @@ const createCompletedReuseTaskForBatch = async ({
       source: 'shot_generation_batch_reuse',
       batchStartedAt: startedAt,
       ratio: normalizeGenerationRatio(ratio),
+      styleMode: resolveShotGenerationStyleMode(styleMode),
       speechSignature: buildShotSpeechSignature(shot),
       characterStateSignature: buildShotCharacterStateSignature(shot),
       reusedFromTaskId: sourceTask.id
@@ -307,6 +519,7 @@ const createResumedReuseTaskForBatch = async ({
   shot,
   prompt,
   ratio,
+  styleMode = '',
   startedAt,
   sourceTask
 }) => {
@@ -326,6 +539,7 @@ const createResumedReuseTaskForBatch = async ({
       source: 'shot_generation_batch_resume',
       batchStartedAt: startedAt,
       ratio: normalizeGenerationRatio(ratio),
+      styleMode: resolveShotGenerationStyleMode(styleMode),
       speechSignature: buildShotSpeechSignature(shot),
       characterStateSignature: buildShotCharacterStateSignature(shot),
       reusedFromTaskId: sourceTask.id
@@ -342,6 +556,7 @@ const serializeShotGenerationMeta = (task) => {
   return {
     engine: String(taskMeta.engine ?? '').trim(),
     ratio: String(taskMeta.ratio ?? '').trim(),
+    style_mode: normalizeStyleMode(taskMeta.styleMode ?? taskMeta.style_mode ?? DEFAULT_STYLE_MODE),
     remote_status: String(taskMeta.remoteStatus ?? '').trim(),
     remote_status_label: String(taskMeta.remoteStatusLabel ?? '').trim(),
     remote_created_at: Number(taskMeta.remoteCreatedAt ?? 0) || null,
@@ -957,6 +1172,15 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
     const analysisOptions = normalizeAnalysisOptions(
       segment?.analysis?.analysisOptions ?? overallAnalysis?.analysisOptions
     );
+    const resolvedStyleMode = resolveShotGenerationStyleMode(
+      task.meta?.styleMode ?? task.meta?.style_mode ?? '',
+      analysisOptions
+    );
+    const videoGenerationStylePrompt = resolveStyleTemplate({
+      styleMode: resolvedStyleMode,
+      styleTemplates: analysisOptions?.styleTemplates ?? overallAnalysis?.analysisOptions?.styleTemplates ?? null,
+      templateKey: 'videoGenerationStylePrompt'
+    });
     const speechEnabled = isSpeechAnalysisEnabled(analysisOptions);
     const shotSpeech = normalizeShotSpeech(shot?.speech ?? null, {
       durationSeconds: shot?.durationSeconds,
@@ -978,6 +1202,7 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
     const sourceAbsolutePath = shotSourceAbsolutePath || segmentSourceAbsolutePath;
     const sourcePublicUrl = shotSourcePublicUrl || segmentSourcePublicUrl;
     const remoteTaskId = String(task.meta?.remoteTaskId ?? '').trim();
+    let speechForGeneration = shouldGenerateDialogue ? shotSpeech : null;
 
     if (remoteTaskId) {
       const result = await resumeRemoteGenerationTask({
@@ -1042,14 +1267,32 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
       generationWarnings.push('小镜头参考音频缺失，已仅使用字幕与说话方式约束');
     }
 
+    if (shouldGenerateDialogue) {
+      const dialoguePayload = await prepareDialogueGenerationPayload({
+        segment,
+        shot,
+        shotSpeech,
+        shotDurationSeconds: Number(shot?.durationSeconds ?? 0),
+        sourceAudioAbsolutePath: shotSourceAudioAbsolutePath,
+        sourceAudioPublicUrl: shotSourceAudioPublicUrl,
+        taskId: task.id,
+        styleMode: resolvedStyleMode
+      });
+
+      effectiveShotSourceAudioAbsolutePath = dialoguePayload.effectiveAudioAbsolutePath;
+      effectiveShotSourceAudioPublicUrl = dialoguePayload.effectiveAudioPublicUrl;
+      speechForGeneration = dialoguePayload.speechForGeneration;
+      generationWarnings.push(...dialoguePayload.generationWarnings);
+    }
+
     if (
       shouldGenerateDialogue &&
-      shotSourceAudioAbsolutePath &&
+      effectiveShotSourceAudioAbsolutePath &&
       Number(shot?.durationSeconds ?? 0) > 0 &&
       Number(shot.durationSeconds) < MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS
     ) {
       const paddedAudio = await padAudioClipToDuration(
-        shotSourceAudioAbsolutePath,
+        effectiveShotSourceAudioAbsolutePath,
         MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS,
         {
           basename: `segment-${segment.id}-${task.shotId}-task-${task.id}-speech-audio-padded`
@@ -1102,18 +1345,21 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
       plot: overallAnalysis?.plot ?? '',
       segmentPrompt: segment?.analysis?.prompt ?? segment?.analysis?.scenePrompt ?? '',
       shotPrompt: task.prompt,
+      videoGenerationStylePrompt,
       characterNames: [...getPromptMentionNames(task.prompt), ...(Array.isArray(shot.characterNames) ? shot.characterNames : [])],
       sceneNames: [...getPromptSceneNames(task.prompt), ...(Array.isArray(shot.sceneNames) ? shot.sceneNames : []), backgroundBinding?.backgroundName || ''],
       characterStateRefs: shot.characterStateRefs ?? [],
-      speech: shouldGenerateDialogue
-        ? {
-            transcript: shotSpeech.transcript || buildTranscriptFromSubtitleLines(shotSpeech.subtitleLines),
-            subtitleLines: shotSpeech.subtitleLines,
-            speechStyle: shotSpeech.speechStyle,
-            hasDialogue: true
-          }
-        : null,
-      isShot: true
+      speech:
+        shouldGenerateDialogue && speechForGeneration
+          ? {
+              ...speechForGeneration,
+              transcript:
+                speechForGeneration.transcript ||
+                buildTranscriptFromSubtitleLines(speechForGeneration.subtitleLines)
+            }
+          : null,
+      isShot: true,
+      durationSeconds: getShotDurationForGeneration(shot)
     });
     let primaryShotReferenceImage = null;
 
@@ -1312,11 +1558,15 @@ const processShotGenerationTask = async (taskId, options = {}) => {
   return processPromise;
 };
 
-const startShotGeneration = async ({ segmentId, shotId, prompt, ratio }) => {
+const startShotGeneration = async ({ segmentId, shotId, prompt, ratio, styleMode = '' }) => {
   const segment = await getSegmentWithContextById(segmentId);
   const shot = getShotByIdFromSegment(segment, shotId);
   const resolvedPrompt = String(prompt ?? '').trim() || shot.prompt;
   const resolvedRatio = normalizeGenerationRatio(ratio);
+  const resolvedStyleMode = resolveShotGenerationStyleMode(
+    styleMode,
+    normalizeAnalysisOptions(segment?.analysis?.analysisOptions ?? segment?.video?.analysis?.analysisOptions)
+  );
 
   if (!resolvedPrompt) {
     throw new AppError('请先提供镜头提示词，再生成小镜头。', 400, {
@@ -1335,7 +1585,8 @@ const startShotGeneration = async ({ segmentId, shotId, prompt, ratio }) => {
     latestCompletedTaskByShotId: latestCompletedTaskBySegmentId.get(segmentId) ?? new Map(),
     shot,
     prompt: resolvedPrompt,
-    ratio: resolvedRatio
+    ratio: resolvedRatio,
+    styleMode: resolvedStyleMode
   });
 
   if (existingTask) {
@@ -1363,6 +1614,7 @@ const startShotGeneration = async ({ segmentId, shotId, prompt, ratio }) => {
     meta: {
       source: 'shot_generation',
       ratio: resolvedRatio,
+      styleMode: resolvedStyleMode,
       engine: '',
       remoteStatus: '',
       remoteStatusLabel: '',
@@ -1393,10 +1645,14 @@ const startShotGeneration = async ({ segmentId, shotId, prompt, ratio }) => {
   return serializeShotGenerationTask(task);
 };
 
-const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, ratio, startedAt = '' }) => {
+const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, ratio, styleMode = '', startedAt = '' }) => {
   const segment = await getSegmentWithContextById(segmentId);
   const normalizedShots = getNormalizedSegmentShots(segment);
   const resolvedRatio = normalizeGenerationRatio(ratio);
+  const resolvedStyleMode = resolveShotGenerationStyleMode(
+    styleMode,
+    normalizeAnalysisOptions(segment?.analysis?.analysisOptions ?? segment?.video?.analysis?.analysisOptions)
+  );
   const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestShotTaskMapsBySegmentIds([
     segmentId
   ]);
@@ -1411,7 +1667,8 @@ const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, rat
       latestCompletedTaskByShotId,
       shot,
       prompt: targetPrompt,
-      ratio: resolvedRatio
+      ratio: resolvedRatio,
+      styleMode: resolvedStyleMode
     });
 
     if (reusableTask?.status === TASK_STATUS.completed && reusableTask.resultUrl) {
@@ -1420,6 +1677,7 @@ const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, rat
         shot,
         prompt: targetPrompt,
         ratio: resolvedRatio,
+        styleMode: resolvedStyleMode,
         startedAt,
         sourceTask: reusableTask
       });
@@ -1432,6 +1690,7 @@ const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, rat
         shot,
         prompt: targetPrompt,
         ratio: resolvedRatio,
+        styleMode: resolvedStyleMode,
         startedAt,
         sourceTask: reusableTask
       });
@@ -1456,6 +1715,7 @@ const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, rat
         source: 'shot_generation_batch',
         batchStartedAt: startedAt,
         ratio: resolvedRatio,
+        styleMode: resolvedStyleMode,
         engine: '',
         remoteStatus: '',
         remoteStatusLabel: '',
@@ -1497,10 +1757,14 @@ const processShotBatchGeneration = async ({ segmentId, promptOverrides = {}, rat
   }
 };
 
-const startShotBatchGeneration = async ({ segmentId, shots = [], ratio }) => {
+const startShotBatchGeneration = async ({ segmentId, shots = [], ratio, styleMode = '' }) => {
   const segment = await getSegmentWithContextById(segmentId);
   const normalizedShots = getNormalizedSegmentShots(segment);
   const resolvedRatio = normalizeGenerationRatio(ratio);
+  const resolvedStyleMode = resolveShotGenerationStyleMode(
+    styleMode,
+    normalizeAnalysisOptions(segment?.analysis?.analysisOptions ?? segment?.video?.analysis?.analysisOptions)
+  );
 
   if (!normalizedShots.length) {
     throw new AppError('当前大片段没有可用的小镜头。', 400, {
@@ -1540,8 +1804,9 @@ const startShotBatchGeneration = async ({ segmentId, shots = [], ratio }) => {
         shot_count: normalizedShots.length,
         status: currentSummary.status,
         started_at: currentSummary.started_at ?? segment.analysis?.shotAssembly?.startedAt ?? '',
-        ratio: resolvedRatio,
-        progress: currentSummary.progress,
+      ratio: resolvedRatio,
+      style_mode: resolvedStyleMode,
+      progress: currentSummary.progress,
         completed_shot_count: currentSummary.completed_shot_count,
         failed_shot_count: currentSummary.failed_shot_count,
         processing_shot_count: currentSummary.processing_shot_count,
@@ -1573,6 +1838,7 @@ const startShotBatchGeneration = async ({ segmentId, shots = [], ratio }) => {
       segmentId,
       promptOverrides,
       ratio: resolvedRatio,
+      styleMode: resolvedStyleMode,
       startedAt
     });
   });
@@ -1582,7 +1848,8 @@ const startShotBatchGeneration = async ({ segmentId, shots = [], ratio }) => {
     shot_count: normalizedShots.length,
     status: TASK_STATUS.processing,
     started_at: startedAt,
-    ratio: resolvedRatio
+    ratio: resolvedRatio,
+    style_mode: resolvedStyleMode
   };
 };
 

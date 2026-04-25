@@ -20,7 +20,10 @@ const fetchSegments = async (request, response) => {
 };
 
 const analyzeSegment = async (request, response) => {
-  const segment = await analyzeSegmentById(request.params.id);
+  const segment = await analyzeSegmentById(request.params.id, {
+    styleMode: request.body.style_mode,
+    segmentAnalysisStylePrompt: request.body.segment_analysis_style_prompt
+  });
   response.status(200).json(segment);
 };
 
