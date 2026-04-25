@@ -698,22 +698,12 @@ const processSplitTask = async (taskId, videoId, timeAnchors) => {
 
     for (const segmentInfo of splitSegments) {
       const timeAnchor = normalizedAnchors[segmentInfo.segmentIndex] ?? {};
-      const baseSegmentAnalysis = buildBaseSegmentAnalysis({
+      // Split should stay local and fast: the single whole-video Gemini pass already owns
+      // the source of truth for segment prompts and shot definitions.
+      const segmentAnalysis = buildBaseSegmentAnalysis({
         segment: segmentInfo,
         timeAnchor,
         overallAnalysis
-      });
-      const analyzedSegment = await analyzeSegmentContent({
-        segment: {
-          ...segmentInfo,
-          analysis: baseSegmentAnalysis
-        },
-        overallAnalysis,
-        segmentAbsolutePath: resolveUploadPath(segmentInfo.filePath)
-      });
-      const segmentAnalysis = mergeSegmentAnalysis({
-        baseAnalysis: baseSegmentAnalysis,
-        nextSegmentAnalysis: analyzedSegment
       });
       const nextShots = await rebuildShotAssetsForSegment({
         segment: segmentInfo,
@@ -743,7 +733,7 @@ const processSplitTask = async (taskId, videoId, timeAnchors) => {
       updateTask(taskId, {
         status: 'processing',
         progress: 60 + Math.round((createdSegments.length / splitSegments.length) * 35),
-        message: 'Analyzing video segments'
+        message: 'Building segment cards'
       });
     }
 
