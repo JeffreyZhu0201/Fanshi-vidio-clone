@@ -135,12 +135,14 @@
 整片理解现在的真实行为是：
 
 1. 只调用一次 `Gemini-2.5-pro`
-2. 提示词由“固定结构段 + 可编辑风格段”拼装
-3. 要求返回整片剧情、角色、大片段和小镜头
-4. `analysis_options` 会决定这次整片理解是否同时返回每个小镜头的 `speech`
-5. 后端本地派生 `backgrounds`
-6. 后端补角色 `stateTimeline`
-7. 后端把角色状态引用补回 `timeAnchors[*].shots[*].characterStateRefs`
+2. 对较大视频会先在本地转一个低分辨率、低帧率的整片分析代理视频，再把代理视频发给 Gemini
+3. 如果 `extractSubtitles` 和 `parseAudio` 都关闭，整片分析代理视频会直接去掉音轨，进一步减少上传体积
+4. 提示词由“固定结构段 + 可编辑风格段”拼装
+5. 要求返回整片剧情、角色、大片段和小镜头
+6. `analysis_options` 会决定这次整片理解是否同时返回每个小镜头的 `speech`
+7. 后端本地派生 `backgrounds`
+8. 后端补角色 `stateTimeline`
+9. 后端把角色状态引用补回 `timeAnchors[*].shots[*].characterStateRefs`
 
 当前整片分析结果里最重要的真值有：
 
@@ -158,6 +160,7 @@
 - 如果 `extractSubtitles` 或 `parseAudio` 开启，小镜头 `speech` 现在会在整片分析阶段一次性返回并落库
 - 如果这两个选项都关闭，整片分析不会返回 `speech`
 - 如果整片分析遇到 `socket hang up`，后端会自动重试；重试耗尽后会明确提示“远端连接中途断开或网络不稳定”
+- 整片分析仍然只调一次 Gemini；新增的本地代理视频只是在发请求前把上传体积压小
 
 ### 3.3 生成片段
 

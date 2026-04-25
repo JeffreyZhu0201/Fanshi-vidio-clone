@@ -3,6 +3,8 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { jest } from '@jest/globals';
 
 const requestExternalJsonMock = jest.fn();
+const extractVideoFrameMock = jest.fn();
+const transcodeVideoForAnalysisMock = jest.fn();
 
 await jest.unstable_mockModule('../config/env.js', () => ({
   default: Object.freeze({
@@ -30,18 +32,28 @@ await jest.unstable_mockModule('../services/externalHttpService.js', () => ({
   requestExternalJson: requestExternalJsonMock
 }));
 
+await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
+  extractVideoFrame: extractVideoFrameMock,
+  transcodeVideoForAnalysis: transcodeVideoForAnalysisMock
+}));
+
 const { analyzeSegment, analyzeVideo, optimizePrompt } = await import('../services/geminiService.js');
 
 const backendRoot = path.resolve(process.cwd());
 const tempDir = path.join(backendRoot, '.tmp', 'gemini-service-test');
 const sampleVideoPath = path.join(tempDir, 'sample.mp4');
+const proxyVideoPath = path.join(tempDir, 'sample-analysis-proxy.mp4');
 
 describe('geminiService', () => {
   beforeEach(async () => {
     await mkdir(tempDir, { recursive: true });
     await writeFile(sampleVideoPath, Buffer.from('fake-mp4-binary'));
+    await writeFile(proxyVideoPath, Buffer.from('proxy-mp4-binary'));
 
     requestExternalJsonMock.mockReset();
+    extractVideoFrameMock.mockReset();
+    transcodeVideoForAnalysisMock.mockReset();
+    transcodeVideoForAnalysisMock.mockResolvedValue(null);
     requestExternalJsonMock.mockResolvedValue({
       response: {
         status: 200
@@ -201,6 +213,80 @@ describe('geminiService', () => {
       temperature: 0.2,
       responseMimeType: 'application/json'
     });
+  });
+
+  test('uses a local whole-video analysis proxy for larger videos before calling Gemini', async () => {
+    transcodeVideoForAnalysisMock.mockResolvedValue({
+      absolutePath: proxyVideoPath,
+      filePath: 'analysis-proxies/sample-analysis-proxy.mp4',
+      fileUrl: '/uploads/analysis-proxies/sample-analysis-proxy.mp4',
+      engine: 'ffmpeg-analysis-proxy-mpeg4',
+      includeAudio: true
+    });
+
+    await analyzeVideo({
+      video: {
+        id: 501,
+        filename: 'sample.mp4'
+      },
+      metadata: {
+        duration: 12
+      },
+      videoAbsolutePath: sampleVideoPath,
+      analysisOptions: {
+        extractSubtitles: true,
+        parseAudio: true
+      }
+    });
+
+    expect(transcodeVideoForAnalysisMock).toHaveBeenCalledWith(
+      sampleVideoPath,
+      expect.objectContaining({
+        basename: '501-whole-analysis',
+        includeAudio: true,
+        maxLongSide: 720,
+        maxFps: 6
+      })
+    );
+
+    const requestOptions = requestExternalJsonMock.mock.calls[0][1];
+    const requestBody = JSON.parse(requestOptions.body);
+    expect(requestBody.contents[0].parts[0].inline_data.data).toBe(
+      Buffer.from('proxy-mp4-binary').toString('base64')
+    );
+  });
+
+  test('builds the whole-video analysis proxy without audio when subtitle and audio parsing are disabled', async () => {
+    transcodeVideoForAnalysisMock.mockResolvedValue({
+      absolutePath: proxyVideoPath,
+      filePath: 'analysis-proxies/sample-analysis-proxy.mp4',
+      fileUrl: '/uploads/analysis-proxies/sample-analysis-proxy.mp4',
+      engine: 'ffmpeg-analysis-proxy-mpeg4',
+      includeAudio: false
+    });
+
+    await analyzeVideo({
+      video: {
+        id: 502,
+        filename: 'sample.mp4'
+      },
+      metadata: {
+        duration: 12
+      },
+      videoAbsolutePath: sampleVideoPath,
+      analysisOptions: {
+        extractSubtitles: false,
+        parseAudio: false
+      }
+    });
+
+    expect(transcodeVideoForAnalysisMock).toHaveBeenCalledWith(
+      sampleVideoPath,
+      expect.objectContaining({
+        basename: '502-whole-analysis',
+        includeAudio: false
+      })
+    );
   });
 
   test('does not request shot speech in whole-video prompt when subtitle and audio parsing are both disabled', async () => {
