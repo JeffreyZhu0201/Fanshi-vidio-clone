@@ -12,7 +12,6 @@ import {
   buildSeedDanceReconstructionPrompt,
   broadcastGenerationTaskUpdate,
   collectCharacterReferenceImages,
-  collectCharacterStateReferenceImages,
   collectSceneReferenceImages,
   composeSeedDanceReferenceImages,
   expandPromptMentions,
@@ -1426,9 +1425,6 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
       sourceVideoAbsolutePath,
       basenamePrefix: `segment-${segment.id}-${task.shotId}-task-${task.id}`
     });
-    const characterStateReferenceImages = collectCharacterStateReferenceImages({
-      shot
-    });
     const sceneReferenceImages = await collectSceneReferenceImages({
       videoId: segment?.video?.id,
       segment,
@@ -1442,8 +1438,7 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
     const referenceImages = composeSeedDanceReferenceImages({
       primaryImages: primaryShotReferenceImage ? [primaryShotReferenceImage] : [],
       characterImages: characterReferenceImages,
-      sceneImages: sceneReferenceImages,
-      characterStateImages: characterStateReferenceImages
+      sceneImages: sceneReferenceImages
     });
 
     await task.update({

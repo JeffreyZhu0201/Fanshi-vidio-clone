@@ -233,6 +233,13 @@ describe('generationService helpers', () => {
       prompt: '角色向前推进。',
       characterNames: ['主角'],
       sceneNames: ['街道夜景'],
+      characterStateRefs: [
+        {
+          characterName: '主角',
+          stateName: '右手受伤',
+          continuityPrompt: '右手受伤状态持续，不要恢复完好'
+        }
+      ],
       isShot: true
     });
 
@@ -240,6 +247,10 @@ describe('generationService helpers', () => {
     expect(prompt).toContain('@主角');
     expect(prompt).toContain('#街道夜景');
     expect(prompt).toContain('人物左右位置');
+    expect(prompt).toContain('角色三视图作为人物身份真值');
+    expect(prompt).toContain('状态时间线');
+    expect(prompt).toContain('重拍版本或平行版本');
+    expect(prompt).toContain('不要把原片表面纹理');
     expect(prompt).toContain('不要任何字幕');
   });
 });
