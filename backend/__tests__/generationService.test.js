@@ -273,6 +273,19 @@ describe('generationService helpers', () => {
           continuityPrompt: '右手受伤状态持续，不要恢复完好'
         }
       ],
+      speech: {
+        hasDialogue: true,
+        transcript: '现在立刻离开这里。',
+        subtitleLines: [
+          {
+            id: 'subtitle_1',
+            startTime: 0,
+            endTime: 1.2,
+            text: '现在立刻离开这里。'
+          }
+        ],
+        speechStyle: '语速偏快，语气坚决'
+      },
       isShot: true
     });
 
@@ -286,5 +299,7 @@ describe('generationService helpers', () => {
     expect(prompt).toContain('不要把原片表面纹理');
     expect(prompt).toContain('不要让生成结果和关键帧过于相似');
     expect(prompt).toContain('不要任何字幕');
+    expect(prompt).toContain('输出结果必须是带完整音轨的视频文件');
+    expect(prompt).toContain('生成音频与口型都必须尽量对齐参考音频');
   });
 });

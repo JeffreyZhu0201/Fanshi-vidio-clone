@@ -1259,6 +1259,7 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
         remoteTaskId,
         basename: `segment-${segment.id}-${task.shotId}-task-${task.id}`,
         duration: getShotDurationForGeneration(shot),
+        expectAudioTrack: shouldGenerateDialogue || Boolean(task.meta?.generateAudio),
         onProgress: async (progressPayload) => {
           await applySeedDanceShotTaskProgress(task, progressPayload);
         }
@@ -1461,6 +1462,7 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
         await applySeedDanceShotTaskProgress(task, progressPayload);
       },
       generateAudio: shouldGenerateDialogue,
+      expectAudioTrack: shouldGenerateDialogue,
       referenceImages,
       referenceAudios:
         shouldGenerateDialogue && (effectiveShotSourceAudioAbsolutePath || effectiveShotSourceAudioPublicUrl)

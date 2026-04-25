@@ -58,7 +58,9 @@ await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
         duration: 1,
         durationSecondsExact: 1.2,
         width: 640,
-        height: 360
+        height: 360,
+        hasAudio: true,
+        audioCodec: 'aac'
       };
     }
 
@@ -67,7 +69,9 @@ await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
         duration: 3,
         durationSecondsExact: 3,
         width: 320,
-        height: 240
+        height: 240,
+        hasAudio: true,
+        audioCodec: 'aac'
       };
     }
 
@@ -76,7 +80,9 @@ await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
         duration: 3,
         durationSecondsExact: 3,
         width: 640,
-        height: 360
+        height: 360,
+        hasAudio: true,
+        audioCodec: 'aac'
       };
     }
 
@@ -85,7 +91,9 @@ await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
         duration: 13.7,
         durationSecondsExact: 13.7,
         width: 1280,
-        height: 720
+        height: 720,
+        hasAudio: true,
+        audioCodec: 'aac'
       };
     }
 
@@ -94,7 +102,20 @@ await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
         duration: 5.04,
         durationSecondsExact: 5.04,
         width: 1280,
-        height: 720
+        height: 720,
+        hasAudio: true,
+        audioCodec: 'aac'
+      };
+    }
+
+    if (normalizedPath.includes('missing-audio')) {
+      return {
+        duration: 4,
+        durationSecondsExact: 4,
+        width: 1280,
+        height: 720,
+        hasAudio: false,
+        audioCodec: null
       };
     }
 
@@ -102,7 +123,9 @@ await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
       duration: 3,
       durationSecondsExact: 3,
       width: 1280,
-      height: 720
+      height: 720,
+      hasAudio: true,
+      audioCodec: 'aac'
     };
   }),
   sliceVideoClip: jest.fn(async (_absolutePath, startTimeSeconds, endTimeSeconds, options = {}) => ({
@@ -402,6 +425,61 @@ describe('seedDanceService', () => {
         })
       ])
     );
+  });
+
+  test('rejects dialogue generation results that do not contain an audio track', async () => {
+    await mkdir(path.join(tempDir, 'outputs'), { recursive: true });
+
+    jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'remote-task-missing-audio',
+            status: 'queued'
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'remote-task-missing-audio',
+            status: 'succeeded',
+            content: {
+              video_url: 'https://example.com/generated-missing-audio.mp4'
+            }
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from('fake-remote-video-binary'), {
+          status: 200,
+          headers: {
+            'Content-Type': 'video/mp4'
+          }
+        })
+      );
+
+    await expect(
+      generateSegment({
+        sourceAbsolutePath: sampleVideoPath,
+        sourcePublicUrl: 'https://example.com/source-segment.mp4',
+        prompt: '说话镜头必须带音轨',
+        basename: 'missing-audio',
+        duration: 4,
+        generateAudio: true,
+        expectAudioTrack: true,
+        referenceImages: [
+          {
+            url: 'https://example.com/character-front.png',
+            sourceKind: 'character_asset',
+            displayLabel: '@主角 三视图'
+          }
+        ]
+      })
+    ).rejects.toThrow(/缺少音轨/u);
   });
 
   test('normalizes too-short generation durations to the provider minimum', async () => {
