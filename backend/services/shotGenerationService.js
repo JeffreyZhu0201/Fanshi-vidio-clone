@@ -1438,7 +1438,8 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
     const referenceImages = composeSeedDanceReferenceImages({
       primaryImages: primaryShotReferenceImage ? [primaryShotReferenceImage] : [],
       characterImages: characterReferenceImages,
-      sceneImages: sceneReferenceImages
+      sceneImages: sceneReferenceImages,
+      primaryImagePlacement: 'after_assets'
     });
 
     await task.update({
