@@ -240,24 +240,29 @@ const composeSeedDanceReferenceImages = ({
   characterImages = [],
   sceneImages = [],
   characterStateImages = [],
-  maxTotal = SEED_DANCE_REFERENCE_IMAGE_LIMIT
+  maxTotal = SEED_DANCE_REFERENCE_IMAGE_LIMIT,
+  primaryImagePlacement = 'first'
 } = {}) => {
   const combinedEntries = [];
   const seenKeys = new Set();
-  const normalizedMaxTotal = Number.isFinite(Number(maxTotal)) && Number(maxTotal) > 0 ? Number(maxTotal) : SEED_DANCE_REFERENCE_IMAGE_LIMIT;
+  const normalizedMaxTotal =
+    Number.isFinite(Number(maxTotal)) && Number(maxTotal) > 0 ? Number(maxTotal) : SEED_DANCE_REFERENCE_IMAGE_LIMIT;
   const normalizedPrimaryImages = dedupeReferenceEntries(primaryImages);
   const normalizedCharacterImages = dedupeReferenceEntries(characterImages);
   const normalizedSceneImages = dedupeReferenceEntries(sceneImages);
   const normalizedCharacterStateImages = dedupeReferenceEntries(characterStateImages);
-  let remainingBudget = normalizedMaxTotal;
+  const placePrimaryAfterAssets = primaryImagePlacement === 'after_assets' && normalizedPrimaryImages.length > 0;
+  let remainingBudget = Math.max(0, normalizedMaxTotal - (placePrimaryAfterAssets ? 1 : 0));
 
-  pushReferenceEntriesWithBudget({
-    targetEntries: combinedEntries,
-    candidateEntries: normalizedPrimaryImages,
-    budget: remainingBudget,
-    seenKeys
-  });
-  remainingBudget = normalizedMaxTotal - combinedEntries.length;
+  if (!placePrimaryAfterAssets) {
+    pushReferenceEntriesWithBudget({
+      targetEntries: combinedEntries,
+      candidateEntries: normalizedPrimaryImages,
+      budget: remainingBudget,
+      seenKeys
+    });
+    remainingBudget = normalizedMaxTotal - combinedEntries.length;
+  }
 
   let characterCursor = 0;
   ({ nextIndex: characterCursor } = pushReferenceEntriesWithBudget({
@@ -276,6 +281,16 @@ const composeSeedDanceReferenceImages = ({
     seenKeys
   }));
   remainingBudget = normalizedMaxTotal - combinedEntries.length;
+
+  if (placePrimaryAfterAssets && remainingBudget > 0) {
+    pushReferenceEntriesWithBudget({
+      targetEntries: combinedEntries,
+      candidateEntries: normalizedPrimaryImages,
+      budget: remainingBudget,
+      seenKeys
+    });
+    remainingBudget = normalizedMaxTotal - combinedEntries.length;
+  }
 
   let characterStateCursor = 0;
   ({ nextIndex: characterStateCursor } = pushReferenceEntriesWithBudget({
@@ -1056,11 +1071,13 @@ const buildSeedDanceReconstructionPrompt = ({
     basePrompt ? `资源展开后的生成真值：${basePrompt}` : '',
     isShot ? '严格还原原片当前小镜头，不要把多个镜头语义混成一个新镜头。' : '严格延续原片当前片段的剧情、镜头语言和表演逻辑。',
     isShot
-      ? '第一张参考图是该小镜头的典型帧，必须优先用它锁定构图、景别、机位朝向、人物站位、前后景关系、视线方向和动作瞬间。'
+      ? '小镜头典型帧只用于提取当前镜头的人物左中右站位、前后景层次、视线方向、机位朝向和动作瞬间，不要把它当成需要逐帧复刻的目标画面。'
       : '参考视频是当前片段的原始镜头依据，必须优先沿用它的运动节奏、镜头顺序和空间连续性。',
     normalizedCharacterNames.length
-      ? `必须把这些角色三视图作为人物身份真值：${normalizedCharacterNames.map((name) => `@${name}`).join('、')}。人物身份、脸型、发型、服装轮廓和体态主要由角色三视图与提示词锁定。`
-      : '如果提供了角色三视图，必须优先用它们锁定角色身份、脸型、发型、服装、比例和体态；不要被原片单帧表面细节带偏。',
+      ? `必须把这些角色三视图替换进原片对应人物，并把它们作为人物身份真值：${normalizedCharacterNames
+          .map((name) => `@${name}`)
+          .join('、')}。人物身份、脸型、发型、服装轮廓和体态主要由角色三视图与提示词锁定，原片人物只保留站位、动作骨架和表演节奏参考。`
+      : '如果提供了角色三视图，必须优先用它们替换原片人物并锁定角色身份、脸型、发型、服装、比例和体态；不要被原片单帧表面细节带偏。',
     isShot && normalizedCharacterStateRefs.length
       ? `当前镜头还必须继承这些角色阶段状态：${normalizedCharacterStateRefs
           .map((stateRef) =>
@@ -1074,16 +1091,22 @@ const buildSeedDanceReconstructionPrompt = ({
       ? '这些状态连续性来自整片理解的人物状态时间线，必须按文字连续性约束延续当前阶段的伤势、包扎、残缺、服装破损、脏污、妆造变化和疲惫程度，不要回退成角色基础完好状态。'
       : '',
     normalizedSceneNames.length
-      ? `必须把这些场景参考图作为空间真值：${normalizedSceneNames.map((name) => `#${name}`).join('、')}。`
-      : '如果提供了场景参考图，必须优先用它们锁定空间结构、布景、材质、布光和色彩。',
+      ? `必须把这些场景参考图替换进原片对应空间，并把它们作为场景真值：${normalizedSceneNames
+          .map((name) => `#${name}`)
+          .join('、')}。`
+      : '如果提供了场景参考图，必须优先用它们替换原片场景并锁定空间结构、布景、材质、布光和色彩。',
     '保持原片相同或最接近的景别、拍摄高度、视角方向、人物左右位置、前中后景层次、遮挡关系、进出画路径、视线方向、镜头运动和动作节奏。',
     isShot
-      ? '小镜头源视频主要用于继承构图、机位、站位、动作骨架和节奏，不要把原片表面纹理、背景小物和微表情逐帧照搬。'
+      ? '小镜头源视频主要用于继承构图、机位、站位、动作骨架和节奏；人物外观与场景外观应由角色三视图、场景图和提示词重建，不要把原片表面纹理、背景小物和微表情逐帧照搬。'
       : '原片片段主要用于继承构图、机位、站位、动作骨架和节奏，不要逐帧照搬原片表面纹理。',
+    isShot
+      ? '不要让生成结果和关键帧过于相似；保留同镜头的站位、机位和动作关系即可，人物细节、材质纹理、背景纹理和局部表演需要重新生成。'
+      : '',
     '生成结果要像同一镜头的重拍版本或平行版本：人物身份、空间结构、站位、动作骨架和镜头节奏与原片高度相似，但表情细节、材质纹理、光影层次、背景小物和动作微差允许合理变化。',
     '不要新增原片没有的角色、场景切换、道具焦点、情节动作或夸张镜头运动。',
     isShot && hasDialogue ? '当前镜头必须有人物说话和明显口型同步，并且生成对应音频。' : '',
-    isShot && hasDialogue && speechTranscript ? `对白文本真值：${speechTranscript}` : '',
+    isShot && hasDialogue ? '对白必须完整生成，不吞字、不丢尾句，口型张闭、停顿和语气尽量贴合参考。' : '',
+    isShot && hasDialogue && speechTranscript ? `对白文本真值（必须完整生成）：${speechTranscript}` : '',
     isShot && hasDialogue && speechTimingSummary ? `字幕节奏参考：${speechTimingSummary}` : '',
     isShot && hasDialogue && speechStyle ? `说话方式：${speechStyle}` : '',
     isShot && hasDialogue && speechDialogueCompletionTimeSeconds > 0

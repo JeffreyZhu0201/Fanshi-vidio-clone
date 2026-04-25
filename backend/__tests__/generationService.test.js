@@ -228,6 +228,39 @@ describe('generationService helpers', () => {
     ]);
   });
 
+  test('can place shot representative frame after character and scene assets for shot generation', () => {
+    const result = composeSeedDanceReferenceImages({
+      primaryImages: [
+        {
+          url: '/uploads/frames/shot-frame.jpg',
+          role: 'reference_image',
+          sourceKind: 'shot_representative_frame'
+        }
+      ],
+      characterImages: [
+        {
+          url: '/uploads/resource-images/character-front.jpg',
+          role: 'reference_image',
+          sourceKind: 'character_asset'
+        }
+      ],
+      sceneImages: [
+        {
+          url: '/uploads/resource-images/scene-angle-1.jpg',
+          role: 'reference_image',
+          sourceKind: 'scene_asset'
+        }
+      ],
+      primaryImagePlacement: 'after_assets'
+    });
+
+    expect(result.map((item) => item.sourceKind)).toEqual([
+      'character_asset',
+      'scene_asset',
+      'shot_representative_frame'
+    ]);
+  });
+
   test('builds reconstruction instructions that mention character and scene references', () => {
     const prompt = buildSeedDanceReconstructionPrompt({
       prompt: '角色向前推进。',
@@ -243,14 +276,15 @@ describe('generationService helpers', () => {
       isShot: true
     });
 
-    expect(prompt).toContain('第一张参考图是该小镜头的典型帧');
+    expect(prompt).toContain('小镜头典型帧只用于提取当前镜头的人物左中右站位');
     expect(prompt).toContain('@主角');
     expect(prompt).toContain('#街道夜景');
     expect(prompt).toContain('人物左右位置');
-    expect(prompt).toContain('角色三视图作为人物身份真值');
+    expect(prompt).toContain('角色三视图替换进原片对应人物');
     expect(prompt).toContain('状态时间线');
     expect(prompt).toContain('重拍版本或平行版本');
     expect(prompt).toContain('不要把原片表面纹理');
+    expect(prompt).toContain('不要让生成结果和关键帧过于相似');
     expect(prompt).toContain('不要任何字幕');
   });
 });
