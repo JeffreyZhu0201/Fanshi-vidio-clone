@@ -181,8 +181,9 @@ describe('geminiService', () => {
     expect(parts[1].text).toContain('stateTimeline');
     expect(parts[1].text).toContain('continuityPrompt');
     expect(parts[1].text).toContain('后续可独立生成的大剧情片段');
-    expect(parts[1].text).toContain('不要返回 backgrounds、speech 或 characterStateRefs');
+    expect(parts[1].text).toContain('不要返回 backgrounds 或 characterStateRefs');
     expect(parts[1].text).toContain('角色状态连续性只放在 characters[*].stateTimeline 中');
+    expect(parts[1].text).toContain('小镜头 speech 需要在这次整片理解里一次性返回');
     expect(parts[1].text).toContain('backgroundName');
     expect(parts[1].text).toContain('剪辑点');
     expect(parts[1].text).toContain('尽量细');
@@ -195,10 +196,35 @@ describe('geminiService', () => {
     expect(parts[1].text).toContain('观众能明显感知到的真实镜头都拆出来');
     expect(parts[1].text).toContain('尽量精确到 0.1 秒');
     expect(parts[1].text).toContain('分析选项');
+    expect(parts[1].text).toContain('subtitleLines 的时间必须是相对当前 shot 本地时间');
     expect(requestBody.generationConfig).toMatchObject({
       temperature: 0.2,
       responseMimeType: 'application/json'
     });
+  });
+
+  test('does not request shot speech in whole-video prompt when subtitle and audio parsing are both disabled', async () => {
+    await analyzeVideo({
+      video: {
+        filename: 'sample.mp4'
+      },
+      metadata: {
+        duration: 3
+      },
+      videoAbsolutePath: sampleVideoPath,
+      analysisOptions: {
+        extractSubtitles: false,
+        parseAudio: false
+      }
+    });
+
+    const requestOptions = requestExternalJsonMock.mock.calls[0][1];
+    const requestBody = JSON.parse(requestOptions.body);
+    const promptText = requestBody.contents[0].parts[1].text;
+
+    expect(promptText).toContain('不要返回 backgrounds、speech 或 characterStateRefs');
+    expect(promptText).not.toContain('小镜头 speech 需要在这次整片理解里一次性返回');
+    expect(promptText).not.toContain('subtitleLines 的时间必须是相对当前 shot 本地时间');
   });
 
   test('does not fall back to another auth variant during whole-video analysis', async () => {

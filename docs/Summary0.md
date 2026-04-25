@@ -136,9 +136,10 @@
 1. 只调用一次 `Gemini-2.5-pro`
 2. 提示词由“固定结构段 + 可编辑风格段”拼装
 3. 要求返回整片剧情、角色、大片段和小镜头
-4. 后端本地派生 `backgrounds`
-5. 后端补角色 `stateTimeline`
-6. 后端把角色状态引用补回 `timeAnchors[*].shots[*].characterStateRefs`
+4. `analysis_options` 会决定这次整片理解是否同时返回每个小镜头的 `speech`
+5. 后端本地派生 `backgrounds`
+6. 后端补角色 `stateTimeline`
+7. 后端把角色状态引用补回 `timeAnchors[*].shots[*].characterStateRefs`
 
 当前整片分析结果里最重要的真值有：
 
@@ -153,8 +154,8 @@
 
 说明：
 
-- 小镜头 `speech` 不是整片分析阶段直接写回的主真值
-- `speech` 是在切分小镜头后按小镜头音频再补出来的
+- 如果 `extractSubtitles` 或 `parseAudio` 开启，小镜头 `speech` 现在会在整片分析阶段一次性返回并落库
+- 如果这两个选项都关闭，整片分析不会返回 `speech`
 
 ### 3.3 生成片段
 
@@ -168,7 +169,7 @@
 4. 切小镜头源视频
 5. 抽小镜头典型帧
 6. 切小镜头音频
-7. 生成 `speech` 和 SRT
+7. 把整片分析里已经返回的 `speech` 落成 SRT 和本地音频资产
 8. 返回片段卡
 
 这样前端在切分完成后就能直接看到片段卡，不需要再等第二轮 Gemini。

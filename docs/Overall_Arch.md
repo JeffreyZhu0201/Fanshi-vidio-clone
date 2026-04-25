@@ -261,6 +261,7 @@ React / Vite
 - 使用共享模板拼装“固定结构段 + 风格段”
 - 让优化 prompt 带入当前风格模式
 - 让资源图 prompt 带入当前风格模板
+- 当 `analysis_options.extractSubtitles / parseAudio` 开启时，在整片理解里一次性返回 shot 级 `speech`
 
 #### `shotSpeechService`
 
@@ -276,6 +277,7 @@ React / Vite
 
 - 统一处理 `styleMode`
 - 统一处理 `styleTemplates`
+- 只把整片理解里已有的 `speech` 落成本地 SRT 和音频资产，不再逐个小镜头重新调 Gemini
 
 #### `segmentService`
 
@@ -466,7 +468,7 @@ analysis.time_anchors
 -> 切小镜头源视频
 -> 抽小镜头典型帧
 -> 切小镜头音频
--> 生成 speech / subtitleLines / SRT
+-> 使用整片理解已返回的 speech 落盘 subtitleLines / SRT
 ```
 
 ### 6.3 风格模板数据流

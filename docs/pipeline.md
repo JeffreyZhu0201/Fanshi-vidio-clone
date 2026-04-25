@@ -129,6 +129,7 @@
 - `plot`
 - `characters`
 - `time_anchors`
+- `time_anchors[*].shots[*].speech`（当 `extractSubtitles` 或 `parseAudio` 开启时）
 
 后端随后本地补齐：
 
@@ -138,8 +139,8 @@
 
 说明：
 
-- 小镜头 `speech` 不是整片分析时直接写回的最终真值
-- `speech` 会在后面的切分阶段按小镜头音频再补
+- 当 `extractSubtitles` 或 `parseAudio` 开启时，小镜头 `speech` 会在整片分析时直接返回
+- split 阶段不再逐个小镜头重新调 Gemini 做 speech 解析，只做本地音频切片和 SRT 落盘
 
 ### 3.4 大片段与小镜头切分
 
@@ -155,11 +156,12 @@
 4. 切出每个小镜头的源视频
 5. 抽每个小镜头的典型帧
 6. 切每个小镜头的参考音频
-7. 生成 `speech`、`subtitleLines`、SRT
+7. 把整片分析阶段已经拿到的 `speech` 持久化为 `subtitleLines`、SRT 和本地音频资产
 
 当前重要变化：
 
 - split 过程中不再对每个大片段重新调一次 Gemini
+- split 过程中也不再对每个小镜头重新调一次 Gemini 做 speech 解析
 - 所以片段卡会在本地切分完成后直接出现
 
 ### 3.5 角色三视图与场景参考图
