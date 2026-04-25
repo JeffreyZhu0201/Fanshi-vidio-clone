@@ -11,7 +11,7 @@ const hasConfiguredProxy = Boolean(
 );
 const MAX_NATIVE_REDIRECTS = 5;
 const UNDICI_TLS_FALLBACK_ERROR_PATTERN =
-  /before secure tls connection was established|client network socket disconnected|socket disconnected|tls connection|econnreset|http\/2: stream half-closed|stream half-closed|unexpected eof|h2 stream|nghttp2_enhance_your_calm/iu;
+  /before secure tls connection was established|client network socket disconnected|socket disconnected|socket hang up|tls connection|econnreset|http\/2: stream half-closed|stream half-closed|unexpected eof|h2 stream|nghttp2_enhance_your_calm/iu;
 const nativeFallbackOrigins = new Set();
 
 const sharedDispatcher = hasConfiguredProxy ? new EnvHttpProxyAgent() : null;
