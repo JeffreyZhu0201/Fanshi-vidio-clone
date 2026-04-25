@@ -1,9 +1,15 @@
 import { jest } from '@jest/globals';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
 
 const getVideoRecordById = jest.fn();
 const resolveVideoAbsolutePath = jest.fn();
 const analyzeSegmentContent = jest.fn();
 const getAnalysisRecordByVideoId = jest.fn();
+const createTask = jest.fn();
+const completeTask = jest.fn();
+const failTask = jest.fn();
+const updateTask = jest.fn();
 const extractVideoFrame = jest.fn();
 const extractAudioClip = jest.fn(async (_sourcePath, startTime, endTime, options = {}) => ({
   filePath: `audio/${options.basename || 'shot-audio'}.mp3`,
@@ -13,6 +19,13 @@ const extractAudioClip = jest.fn(async (_sourcePath, startTime, endTime, options
   duration: Number((Number(endTime) - Number(startTime)).toFixed(2)),
   engine: 'ffmpeg-audio-extract'
 }));
+const padAudioClipToDuration = jest.fn(async (audioPath, targetDuration, options = {}) => ({
+  filePath: `audio/${options.basename || 'shot-audio-padded'}.mp3`,
+  fileUrl: `/uploads/audio/${options.basename || 'shot-audio-padded'}.mp3`,
+  duration: Number(targetDuration),
+  sourceAudioPath: audioPath,
+  engine: 'ffmpeg-audio-pad'
+}));
 const sliceVideoClip = jest.fn(async (_sourcePath, startTime, endTime, options = {}) => ({
   filePath: `shots/${options.basename || 'shot'}.mp4`,
   fileUrl: `/uploads/shots/${options.basename || 'shot'}.mp4`,
@@ -21,6 +34,7 @@ const sliceVideoClip = jest.fn(async (_sourcePath, startTime, endTime, options =
   duration: Number((Number(endTime) - Number(startTime)).toFixed(2)),
   engine: 'ffmpeg-slice'
 }));
+const splitVideo = jest.fn();
 
 const Segment = {
   findByPk: jest.fn(),
@@ -80,10 +94,10 @@ await jest.unstable_mockModule('../services/analysisService.js', () => ({
 }));
 
 await jest.unstable_mockModule('../services/taskService.js', () => ({
-  completeTask: jest.fn(),
-  createTask: jest.fn(),
-  failTask: jest.fn(),
-  updateTask: jest.fn()
+  completeTask,
+  createTask,
+  failTask,
+  updateTask
 }));
 
 await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
@@ -91,8 +105,9 @@ await jest.unstable_mockModule('../services/ffmpegService.js', () => ({
   extractVideoFrame,
   getVideoMetadata: jest.fn(),
   mergeVideos: jest.fn(),
+  padAudioClipToDuration,
   sliceVideoClip,
-  splitVideo: jest.fn()
+  splitVideo
 }));
 
 await jest.unstable_mockModule('../services/fileService.js', () => ({
@@ -100,7 +115,9 @@ await jest.unstable_mockModule('../services/fileService.js', () => ({
     `${directory}/${basename}${extension}`
   ),
   duplicateToUploadPath: jest.fn(async (_sourceAbsolutePath, targetRelativePath) => `/tmp/${targetRelativePath}`),
-  ensureParentDirectory: jest.fn(),
+  ensureParentDirectory: jest.fn(async (absolutePath) => {
+    await mkdir(path.dirname(absolutePath), { recursive: true });
+  }),
   publicUrlToRelativePath: jest.fn((assetPath) => assetPath),
   removeFileIfExists: jest.fn(),
   resolveUploadPath: jest.fn((assetPath) => `/tmp/${assetPath}`),
@@ -108,22 +125,45 @@ await jest.unstable_mockModule('../services/fileService.js', () => ({
   toAbsolutePublicUploadUrl: jest.fn((assetPath) => `/uploads/${assetPath}`)
 }));
 
-const { analyzeSegmentById, listSegmentsByVideoId, updateSegmentShotsById } = await import('../services/segmentService.js');
+const { analyzeSegmentById, listSegmentsByVideoId, startSplitVideo, updateSegmentShotsById } = await import('../services/segmentService.js');
 
 describe('segmentService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    createTask.mockReturnValue({
+      id: 'split-task-201',
+      type: 'split',
+      status: 'pending',
+      progress: 0,
+      message: 'Split task queued'
+    });
     extractVideoFrame.mockImplementation(async (_sourcePath, _timeSeconds, options = {}) => ({
       filePath: `frames/${options.basename || 'generated-shot-frame'}.jpg`,
       fileUrl: `/uploads/frames/${options.basename || 'generated-shot-frame'}.jpg`
     }));
+    splitVideo.mockResolvedValue([
+      {
+        segmentIndex: 0,
+        startTime: 0,
+        endTime: 4,
+        filePath: 'segments/source/demo-0.mp4'
+      }
+    ]);
+    Segment.destroy.mockResolvedValue(0);
+    Segment.create.mockImplementation(async (payload) => payload);
 
     getVideoRecordById.mockResolvedValue({
-      id: 101
+      id: 101,
+      filename: 'demo.mp4'
     });
+    resolveVideoAbsolutePath.mockReturnValue('/tmp/uploads/videos/demo.mp4');
 
     getAnalysisRecordByVideoId.mockResolvedValue({
       id: 501,
+      analysisOptions: {
+        extractSubtitles: true,
+        parseAudio: true
+      },
       backgrounds: [
         {
           id: 'background_cafe',
@@ -146,6 +186,98 @@ describe('segmentService', () => {
         }
       ]
     });
+  });
+
+  test('uses overall-analysis anchors directly during split instead of re-running segment Gemini analysis', async () => {
+    const startResult = await startSplitVideo({
+      videoId: 101,
+      timeAnchors: [
+        {
+          startTime: 0,
+          endTime: 4,
+          sceneSummary: '角色在咖啡馆里落座',
+          scenePrompt: '@主角 在 #咖啡馆内景 落座',
+          backgroundId: 'background_cafe',
+          backgroundName: '咖啡馆内景',
+          shots: [
+            {
+              id: 'shot_anchor_1',
+              startTime: 0,
+              endTime: 2.4,
+              summary: '主角推门进入咖啡馆',
+              prompt: '@主角 推门进入 #咖啡馆内景',
+              sceneNames: ['咖啡馆内景'],
+              characterNames: ['主角'],
+              representativeFrameTime: 1.1,
+              representativeFrameNote: '主角进门时的代表帧',
+              speech: {
+                transcript: '我到了。',
+                subtitleLines: [
+                  {
+                    id: 'subtitle_1',
+                    startTime: 0,
+                    endTime: 1.1,
+                    text: '我到了。'
+                  }
+                ],
+                hasDialogue: true,
+                extractionStatus: 'completed',
+                sourceOfTruth: 'extracted'
+              }
+            }
+          ]
+        }
+      ]
+    });
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      if (Segment.create.mock.calls.length || failTask.mock.calls.length || completeTask.mock.calls.length) {
+        break;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    expect(startResult).toMatchObject({
+      task_id: 'split-task-201',
+      status: 'pending'
+    });
+    expect(analyzeSegmentContent).not.toHaveBeenCalled();
+    expect(failTask).not.toHaveBeenCalled();
+    expect(Segment.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        videoId: 101,
+        segmentIndex: 0,
+        analysis: expect.objectContaining({
+          sceneSummary: '角色在咖啡馆里落座',
+          scenePrompt: '@主角 在 #咖啡馆内景 落座',
+          backgroundId: 'background_cafe',
+          backgroundName: '咖啡馆内景',
+          shots: [
+            expect.objectContaining({
+              id: 'shot_anchor_1',
+              prompt: '@主角 推门进入 #咖啡馆内景',
+              sourceFilePath: expect.stringContaining('shots/segment-0-shot_anchor_1-source'),
+              representativeFrameImagePath: expect.stringContaining(
+                'frames/segment-0-shot_anchor_1-representative-frame'
+              ),
+              speech: expect.objectContaining({
+                transcript: '我到了。',
+                subtitleFilePath: expect.stringContaining('subtitles/segment-0-shot_anchor_1-speech')
+              })
+            })
+          ]
+        })
+      })
+    );
+    expect(completeTask).toHaveBeenCalledWith(
+      'split-task-201',
+      expect.objectContaining({
+        video_id: 101,
+        segment_count: 1
+      }),
+      'Video split completed'
+    );
   });
 
   test('aligns latest_generation_task with merge input source while preserving latest attempt state', async () => {
