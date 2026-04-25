@@ -5,7 +5,6 @@ import {
   getEditableStyleTemplateDefaults,
   normalizeStyleMode
 } from '../../shared/styleTemplates.js';
-import { analyzeShotSpeech as analyzeShotSpeechWithGemini } from './geminiService.js';
 import { extractAudioClip } from './ffmpegService.js';
 import {
   createOutputRelativePath,
@@ -238,36 +237,6 @@ const cleanupShotSpeechAssets = async (shots = []) => {
   await Promise.allSettled(assetPaths.map((assetPath) => removeFileIfExists(assetPath)));
 };
 
-const extractShotSpeechPayload = async ({
-  segment,
-  shot,
-  analysisOptions
-}) => {
-  try {
-    const sourceVideoAbsolutePath = shot?.sourceFilePath ? resolveUploadPath(shot.sourceFilePath) : '';
-    const sourceAudioAbsolutePath = shot?.sourceAudioFilePath ? resolveUploadPath(shot.sourceAudioFilePath) : '';
-
-    return await analyzeShotSpeechWithGemini({
-      segment,
-      shot,
-      shotVideoAbsolutePath: sourceVideoAbsolutePath,
-      shotAudioAbsolutePath: sourceAudioAbsolutePath,
-      analysisOptions
-    });
-  } catch (error) {
-    logger.warn('Shot speech extraction failed, falling back to empty speech payload.', {
-      message: error.message,
-      segmentId: segment?.id,
-      shotId: shot?.id
-    });
-
-    return createEmptySpeech({
-      extractionStatus: 'failed',
-      extractionError: error.message
-    });
-  }
-};
-
 const rebuildShotSpeechAssetsForSegment = async ({
   segment,
   shots = [],
@@ -320,30 +289,39 @@ const rebuildShotSpeechAssetsForSegment = async ({
         durationSeconds: Number(shot?.durationSeconds ?? 0),
         fallbackStatus: 'idle'
       });
-      const shouldReuseExistingSpeech = Boolean(
+      const previousSpeech = normalizeShotSpeech(previousShot?.speech ?? null, {
+        durationSeconds: Number(shot?.durationSeconds ?? 0),
+        fallbackStatus: 'idle'
+      });
+      const wholeVideoSpeech =
         existingSpeech.sourceOfTruth === 'edited_text' ||
-          existingSpeech.transcript ||
-          existingSpeech.subtitleLines.length
-      );
-      const extractedSpeech = shouldReuseExistingSpeech
-        ? {
-            ...existingSpeech,
-            extractionStatus: existingSpeech.extractionStatus || 'completed'
-          }
-        : await extractShotSpeechPayload({
-            segment,
-            shot: {
-              ...shot,
-              sourceAudioFilePath: String(sourceAudio?.filePath ?? '').trim(),
-              sourceAudioFileUrl: String(sourceAudio?.fileUrl ?? '').trim()
-            },
-            analysisOptions: normalizedOptions
-          });
+        existingSpeech.transcript ||
+        existingSpeech.subtitleLines.length ||
+        existingSpeech.hasDialogue
+          ? existingSpeech
+          : previousSpeech.sourceOfTruth === 'edited_text' ||
+              previousSpeech.transcript ||
+              previousSpeech.subtitleLines.length ||
+              previousSpeech.hasDialogue
+            ? previousSpeech
+            : createEmptySpeech({
+                extractionStatus: 'idle'
+              });
       const persistedSpeech = await persistShotSubtitleFile({
         segment,
         shot,
         shotIndex,
-        speech: extractedSpeech,
+        speech: {
+          ...wholeVideoSpeech,
+          extractionStatus:
+            wholeVideoSpeech.extractionStatus ||
+            (wholeVideoSpeech.transcript || wholeVideoSpeech.subtitleLines.length || wholeVideoSpeech.hasDialogue
+              ? 'completed'
+              : 'idle'),
+          extractionError:
+            wholeVideoSpeech.extractionError ||
+            ''
+        },
         previousSpeech: previousShot?.speech ?? null
       });
 
@@ -423,8 +401,9 @@ const shotSpeechAssetsNeedRebuild = (shots = [], analysisOptions = null) => {
       durationSeconds: Number(shot?.durationSeconds ?? 0),
       fallbackStatus: 'idle'
     });
+    const requiresSubtitleFile = Boolean(speech.transcript || speech.subtitleLines.length || speech.hasDialogue);
 
-    return !sourceAudioFilePath || !speech.subtitleFilePath || !speech.extractionStatus;
+    return !sourceAudioFilePath || (requiresSubtitleFile && !speech.subtitleFilePath);
   });
 };
 

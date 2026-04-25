@@ -36,6 +36,27 @@ const buildVideoAnalysisPromptSections = ({ video, metadata, analysisOptions = n
     styleTemplates: normalizedOptions.styleTemplates,
     templateKey: 'videoAnalysisStylePrompt'
   });
+  const speechEnabled = normalizedOptions.extractSubtitles || normalizedOptions.parseAudio;
+  const speechSchema = speechEnabled
+    ? {
+        speech: {
+          transcript: '镜头对白全文，没有对白时返回空字符串',
+          subtitleLines: [
+            {
+              id: 'subtitle_1',
+              startTime: 0,
+              endTime: 0.8,
+              text: '第一句字幕'
+            }
+          ],
+          speechStyle: '语速、停顿、情绪、语气、说话力度、口型明显程度等中文说明',
+          hasDialogue: true,
+          extractionStatus: 'completed',
+          extractionError: '',
+          sourceOfTruth: 'extracted'
+        }
+      }
+    : {};
 
   const fixedStructurePrompt = [
     '你是一名资深视频理解与影视拆解助手。',
@@ -43,7 +64,9 @@ const buildVideoAnalysisPromptSections = ({ video, metadata, analysisOptions = n
     '不要输出 Markdown，不要输出解释，不要输出额外文本。',
     '这次整片分析只返回剧情、角色（含状态时间线）、大剧情片段和每个大片段下的小镜头真值。',
     '场景资源库会由后端根据 timeAnchors 派生；不要改写 JSON 结构，也不要删除任何约定字段。',
-    '不要返回 backgrounds、speech 或 characterStateRefs 这三个顶层或镜头级额外字段；角色状态连续性只放在 characters[*].stateTimeline 中。',
+    speechEnabled
+      ? '不要返回 backgrounds 或 characterStateRefs 这两个顶层或镜头级额外字段；角色状态连续性只放在 characters[*].stateTimeline 中；小镜头 speech 需要在这次整片理解里一次性返回。'
+      : '不要返回 backgrounds、speech 或 characterStateRefs 这三个顶层或镜头级额外字段；角色状态连续性只放在 characters[*].stateTimeline 中。',
     '返回结构必须完全符合：',
     JSON.stringify(
       {
@@ -90,7 +113,8 @@ const buildVideoAnalysisPromptSections = ({ video, metadata, analysisOptions = n
                 sceneNames: ['场景名称'],
                 characterNames: ['角色名'],
                 representativeFrameTime: 1.1,
-                representativeFrameNote: '该镜头的典型帧说明'
+                representativeFrameNote: '该镜头的典型帧说明',
+                ...speechSchema
               }
             ]
           }
@@ -124,14 +148,24 @@ const buildVideoAnalysisPromptSections = ({ video, metadata, analysisOptions = n
     '15. shots 必须尽量按真实镜头边界细分，优先对齐剪辑点、景别变化、机位变化、人物左中右站位变化、动作 beat、视线切换、焦点转移和说话节奏变化。',
     '16. 对 60 秒左右的视频，要尽量把观众能明显感知到的真实镜头都拆出来；除非画面长时间稳定且动作单一，否则单个 shot 尽量不要超过 4 秒。',
     '17. 每个 shot 的 startTime 和 endTime 都是整片绝对秒数，严格落在所属 timeAnchor 内，尽量精确到 0.1 秒。',
-    '18. 每个 shot 都必须返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote，sceneNames 和 characterNames 都不能为空。',
+    speechEnabled
+      ? '18. 每个 shot 都必须返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote、speech，sceneNames 和 characterNames 都不能为空。'
+      : '18. 每个 shot 都必须返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote，sceneNames 和 characterNames 都不能为空。',
     '19. shot.summary 要说明镜头核心动作、主体关系和切分依据，而不是只复述剧情。',
     '20. representativeFrameTime 必须选该镜头最有代表性的画面，不要机械取中点；representativeFrameNote 说明为什么这帧最适合作为预览和参考图。',
     '21. shot.prompt 必须直接服务镜头级视频生成，并同时包含至少一个 @角色名 和至少一个 #场景名。',
     '22. shot.prompt 必须写清角色数量、主次关系、人物左中右位置、前景/中景/后景层次、朝向、视线、姿态、动作轨迹、进出画方式、遮挡关系、景别、机位角度、镜头运动和光线氛围。',
     '23. 如果角色是不完整出镜、背影、手部、反打或 POV，也必须绑定稳定的人物名；如果一个 shot 涉及多个场景或多个角色，需要在 sceneNames 和 characterNames 中列全。',
-    '24. 所有 prompt 都要明确不要字幕、不要文字、不要 UI、不要水印。',
-    '25. 输出必须是合法 JSON，字段名保持与示例完全一致。'
+    speechEnabled
+      ? '24. 当 analysis_options 开启字幕或音频解析时，每个 shot 的 speech 也必须在这次整片理解里一次性返回，不允许留给后续小镜头单独分析。subtitleLines 的时间必须是相对当前 shot 本地时间，不是整片绝对时间。'
+      : '24. 这次整片理解不要返回 shot 级 speech，后续也不会从这个返回体读取字幕或音频解析结果。',
+    speechEnabled
+      ? '25. speech.transcript 要写该镜头完整对白；speech.subtitleLines 要按时间升序、无重叠；speech.speechStyle 要概括语速、停顿、情绪、语气、说话力度和口型明显程度；无对白时 hasDialogue=false、transcript=""、subtitleLines=[].'
+      : '25. 所有 prompt 都要明确不要字幕、不要文字、不要 UI、不要水印。',
+    speechEnabled
+      ? '26. 所有 prompt 都要明确不要字幕、不要文字、不要 UI、不要水印。'
+      : '26. 输出必须是合法 JSON，字段名保持与示例完全一致。',
+    speechEnabled ? '27. 输出必须是合法 JSON，字段名保持与示例完全一致。' : ''
   ].join('\n');
 
   const finalPrompt = [fixedStructurePrompt, `风格模式：${styleModeLabel}`, `风格段（可编辑）：\n${stylePrompt}`].join(
