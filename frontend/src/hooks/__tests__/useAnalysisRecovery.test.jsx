@@ -142,10 +142,14 @@ describe('useAnalysis recovery flow', () => {
       await result.current.runAnalysis();
     });
 
-    expect(analyzeVideo).toHaveBeenCalledWith(501, {
-      extractSubtitles: true,
-      parseAudio: true
-    });
+    expect(analyzeVideo).toHaveBeenCalledWith(
+      501,
+      expect.objectContaining({
+        extractSubtitles: true,
+        parseAudio: true,
+        styleMode: 'realistic'
+      })
+    );
     expect(getAnalysis).toHaveBeenCalledWith(501);
     expect(sleep).toHaveBeenCalled();
     expect(useAnalysisStore.getState().analysis).toEqual(analysisPayload);
@@ -250,5 +254,64 @@ describe('useAnalysis recovery flow', () => {
     expect(runResult).toBeNull();
     expect(useAnalysisStore.getState().analysis).toBeNull();
     expect(useAnalysisStore.getState().error).toBe('');
+  });
+
+  it('keeps progress moving while whole-video analysis is still running', async () => {
+    jest.useFakeTimers();
+
+    try {
+      const deferredAnalysis = createDeferred();
+      const analysisPayload = {
+        id: 9004,
+        video_id: 505,
+        plot: '主角走进会议室。',
+        characters: [],
+        backgrounds: [],
+        time_anchors: []
+      };
+
+      analyzeVideo.mockImplementation(() => deferredAnalysis.promise);
+
+      useVideoStore.setState({
+        currentVideo: {
+          id: 505,
+          filename: 'analysis-heartbeat.mp4',
+          status: 'uploaded'
+        }
+      });
+
+      const { result, unmount } = renderHook(() => useAnalysis());
+
+      let runResultPromise;
+
+      await act(async () => {
+        runResultPromise = result.current.runAnalysis();
+        await Promise.resolve();
+      });
+
+      expect(useAnalysisStore.getState().progress).toBe(12);
+      expect(useAnalysisStore.getState().status).toBe('processing');
+
+      await act(async () => {
+        jest.advanceTimersByTime(12000);
+        await Promise.resolve();
+      });
+
+      expect(useAnalysisStore.getState().progress).toBeGreaterThan(12);
+      expect(useAnalysisStore.getState().statusMessage).toMatch(/已等待 \d+ 秒/);
+
+      deferredAnalysis.resolve(analysisPayload);
+
+      await act(async () => {
+        await runResultPromise;
+      });
+
+      expect(useAnalysisStore.getState().status).toBe('completed');
+      expect(useAnalysisStore.getState().analysis).toEqual(analysisPayload);
+
+      unmount();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });

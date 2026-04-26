@@ -183,7 +183,15 @@ const MainPage = () => {
         : backendStatus === 'offline'
           ? '离线'
           : '检查中';
-  const analysisSourceLabel = analysis?.is_mock ? 'Mock 回退' : analysis ? '真实 Gemini' : '等待分析';
+  const analysisSourceLabel = error
+    ? '分析失败'
+    : loading || status === 'processing'
+      ? '分析中'
+      : analysis?.is_mock
+        ? 'Mock 回退'
+        : analysis
+          ? '真实 Gemini'
+          : '等待分析';
 
   const topMetrics = [
     {
@@ -229,7 +237,12 @@ const MainPage = () => {
     {
       id: 'analysis',
       label: '整片分析',
-      description: analysis ? '剧情、角色、场景和切分预案已完成。' : '发送整片视频做场景和角色理解。',
+      description:
+        loading || status === 'processing'
+          ? 'Gemini 正在处理整片剧情、角色、场景和镜头边界。'
+          : analysis
+            ? '剧情、角色、场景和切分预案已完成。'
+            : '发送整片视频做场景和角色理解。',
       status: analysisStageStatus,
       meta: analysis ? analysisSourceLabel : statusMessage || '等待开始分析'
     },
