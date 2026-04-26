@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 const SPLIT_TASK_STORAGE_KEY = 'fanshi.activeSplitTaskId';
 const MERGE_TASK_STORAGE_KEY = 'fanshi.activeMergeTaskId';
+const SEGMENT_EXPORT_TASK_STORAGE_KEY = 'fanshi.activeSegmentExportTaskId';
 const GENERATION_RATIO_STORAGE_KEY = 'fanshi.videoRatio';
 const DEFAULT_VIDEO_RATIO = '16:9';
 
@@ -37,6 +38,17 @@ const generationSessionStorage = {
   },
   clearMergeTaskId: () => {
     getSessionStorage()?.removeItem(MERGE_TASK_STORAGE_KEY);
+  },
+  getSegmentExportTaskId: () => getSessionStorage()?.getItem(SEGMENT_EXPORT_TASK_STORAGE_KEY) || '',
+  setSegmentExportTaskId: (taskId) => {
+    const storage = getSessionStorage();
+
+    if (storage && taskId) {
+      storage.setItem(SEGMENT_EXPORT_TASK_STORAGE_KEY, taskId);
+    }
+  },
+  clearSegmentExportTaskId: () => {
+    getSessionStorage()?.removeItem(SEGMENT_EXPORT_TASK_STORAGE_KEY);
   },
   getVideoRatio: () => {
     const persistedRatio = getSessionStorage()?.getItem(GENERATION_RATIO_STORAGE_KEY) || '';
@@ -112,12 +124,23 @@ const syncMergeTaskStorage = (progressState) => {
   generationSessionStorage.clearMergeTaskId();
 };
 
+const syncSegmentExportTaskStorage = (progressState) => {
+  if (progressState.taskId) {
+    generationSessionStorage.setSegmentExportTaskId(progressState.taskId);
+    return;
+  }
+
+  generationSessionStorage.clearSegmentExportTaskId();
+};
+
 const buildResetGenerationState = () => {
   const nextMergeProgress = createInitialProgressState('等待拼接');
   const nextSplitProgress = createInitialProgressState('等待分割');
+  const nextSegmentExportProgress = createInitialProgressState('等待片段导出');
 
   syncMergeTaskStorage(nextMergeProgress);
   syncSplitTaskStorage(nextSplitProgress);
+  syncSegmentExportTaskStorage(nextSegmentExportProgress);
 
   return {
     segments: [],
@@ -125,6 +148,7 @@ const buildResetGenerationState = () => {
     tasks: [],
     mergeProgress: nextMergeProgress,
     splitProgress: nextSplitProgress,
+    segmentExportProgress: nextSegmentExportProgress,
     backgroundAssetsLoading: false,
     backgroundAssetsError: '',
     segmentsLoading: false,
@@ -139,6 +163,7 @@ const useGenerationStore = create((set) => ({
   tasks: [],
   mergeProgress: createInitialProgressState('等待拼接'),
   splitProgress: createInitialProgressState('等待分割'),
+  segmentExportProgress: createInitialProgressState('等待片段导出'),
   backgroundAssetsLoading: false,
   backgroundAssetsError: '',
   segmentsLoading: false,
@@ -245,6 +270,52 @@ const useGenerationStore = create((set) => ({
 
       return {
         mergeProgress: nextMergeProgress
+      };
+    }),
+  beginSegmentExportProgress: ({
+    taskId = '',
+    status = 'pending',
+    progress = 0,
+    message = '片段导出任务已提交'
+  }) =>
+    set(() => {
+      const nextSegmentExportProgress = {
+        ...createInitialProgressState('等待片段导出'),
+        taskId,
+        status,
+        progress,
+        message,
+        updatedAt: new Date().toISOString()
+      };
+
+      syncSegmentExportTaskStorage(nextSegmentExportProgress);
+
+      return {
+        segmentExportProgress: nextSegmentExportProgress
+      };
+    }),
+  setSegmentExportProgress: (partialProgress) =>
+    set((state) => {
+      const nextSegmentExportProgress = shouldIgnoreTaskScopedUpdate(
+        state.segmentExportProgress.taskId,
+        getNormalizedTaskId(partialProgress)
+      )
+        ? state.segmentExportProgress
+        : buildProgressState(state.segmentExportProgress, partialProgress);
+
+      syncSegmentExportTaskStorage(nextSegmentExportProgress);
+
+      return {
+        segmentExportProgress: nextSegmentExportProgress
+      };
+    }),
+  resetSegmentExportProgress: () =>
+    set(() => {
+      const nextSegmentExportProgress = createInitialProgressState('等待片段导出');
+      syncSegmentExportTaskStorage(nextSegmentExportProgress);
+
+      return {
+        segmentExportProgress: nextSegmentExportProgress
       };
     }),
   beginSplitProgress: ({ taskId = '', status = 'pending', progress = 0, message = '分割任务已提交' }) =>

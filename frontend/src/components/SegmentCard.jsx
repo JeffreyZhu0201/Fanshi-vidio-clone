@@ -118,6 +118,31 @@ const getGenerationTaskStatusLabel = (task, fallbackLabel = '视频待生成') =
   return fallbackLabel;
 };
 
+const getDurationComparisonLabel = (referenceDurationSeconds = null, generatedDurationSeconds = null) => {
+  const normalizedReferenceDuration =
+    Number.isFinite(Number(referenceDurationSeconds)) && Number(referenceDurationSeconds) > 0
+      ? Number(referenceDurationSeconds)
+      : null;
+  const normalizedGeneratedDuration =
+    Number.isFinite(Number(generatedDurationSeconds)) && Number(generatedDurationSeconds) > 0
+      ? Number(generatedDurationSeconds)
+      : null;
+
+  if (normalizedReferenceDuration === null && normalizedGeneratedDuration === null) {
+    return '';
+  }
+
+  if (normalizedReferenceDuration !== null && normalizedGeneratedDuration !== null) {
+    return `原片参考 ${formatDuration(normalizedReferenceDuration)} / 生成结果 ${formatDuration(normalizedGeneratedDuration)}`;
+  }
+
+  if (normalizedReferenceDuration !== null) {
+    return `原片参考 ${formatDuration(normalizedReferenceDuration)} / 生成结果待返回`;
+  }
+
+  return `生成结果 ${formatDuration(normalizedGeneratedDuration)}`;
+};
+
 const shouldShowGenerationProgress = (task) => {
   if (!task) {
     return false;
@@ -1285,6 +1310,12 @@ const SegmentCard = ({
                         <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">
                           当前最终提示词
                         </p>
+                        <p className="mt-2 text-[11px] leading-5 text-white/55">
+                          {getDurationComparisonLabel(
+                            shot.durationSeconds,
+                            shot.latestCompletedGenerationTask?.actual_duration_seconds
+                          ) || '当前镜头生成后会在这里显示真实成品时长。'}
+                        </p>
                         <div className="mt-2 text-[12px] leading-6 text-white/82">
                           {shot.prompt ? renderPromptTokenPreview(shot.prompt) : '等待镜头提示词。'}
                         </div>
@@ -1351,6 +1382,14 @@ const SegmentCard = ({
                 />
               </div>
             ) : null}
+
+            <p className="mt-3 text-[12px] leading-5 text-white/60">
+              {getDurationComparisonLabel(
+                segmentDuration,
+                segment.latestCompletedGenerationTask?.actual_duration_seconds ??
+                  shotGenerationSummary?.actual_duration_seconds
+              ) || '当前大片段生成后会在这里显示真实成品时长。'}
+            </p>
 
             {assembledSegmentUrl ? (
               <video className="segment-workbench-video mt-3" src={assembledSegmentUrl} controls preload="metadata" />
@@ -2030,6 +2069,12 @@ const SegmentCard = ({
 
                       <div className="rounded-[16px] border border-white/10 bg-white/[0.04] px-3 py-3">
                         <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">新镜头预览</p>
+                        <p className="mt-2 text-[11px] leading-5 text-white/55">
+                          {getDurationComparisonLabel(
+                            Number(shotDraft.durationSeconds),
+                            shotDraft.latestCompletedGenerationTask?.actual_duration_seconds
+                          ) || '保存并生成后，这里会显示镜头真实成品时长。'}
+                        </p>
                         {shotDraft.generatedUrl ? (
                           <video className="segment-workbench-video mt-2" src={shotDraft.generatedUrl} controls preload="metadata" />
                         ) : (

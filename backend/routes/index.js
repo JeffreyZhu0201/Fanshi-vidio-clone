@@ -11,6 +11,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { monitoringEventBodySchema } from '../utils/validationSchemas.js';
 import analysisRouter from './analysis.js';
 import backgroundAssetsRouter from './backgroundAssets.js';
+import exportsRouter from './exports.js';
 import generationRouter from './generation.js';
 import mergeRouter from './merge.js';
 import resourceImagesRouter from './resourceImages.js';
@@ -34,6 +35,7 @@ router.use('/background-assets', backgroundAssetsRouter);
 router.use('/resource-images', resourceImagesRouter);
 router.use('/segments', segmentsRouter);
 router.use('/generation', generationRouter);
+router.use('/exports', exportsRouter);
 router.use('/merge', mergeRouter);
 router.use('/tasks', tasksRouter);
 

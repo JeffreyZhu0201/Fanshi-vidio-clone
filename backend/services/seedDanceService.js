@@ -1227,7 +1227,9 @@ const finalizeRemoteGenerationResult = async ({
   taskId,
   basename,
   targetDurationSeconds,
-  expectAudioTrack = false
+  expectAudioTrack = false,
+  trimToRequestedDuration = true,
+  minimumAcceptableDurationSeconds = null
 }) => {
   const requestedDuration = normalizeRequestedSeedDanceDuration(targetDurationSeconds);
   const providerDuration = resolveSeedDanceProviderDuration(targetDurationSeconds);
@@ -1235,20 +1237,45 @@ const finalizeRemoteGenerationResult = async ({
     extractRemoteVideoUrl(completedTask),
     basename
   );
+  let trimmedToRequested = false;
 
-  if (requestedDuration + 0.05 < providerDuration) {
+  if (trimToRequestedDuration && requestedDuration + 0.05 < providerDuration) {
     downloadedAsset = await trimDownloadedSeedDanceVideo({
       downloadedAsset,
       basename,
       targetDurationSeconds: requestedDuration
     });
+    trimmedToRequested = true;
   }
 
-  await validateDownloadedSeedDanceVideo({
+  const metadata = await validateDownloadedSeedDanceVideo({
     downloadedAsset,
     expectAudioTrack,
     contextLabel: 'Seedance 远端结果'
   });
+  const actualDurationSeconds =
+    Number.isFinite(Number(metadata?.durationSecondsExact)) && Number(metadata.durationSecondsExact) > 0
+      ? Number(Number(metadata.durationSecondsExact).toFixed(2))
+      : Number.isFinite(Number(metadata?.duration)) && Number(metadata.duration) > 0
+        ? Number(Number(metadata.duration).toFixed(2))
+        : null;
+  const normalizedMinimumAcceptableDurationSeconds =
+    Number.isFinite(Number(minimumAcceptableDurationSeconds)) && Number(minimumAcceptableDurationSeconds) > 0
+      ? Number(Number(minimumAcceptableDurationSeconds).toFixed(2))
+      : null;
+
+  if (
+    normalizedMinimumAcceptableDurationSeconds !== null &&
+    actualDurationSeconds !== null &&
+    actualDurationSeconds + 0.2 < normalizedMinimumAcceptableDurationSeconds
+  ) {
+    await removeFileIfExists(downloadedAsset.filePath);
+    throw new Error(
+      `Seedance 远端结果时长只有 ${actualDurationSeconds.toFixed(2)} 秒，明显短于对白完成所需的 ${normalizedMinimumAcceptableDurationSeconds.toFixed(
+        2
+      )} 秒，已判定为失败，请重试。`
+    );
+  }
 
   return {
     filePath: downloadedAsset.filePath,
@@ -1259,6 +1286,8 @@ const finalizeRemoteGenerationResult = async ({
     isMock: false,
     requestedDurationSeconds: requestedDuration,
     providerDurationSeconds: providerDuration,
+    actualDurationSeconds,
+    trimmedToRequested,
     fallbackReason: '',
     providerError: ''
   };
@@ -1269,7 +1298,9 @@ const resumeRemoteGenerationTask = async ({
   basename = 'generated-segment',
   duration,
   onProgress,
-  expectAudioTrack = false
+  expectAudioTrack = false,
+  trimToRequestedDuration = true,
+  minimumAcceptableDurationSeconds = null
 }) => {
   const safeRemoteTaskId = String(remoteTaskId ?? '').trim();
 
@@ -1286,7 +1317,9 @@ const resumeRemoteGenerationTask = async ({
     taskId: safeRemoteTaskId,
     basename,
     targetDurationSeconds: duration,
-    expectAudioTrack
+    expectAudioTrack,
+    trimToRequestedDuration,
+    minimumAcceptableDurationSeconds
   });
 };
 
@@ -1304,7 +1337,9 @@ const generateSegment = async ({
   expectAudioTrack = Boolean(generateAudio),
   ratio,
   duration,
-  onProgress
+  onProgress,
+  trimToRequestedDuration = true,
+  minimumAcceptableDurationSeconds = null
 }) => {
   const requestedDuration = assertSeedDanceRequestedDurationSupported(duration, '当前片段');
   const providerDuration = resolveSeedDanceProviderDuration(duration);
@@ -1363,7 +1398,9 @@ const generateSegment = async ({
         taskId,
         basename,
         targetDurationSeconds: requestedDuration,
-        expectAudioTrack
+        expectAudioTrack,
+        trimToRequestedDuration,
+        minimumAcceptableDurationSeconds
       });
 
       return {
@@ -1399,6 +1436,7 @@ export {
   canUseRemoteSeedDance,
   getSeedDanceProviderStatus,
   assertSeedDanceReady,
+  assertSeedDanceRequestedDurationSupported,
   estimateSeedDanceTaskProgress,
   getSeedDanceRemoteStatusLabel,
   extractSeedDanceTaskStatus,

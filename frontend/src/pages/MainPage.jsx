@@ -104,6 +104,7 @@ const MainPage = () => {
     backgroundAssetsLoading,
     backgroundAssetsError,
     mergeProgress,
+    segmentExportProgress,
     videoRatio,
     analyzingSegmentId,
     optimizingSegmentId,
@@ -123,7 +124,9 @@ const MainPage = () => {
     generateShotVideo,
     generateAllShotsForSegment,
     startMerge,
-    downloadMergedVideo
+    downloadMergedVideo,
+    startSegmentExportArchive,
+    downloadSegmentArchive
   } = useGeneration();
 
   const generatedSegments = segments.filter((segment) => segment.generatedUrl).length;
@@ -964,8 +967,11 @@ const MainPage = () => {
                 video={currentVideo}
                 segments={segments}
                 mergeProgress={mergeProgress}
+                segmentExportProgress={segmentExportProgress}
                 onMerge={startMerge}
                 onDownload={downloadMergedVideo}
+                onExportSegments={startSegmentExportArchive}
+                onDownloadSegments={downloadSegmentArchive}
                 compactMode
                 dockMode
               />

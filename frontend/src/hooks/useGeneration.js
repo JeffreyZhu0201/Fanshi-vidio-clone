@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import {
   analyzeSegment,
+  downloadSegmentExport,
   downloadVideo,
   generateSegment,
   generateShot,
@@ -10,10 +11,12 @@ import {
   getGenerationTask,
   getShotGenerationTask,
   getMergeProgress,
+  getSegmentExportProgress,
   mergeVideos,
   optimizePrompt,
-  updateSegmentShots,
-  toAbsoluteAssetUrl
+  startSegmentExport,
+  toAbsoluteAssetUrl,
+  updateSegmentShots
 } from '../services/api.js';
 import { websocketService } from '../services/websocket.js';
 import { useAnalysisStore } from '../store/analysisStore.js';
@@ -121,6 +124,24 @@ const normalizeShotTask = (taskPayload) => {
     fallback_reason: taskPayload.fallback_reason ?? '',
     provider_error: taskPayload.provider_error ?? '',
     source: taskPayload.source ?? '',
+    requested_duration_seconds:
+      Number.isFinite(Number(taskPayload.requested_duration_seconds)) &&
+      Number(taskPayload.requested_duration_seconds) >= 0
+        ? Number(Number(taskPayload.requested_duration_seconds).toFixed(2))
+        : null,
+    provider_duration_seconds:
+      Number.isFinite(Number(taskPayload.provider_duration_seconds)) &&
+      Number(taskPayload.provider_duration_seconds) >= 0
+        ? Number(Number(taskPayload.provider_duration_seconds).toFixed(2))
+        : null,
+    actual_duration_seconds:
+      Number.isFinite(Number(taskPayload.actual_duration_seconds)) &&
+      Number(taskPayload.actual_duration_seconds) >= 0
+        ? Number(Number(taskPayload.actual_duration_seconds).toFixed(2))
+        : null,
+    has_dialogue:
+      typeof taskPayload.has_dialogue === 'boolean' ? Boolean(taskPayload.has_dialogue) : null,
+    trimmed_to_requested: Boolean(taskPayload.trimmed_to_requested),
     sent_reference_images: Array.isArray(taskPayload.sent_reference_images) ? taskPayload.sent_reference_images : [],
     sent_reference_videos: Array.isArray(taskPayload.sent_reference_videos) ? taskPayload.sent_reference_videos : [],
     sent_reference_audios: Array.isArray(taskPayload.sent_reference_audios) ? taskPayload.sent_reference_audios : [],
@@ -160,6 +181,24 @@ const normalizeGenerationTask = (taskPayload) => {
     fallback_reason: taskPayload.fallback_reason ?? '',
     provider_error: taskPayload.provider_error ?? '',
     source: taskPayload.source ?? '',
+    requested_duration_seconds:
+      Number.isFinite(Number(taskPayload.requested_duration_seconds)) &&
+      Number(taskPayload.requested_duration_seconds) >= 0
+        ? Number(Number(taskPayload.requested_duration_seconds).toFixed(2))
+        : null,
+    provider_duration_seconds:
+      Number.isFinite(Number(taskPayload.provider_duration_seconds)) &&
+      Number(taskPayload.provider_duration_seconds) >= 0
+        ? Number(Number(taskPayload.provider_duration_seconds).toFixed(2))
+        : null,
+    actual_duration_seconds:
+      Number.isFinite(Number(taskPayload.actual_duration_seconds)) &&
+      Number(taskPayload.actual_duration_seconds) >= 0
+        ? Number(Number(taskPayload.actual_duration_seconds).toFixed(2))
+        : null,
+    has_dialogue:
+      typeof taskPayload.has_dialogue === 'boolean' ? Boolean(taskPayload.has_dialogue) : null,
+    trimmed_to_requested: Boolean(taskPayload.trimmed_to_requested),
     sent_reference_images: Array.isArray(taskPayload.sent_reference_images) ? taskPayload.sent_reference_images : [],
     sent_reference_videos: Array.isArray(taskPayload.sent_reference_videos) ? taskPayload.sent_reference_videos : [],
     sent_reference_audios: Array.isArray(taskPayload.sent_reference_audios) ? taskPayload.sent_reference_audios : [],
@@ -206,6 +245,23 @@ const normalizeShotAssemblyPayload = (payload) => {
     error_message: payload.error_message ?? '',
     assembly_generation_task_id: Number(payload.assembly_generation_task_id ?? 0) || null,
     source: payload.source ?? '',
+    requested_duration_seconds:
+      Number.isFinite(Number(payload.requested_duration_seconds)) &&
+      Number(payload.requested_duration_seconds) >= 0
+        ? Number(Number(payload.requested_duration_seconds).toFixed(2))
+        : null,
+    provider_duration_seconds:
+      Number.isFinite(Number(payload.provider_duration_seconds)) &&
+      Number(payload.provider_duration_seconds) >= 0
+        ? Number(Number(payload.provider_duration_seconds).toFixed(2))
+        : null,
+    actual_duration_seconds:
+      Number.isFinite(Number(payload.actual_duration_seconds)) &&
+      Number(payload.actual_duration_seconds) >= 0
+        ? Number(Number(payload.actual_duration_seconds).toFixed(2))
+        : null,
+    has_dialogue: typeof payload.has_dialogue === 'boolean' ? Boolean(payload.has_dialogue) : null,
+    trimmed_to_requested: Boolean(payload.trimmed_to_requested),
     started_at: payload.started_at ?? '',
     updated_at: payload.updated_at ?? ''
   };
@@ -263,15 +319,19 @@ const useGeneration = () => {
   const backgroundAssetsError = useGenerationStore((state) => state.backgroundAssetsError);
   const tasks = useGenerationStore((state) => state.tasks);
   const mergeProgress = useGenerationStore((state) => state.mergeProgress);
+  const segmentExportProgress = useGenerationStore((state) => state.segmentExportProgress);
   const updateSegment = useGenerationStore((state) => state.updateSegment);
   const addTask = useGenerationStore((state) => state.addTask);
   const beginMergeProgress = useGenerationStore((state) => state.beginMergeProgress);
   const resetMergeProgress = useGenerationStore((state) => state.resetMergeProgress);
+  const beginSegmentExportProgress = useGenerationStore((state) => state.beginSegmentExportProgress);
+  const resetSegmentExportProgress = useGenerationStore((state) => state.resetSegmentExportProgress);
   const setBackgroundAssets = useGenerationStore((state) => state.setBackgroundAssets);
   const setBackgroundAssetsLoading = useGenerationStore((state) => state.setBackgroundAssetsLoading);
   const setBackgroundAssetsError = useGenerationStore((state) => state.setBackgroundAssetsError);
   const updateTask = useGenerationStore((state) => state.updateTask);
   const setMergeProgress = useGenerationStore((state) => state.setMergeProgress);
+  const setSegmentExportProgress = useGenerationStore((state) => state.setSegmentExportProgress);
   const setSegmentsError = useGenerationStore((state) => state.setSegmentsError);
   const videoRatio = useGenerationStore((state) => state.videoRatio);
   const setVideoRatio = useGenerationStore((state) => state.setVideoRatio);
@@ -292,6 +352,7 @@ const useGeneration = () => {
   const generationPollingTokenRef = useRef(new Map());
   const shotGenerationPollingTokenRef = useRef(new Map());
   const mergePollingTokenRef = useRef(0);
+  const segmentExportPollingTokenRef = useRef(0);
 
   const getResolvedVideoRatio = () => {
     const normalizedRatio = String(useGenerationStore.getState().videoRatio ?? videoRatio ?? '')
@@ -375,6 +436,12 @@ const useGeneration = () => {
   const beginMergePolling = () => {
     const nextToken = mergePollingTokenRef.current + 1;
     mergePollingTokenRef.current = nextToken;
+    return nextToken;
+  };
+
+  const beginSegmentExportPolling = () => {
+    const nextToken = segmentExportPollingTokenRef.current + 1;
+    segmentExportPollingTokenRef.current = nextToken;
     return nextToken;
   };
 
@@ -646,6 +713,28 @@ const useGeneration = () => {
     });
   };
 
+  const markSegmentExportFailure = ({ taskId = '', progress = 0, message, title }) => {
+    if (taskId) {
+      setSegmentExportProgress({
+        taskId,
+        status: 'failed',
+        progress,
+        message: title,
+        errorMessage: message
+      });
+
+      return;
+    }
+
+    resetSegmentExportProgress();
+    setSegmentExportProgress({
+      status: 'failed',
+      progress,
+      message: title,
+      errorMessage: message
+    });
+  };
+
   useEffect(() => {
     mountedRef.current = true;
 
@@ -656,6 +745,7 @@ const useGeneration = () => {
       generationPollingTokenRef.current = new Map();
       shotGenerationPollingTokenRef.current = new Map();
       mergePollingTokenRef.current += 1;
+      segmentExportPollingTokenRef.current += 1;
     };
   }, []);
 
@@ -667,6 +757,7 @@ const useGeneration = () => {
     generationPollingTokenRef.current = new Map();
     shotGenerationPollingTokenRef.current = new Map();
     mergePollingTokenRef.current += 1;
+    segmentExportPollingTokenRef.current += 1;
 
     if (
       mountedRef.current &&
@@ -679,6 +770,17 @@ const useGeneration = () => {
       resetMergeProgress();
     }
 
+    if (
+      mountedRef.current &&
+      previousVideoId &&
+      currentVideo?.id &&
+      Number(previousVideoId) !== Number(currentVideo.id) &&
+      useGenerationStore.getState().segmentExportProgress.taskId
+    ) {
+      generationSessionStorage.clearSegmentExportTaskId();
+      resetSegmentExportProgress();
+    }
+
     if (mountedRef.current) {
       setAnalyzingSegmentId(0);
       setOptimizingSegmentId(0);
@@ -688,7 +790,7 @@ const useGeneration = () => {
     }
 
     previousVideoIdRef.current = currentVideo?.id ?? null;
-  }, [currentVideo?.id, resetMergeProgress]);
+  }, [currentVideo?.id, resetMergeProgress, resetSegmentExportProgress]);
 
   useEffect(() => {
     return websocketService.subscribe('generation:progress', (payload) => {
@@ -825,6 +927,27 @@ const useGeneration = () => {
   }, [setMergeProgress]);
 
   useEffect(() => {
+    return websocketService.subscribe('segment-export:progress', (payload) => {
+      const activeTaskId = useGenerationStore.getState().segmentExportProgress.taskId;
+      const payloadTaskId = payload.task_id ?? payload.taskId ?? '';
+
+      if (!activeTaskId || !payloadTaskId || payloadTaskId !== activeTaskId) {
+        return;
+      }
+
+      setSegmentExportProgress({
+        taskId: payloadTaskId,
+        status: payload.status ?? 'processing',
+        progress: payload.progress ?? 0,
+        message: payload.message ?? '正在导出片段压缩包',
+        errorMessage:
+          payload.error_message ??
+          (payload.status === 'failed' ? payload.message ?? '' : '')
+      });
+    });
+  }, [setSegmentExportProgress]);
+
+  useEffect(() => {
     if (!currentVideo?.id) {
       return undefined;
     }
@@ -878,6 +1001,66 @@ const useGeneration = () => {
       active = false;
     };
   }, [beginMergeProgress, currentVideo?.id, resetMergeProgress, setMergeProgress]);
+
+  useEffect(() => {
+    if (!currentVideo?.id) {
+      return undefined;
+    }
+
+    const persistedTaskId = generationSessionStorage.getSegmentExportTaskId();
+
+    if (!persistedTaskId) {
+      return undefined;
+    }
+
+    let active = true;
+
+    const restoreSegmentExportProgress = async () => {
+      try {
+        const exportTaskPayload = await getSegmentExportProgress(persistedTaskId);
+
+        if (!active) {
+          return;
+        }
+
+        beginSegmentExportProgress({
+          taskId: persistedTaskId,
+          status: exportTaskPayload.status ?? 'processing',
+          progress: exportTaskPayload.progress ?? 0,
+          message: exportTaskPayload.message ?? '正在导出片段压缩包'
+        });
+
+        setSegmentExportProgress({
+          taskId: persistedTaskId,
+          status: exportTaskPayload.status ?? 'processing',
+          progress: exportTaskPayload.progress ?? 0,
+          message: exportTaskPayload.message ?? '正在导出片段压缩包',
+          errorMessage:
+            exportTaskPayload.error_message ??
+            (exportTaskPayload.status === 'failed' ? exportTaskPayload.message ?? '' : '')
+        });
+      } catch (error) {
+        generationSessionStorage.clearSegmentExportTaskId();
+
+        if (!active) {
+          return;
+        }
+
+        resetSegmentExportProgress();
+      }
+    };
+
+    void restoreSegmentExportProgress();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    beginSegmentExportProgress,
+    currentVideo?.id,
+    resetSegmentExportProgress,
+    setSegmentExportProgress
+  ]);
 
   const refreshBackgroundAssets = async (videoId = Number(currentVideo?.id ?? 0), options = {}) => {
     if (!videoId) {
@@ -1536,6 +1719,108 @@ const useGeneration = () => {
     }
   };
 
+  const startSegmentExportArchive = async () => {
+    if (!currentVideo?.id) {
+      beginSegmentExportProgress({
+        taskId: '',
+        status: 'failed',
+        progress: 0,
+        message: '请先上传并处理视频，再执行片段导出。'
+      });
+      setSegmentExportProgress({
+        status: 'failed',
+        progress: 0,
+        message: '请先上传并处理视频，再执行片段导出。',
+        errorMessage: '请先上传并处理视频，再执行片段导出。'
+      });
+      return null;
+    }
+
+    const requestVideoId = Number(currentVideo.id);
+    const requestToken = beginSegmentExportPolling();
+    let activeTaskId = '';
+
+    try {
+      const exportTask = await startSegmentExport(currentVideo.id);
+      activeTaskId = exportTask.task_id ?? '';
+
+      if (isVideoScopedRequestCancelled(requestToken, requestVideoId, segmentExportPollingTokenRef)) {
+        return null;
+      }
+
+      beginSegmentExportProgress({
+        taskId: exportTask.task_id,
+        status: exportTask.status,
+        progress: 0,
+        message: '片段导出任务已提交'
+      });
+
+      websocketService.emitLocal('segment-export:progress', {
+        task_id: exportTask.task_id,
+        status: exportTask.status,
+        progress: 0,
+        message: '片段导出任务已提交'
+      });
+
+      while (!isVideoScopedRequestCancelled(requestToken, requestVideoId, segmentExportPollingTokenRef)) {
+        let exportTaskProgress;
+
+        try {
+          exportTaskProgress = await getSegmentExportProgress(exportTask.task_id);
+        } catch (error) {
+          if (isVideoScopedRequestCancelled(requestToken, requestVideoId, segmentExportPollingTokenRef)) {
+            return null;
+          }
+
+          const errorMessage = getGenerationErrorMessage(error, '片段导出轮询');
+          const currentProgress = useGenerationStore.getState().segmentExportProgress.progress ?? 0;
+
+          markSegmentExportFailure({
+            taskId: exportTask.task_id,
+            progress: currentProgress,
+            message: errorMessage,
+            title: '片段导出任务查询失败'
+          });
+
+          return null;
+        }
+
+        if (isVideoScopedRequestCancelled(requestToken, requestVideoId, segmentExportPollingTokenRef)) {
+          return null;
+        }
+
+        websocketService.emitLocal('segment-export:progress', {
+          task_id: exportTask.task_id,
+          ...exportTaskProgress
+        });
+
+        if (exportTaskProgress.status === 'completed' || exportTaskProgress.status === 'failed') {
+          return exportTaskProgress;
+        }
+
+        await sleep(1200);
+      }
+
+      return null;
+    } catch (error) {
+      if (isVideoScopedRequestCancelled(requestToken, requestVideoId, segmentExportPollingTokenRef)) {
+        return null;
+      }
+
+      const errorMessage = getGenerationErrorMessage(error, activeTaskId ? '片段导出' : '片段导出任务启动');
+      const currentProgress = useGenerationStore.getState().segmentExportProgress.progress ?? 0;
+
+      markSegmentExportFailure({
+        taskId: activeTaskId,
+        progress: activeTaskId ? currentProgress : 0,
+        message: errorMessage,
+        title: activeTaskId ? '片段导出任务失败' : '片段导出任务启动失败'
+      });
+
+      return null;
+    }
+  };
+
   const downloadMergedVideo = async () => {
     if (!mergeProgress.taskId) {
       return null;
@@ -1547,12 +1832,24 @@ const useGeneration = () => {
     return filename;
   };
 
+  const downloadSegmentArchive = async () => {
+    if (!segmentExportProgress.taskId) {
+      return null;
+    }
+
+    const { blob, filename } = await downloadSegmentExport(segmentExportProgress.taskId);
+    downloadBlobInBrowser(blob, filename);
+
+    return filename;
+  };
+
   return {
     backgroundAssets,
     backgroundAssetsLoading,
     backgroundAssetsError,
     tasks,
     mergeProgress,
+    segmentExportProgress,
     videoRatio,
     analyzingSegmentId,
     optimizingSegmentId,
@@ -1573,7 +1870,9 @@ const useGeneration = () => {
     generateAllShotsForSegment,
     refreshBackgroundAssets,
     startMerge,
-    downloadMergedVideo
+    downloadMergedVideo,
+    startSegmentExportArchive,
+    downloadSegmentArchive
   };
 };
 

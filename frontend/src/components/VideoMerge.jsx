@@ -14,16 +14,28 @@ const VideoMerge = ({
     errorMessage: '',
     updatedAt: ''
   },
+  segmentExportProgress = {
+    status: 'idle',
+    progress: 0,
+    message: '',
+    errorMessage: '',
+    updatedAt: ''
+  },
   className = '',
   compactMode = false,
   dockMode = false,
   onMerge,
-  onDownload
+  onDownload,
+  onExportSegments,
+  onDownloadSegments
 }) => {
   const generatedSegments = segments.filter((segment) => segment.generatedUrl).length;
   const canMerge = Boolean(video?.id) && segments.length > 0 && generatedSegments === segments.length;
   const isMerging = mergeProgress.status === 'processing' || mergeProgress.status === 'pending';
   const isCompleted = mergeProgress.status === 'completed';
+  const isExportingSegments =
+    segmentExportProgress.status === 'processing' || segmentExportProgress.status === 'pending';
+  const isSegmentExportCompleted = segmentExportProgress.status === 'completed';
 
   if (dockMode) {
     return (
@@ -64,6 +76,17 @@ const VideoMerge = ({
           </div>
         ) : null}
 
+        {segmentExportProgress.status !== 'idle' ? (
+          <div className="mt-3 rounded-[16px] border border-white/10 bg-white/[0.04] px-3 py-2.5">
+            <ProgressBar
+              value={segmentExportProgress.progress}
+              status={segmentExportProgress.status}
+              label={segmentExportProgress.message || '正在导出片段压缩包'}
+              startedAt={segmentExportProgress.updatedAt}
+            />
+          </div>
+        ) : null}
+
         {mergeProgress.errorMessage ? (
           <div
             role="alert"
@@ -73,9 +96,24 @@ const VideoMerge = ({
           </div>
         ) : null}
 
+        {segmentExportProgress.errorMessage ? (
+          <div
+            role="alert"
+            className="mt-3 rounded-[16px] border border-accent-500/20 bg-accent-500/10 px-3 py-2 text-[11px] leading-5 text-rose-200"
+          >
+            {segmentExportProgress.errorMessage}
+          </div>
+        ) : null}
+
         {isCompleted ? (
           <div className="mt-3 rounded-[16px] border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[11px] leading-5 text-emerald-200">
             拼接完成，可以直接下载成片。
+          </div>
+        ) : null}
+
+        {isSegmentExportCompleted ? (
+          <div className="mt-3 rounded-[16px] border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[11px] leading-5 text-emerald-200">
+            片段压缩包已就绪，可以直接下载。
           </div>
         ) : null}
 
@@ -87,6 +125,14 @@ const VideoMerge = ({
             disabled={!canMerge || isMerging}
           >
             {isMerging ? '拼接中...' : '开始拼接'}
+          </button>
+          <button
+            type="button"
+            className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[11px] font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={() => void (isSegmentExportCompleted ? onDownloadSegments() : onExportSegments())}
+            disabled={!video?.id || isExportingSegments}
+          >
+            {isExportingSegments ? '打包中...' : isSegmentExportCompleted ? '下载片段压缩包' : '准备片段压缩包'}
           </button>
           <button
             type="button"
@@ -136,6 +182,14 @@ const VideoMerge = ({
             <button
               type="button"
               className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-xs font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={() => void (isSegmentExportCompleted ? onDownloadSegments() : onExportSegments())}
+              disabled={!video?.id || isExportingSegments}
+            >
+              {isExportingSegments ? '打包中...' : isSegmentExportCompleted ? '下载片段压缩包' : '准备片段压缩包'}
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-xs font-semibold text-white/80 transition hover:border-white/20 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
               onClick={() => void onDownload()}
               disabled={!isCompleted}
             >
@@ -173,6 +227,17 @@ const VideoMerge = ({
         </div>
       ) : null}
 
+      {segmentExportProgress.status !== 'idle' ? (
+        <div className="mt-3 rounded-[22px] border border-white/10 bg-white/[0.04] px-4 py-3">
+          <ProgressBar
+            value={segmentExportProgress.progress}
+            status={segmentExportProgress.status}
+            label={segmentExportProgress.message || '正在导出片段压缩包'}
+            startedAt={segmentExportProgress.updatedAt}
+          />
+        </div>
+      ) : null}
+
       {mergeProgress.errorMessage ? (
         <div
           role="alert"
@@ -182,9 +247,24 @@ const VideoMerge = ({
         </div>
       ) : null}
 
+      {segmentExportProgress.errorMessage ? (
+        <div
+          role="alert"
+          className="mt-3 rounded-[20px] border border-accent-500/20 bg-accent-500/10 px-4 py-3 text-xs leading-5 text-rose-200"
+        >
+          {segmentExportProgress.errorMessage}
+        </div>
+      ) : null}
+
       {isCompleted ? (
         <div className="mt-3 rounded-[20px] border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-xs leading-5 text-emerald-200">
           拼接完成，可以直接下载成片。
+        </div>
+      ) : null}
+
+      {isSegmentExportCompleted ? (
+        <div className="mt-3 rounded-[20px] border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-xs leading-5 text-emerald-200">
+          片段压缩包已就绪，可以直接下载。
         </div>
       ) : null}
     </SectionPanel>
@@ -209,11 +289,20 @@ VideoMerge.propTypes = {
     errorMessage: PropTypes.string,
     updatedAt: PropTypes.string
   }),
+  segmentExportProgress: PropTypes.shape({
+    status: PropTypes.string,
+    progress: PropTypes.number,
+    message: PropTypes.string,
+    errorMessage: PropTypes.string,
+    updatedAt: PropTypes.string
+  }),
   className: PropTypes.string,
   compactMode: PropTypes.bool,
   dockMode: PropTypes.bool,
   onMerge: PropTypes.func.isRequired,
-  onDownload: PropTypes.func.isRequired
+  onDownload: PropTypes.func.isRequired,
+  onExportSegments: PropTypes.func.isRequired,
+  onDownloadSegments: PropTypes.func.isRequired
 };
 
 export default VideoMerge;

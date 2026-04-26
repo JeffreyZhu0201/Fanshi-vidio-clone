@@ -349,12 +349,34 @@ const downloadVideo = async (taskId) => {
   };
 };
 
+const startSegmentExport = async (videoId) => {
+  const response = await api.post('/exports/segments/start', { video_id: videoId });
+  return response.data;
+};
+
+const getSegmentExportProgress = async (taskId) => {
+  const response = await api.get(`/exports/segments/${taskId}/progress`);
+  return response.data;
+};
+
+const downloadSegmentExport = async (taskId) => {
+  const response = await api.get(`/exports/segments/${taskId}/download`, {
+    responseType: 'blob'
+  });
+
+  return {
+    blob: response.data,
+    filename: parseDownloadFilename(response.headers['content-disposition']).replace(/\.mp4$/iu, '.zip')
+  };
+};
+
 export {
   API_BASE_URL,
   API_ORIGIN,
   analyzeSegment,
   analyzeVideo,
   checkHealth,
+  downloadSegmentExport,
   downloadVideo,
   generateSegment,
   generateShot,
@@ -366,6 +388,7 @@ export {
   getGenerationTask,
   getShotGenerationTask,
   getMergeProgress,
+  getSegmentExportProgress,
   getResourceImages,
   getSegments,
   getTaskStatus,
@@ -374,6 +397,7 @@ export {
   mergeVideos,
   optimizePrompt,
   splitVideo,
+  startSegmentExport,
   updateSegmentShots,
   toAbsoluteAssetUrl,
   uploadVideo
