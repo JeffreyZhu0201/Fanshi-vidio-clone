@@ -14,6 +14,7 @@ const createInitialAnalysisState = () => ({
     styleMode: DEFAULT_STYLE_MODE,
     styleTemplates: getEditableStyleTemplateDefaults()
   },
+  analysisOptionsDirty: false,
   loading: false,
   error: '',
   progress: 0,
@@ -58,6 +59,7 @@ const useAnalysisStore = create((set) => ({
     set({
       analysis,
       analysisOptions: normalizeAnalysisOptionsForStore(analysis?.analysis_options ?? analysis?.analysisOptions ?? null),
+      analysisOptionsDirty: false,
       loading: false,
       error: '',
       progress: 100,
@@ -65,6 +67,19 @@ const useAnalysisStore = create((set) => ({
       statusMessage: '整片分析完成',
       lastUpdatedAt: new Date().toISOString()
     }),
+  hydrateAnalysis: (analysis) =>
+    set((state) => ({
+      analysis,
+      analysisOptions: state.analysisOptionsDirty
+        ? state.analysisOptions
+        : normalizeAnalysisOptionsForStore(analysis?.analysis_options ?? analysis?.analysisOptions ?? null),
+      loading: false,
+      error: '',
+      progress: 100,
+      status: 'completed',
+      statusMessage: '整片分析完成',
+      lastUpdatedAt: new Date().toISOString()
+    })),
   setLoading: (loading) =>
     set((state) => ({
       loading,
@@ -90,6 +105,7 @@ const useAnalysisStore = create((set) => ({
             }
           : state.analysisOptions.styleTemplates
       }),
+      analysisOptionsDirty: true,
       lastUpdatedAt: new Date().toISOString()
     })),
   setError: (error) =>

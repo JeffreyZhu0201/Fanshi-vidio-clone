@@ -720,6 +720,17 @@ const isGeminiModelUnavailableError = (error) => {
   return /model_not_found|无可用渠道|distributor|上游负载已饱和|模型不可用/iu.test(message);
 };
 
+const isGeminiUpstreamBusyError = (error) => {
+  const message = String(error?.message ?? '').trim();
+  const statusCode = Number(error?.statusCode ?? 0);
+
+  if (statusCode === 429) {
+    return true;
+  }
+
+  return /get_channel_failed|上游负载已饱和|quota|resource has been exhausted|too many requests/iu.test(message);
+};
+
 const getGeminiModelCandidates = (requestedModel, { allowModelFallback = true } = {}) => {
   if (!allowModelFallback) {
     return [String(requestedModel ?? '').trim()].filter(Boolean);
@@ -1353,9 +1364,8 @@ const callRemoteGeminiOverHttp = async ({
   const statusCode = response.status;
 
   if (statusCode < 200 || statusCode >= 300) {
-    const error = new Error(
-      `Gemini request failed with status ${statusCode}: ${responseText.slice(0, 240)}`
-    );
+    const errorDetail = extractGeminiErrorDetail(responsePayload, responseText);
+    const error = new Error(`Gemini request failed with status ${statusCode}: ${errorDetail || '[empty body]'}`);
     error.statusCode = statusCode;
     error.authVariant = authVariant;
     error.model = model;
@@ -1392,6 +1402,22 @@ const extractOpenAiResponseText = (responsePayload) => {
   }
 
   return text;
+};
+
+const extractGeminiErrorDetail = (responsePayload = {}, responseText = '') => {
+  const errorMessage = String(
+    responsePayload?.error?.message ??
+      responsePayload?.message ??
+      responsePayload?.error_message ??
+      responsePayload?.detail ??
+      ''
+  ).trim();
+
+  if (errorMessage) {
+    return errorMessage;
+  }
+
+  return String(responseText ?? '').trim().slice(0, 240);
 };
 
 const callRemoteGemini = async ({
@@ -1702,6 +1728,10 @@ const analyzeVideo = async ({ video, metadata, videoAbsolutePath, analysisOption
             WHOLE_VIDEO_PRIMARY_UPLOAD_TIMEOUT_MS / 1000
           )} 秒，请稍后重试，或调大后端 GEMINI_WHOLE_VIDEO_TIMEOUT_MS。`
         )
+      : isGeminiUpstreamBusyError(error)
+        ? new Error(
+            `Gemini-2.5-pro 整片分析失败：当前 Gemini 上游渠道繁忙或额度不足（${transportMessage || '429'}），请稍后重试。`
+          )
       : isNetworkLikeGeminiError(error)
         ? new Error(
             `Gemini-2.5-pro 整片分析失败：远端连接中途断开或网络不稳定（${transportMessage || 'network error'}），已自动重试 ${WHOLE_VIDEO_ANALYSIS_MAX_ATTEMPTS} 次仍未成功，请稍后重试。`

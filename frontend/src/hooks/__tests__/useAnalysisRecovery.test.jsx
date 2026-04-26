@@ -63,6 +63,13 @@ const createTimeoutError = () =>
     isNetworkError: true
   });
 
+const createRateLimitError = () =>
+  Object.assign(new Error('Gemini-2.5-pro 整片分析失败：当前 Gemini 上游渠道繁忙或额度不足，请稍后重试。'), {
+    statusCode: 429,
+    isTimeout: false,
+    isNetworkError: false
+  });
+
 const createDeferred = () => {
   let resolve;
 
@@ -94,6 +101,7 @@ const resetStores = () => {
       extractSubtitles: true,
       parseAudio: true
     },
+    analysisOptionsDirty: false,
     loading: false,
     error: '',
     progress: 0,
@@ -205,6 +213,32 @@ describe('useAnalysis recovery flow', () => {
     expect(runResult).toBeNull();
     expect(useAnalysisStore.getState().status).toBe('failed');
     expect(useAnalysisStore.getState().error).toBe('分析请求超时，且在确认窗口内未获取到结果，请稍后重试。');
+
+    unmount();
+  });
+
+  it('marks the selected video as failed when analyze POST returns a non-transient upstream error', async () => {
+    analyzeVideo.mockRejectedValue(createRateLimitError());
+
+    useVideoStore.setState({
+      currentVideo: {
+        id: 505,
+        filename: 'analysis-rate-limit.mp4',
+        status: 'uploaded'
+      }
+    });
+
+    const { result, unmount } = renderHook(() => useAnalysis());
+
+    await act(async () => {
+      await result.current.runAnalysis();
+    });
+
+    expect(useAnalysisStore.getState().status).toBe('failed');
+    expect(useAnalysisStore.getState().error).toBe(
+      'Gemini-2.5-pro 整片分析失败：当前 Gemini 上游渠道繁忙或额度不足，请稍后重试。'
+    );
+    expect(useVideoStore.getState().currentVideo.status).toBe('failed');
 
     unmount();
   });

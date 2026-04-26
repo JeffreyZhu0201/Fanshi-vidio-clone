@@ -66,6 +66,7 @@ const useAnalysis = () => {
   const statusMessage = useAnalysisStore((state) => state.statusMessage);
   const analysisOptions = useAnalysisStore((state) => state.analysisOptions);
   const setAnalysis = useAnalysisStore((state) => state.setAnalysis);
+  const hydrateAnalysis = useAnalysisStore((state) => state.hydrateAnalysis);
   const setAnalysisOptions = useAnalysisStore((state) => state.setAnalysisOptions);
   const setError = useAnalysisStore((state) => state.setError);
   const setProgressState = useAnalysisStore((state) => state.setProgressState);
@@ -143,6 +144,18 @@ const useAnalysis = () => {
     );
   };
 
+  const markCurrentVideoAnalysisFailed = (videoId) => {
+    const activeVideoId = useVideoStore.getState().currentVideo?.id;
+
+    if (!activeVideoId || Number(activeVideoId) !== Number(videoId ?? 0)) {
+      return;
+    }
+
+    updateCurrentVideo({
+      status: 'failed'
+    });
+  };
+
   useEffect(() => {
     mountedRef.current = true;
 
@@ -209,6 +222,7 @@ const useAnalysis = () => {
 
         if (!canRetry) {
           if (!isAnalysisRequestCancelled(requestToken, videoId)) {
+            markCurrentVideoAnalysisFailed(videoId);
             setError(getAnalysisErrorMessage(errorInstance));
           }
           return null;
@@ -216,6 +230,7 @@ const useAnalysis = () => {
 
         if (isLastAttempt) {
           if (!isAnalysisRequestCancelled(requestToken, videoId)) {
+            markCurrentVideoAnalysisFailed(videoId);
             setError(createAnalysisRecoveryError());
           }
           return null;
@@ -226,6 +241,7 @@ const useAnalysis = () => {
     }
 
     if (!isAnalysisRequestCancelled(requestToken, videoId)) {
+      markCurrentVideoAnalysisFailed(videoId);
       setError(createAnalysisRecoveryError());
     }
 
@@ -249,6 +265,7 @@ const useAnalysis = () => {
       });
 
       if (payload.status === 'failed') {
+        markCurrentVideoAnalysisFailed(payloadVideoId);
         setError(payload.message || '分析失败');
       }
     });
@@ -272,7 +289,7 @@ const useAnalysis = () => {
         const analysisPayload = await getAnalysis(currentVideo.id);
 
         if (active) {
-          setAnalysis(analysisPayload);
+          hydrateAnalysis(analysisPayload);
         }
       } catch (errorInstance) {
         if (!active) {
@@ -293,7 +310,7 @@ const useAnalysis = () => {
     return () => {
       active = false;
     };
-  }, [clearAnalysis, currentVideo?.id, setAnalysis, setError]);
+  }, [clearAnalysis, currentVideo?.id, hydrateAnalysis, setError]);
 
   const runAnalysis = async () => {
     if (!currentVideo?.id) {
@@ -344,6 +361,7 @@ const useAnalysis = () => {
       }
 
       const errorMessage = getAnalysisErrorMessage(errorInstance);
+      markCurrentVideoAnalysisFailed(currentVideoId);
 
       websocketService.emitLocal('analysis:progress', {
         video_id: currentVideoId,
@@ -370,7 +388,7 @@ const useAnalysis = () => {
     statusMessage,
     runAnalysis,
     setAnalysisOptions,
-    applyAnalysisPayload: setAnalysis
+    applyAnalysisPayload: hydrateAnalysis
   };
 };
 
