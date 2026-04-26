@@ -155,7 +155,7 @@ describe('useAnalysis recovery flow', () => {
       expect.objectContaining({
         extractSubtitles: true,
         parseAudio: true,
-        styleMode: 'realistic'
+        styleMode: 'comic_drama'
       })
     );
     expect(getAnalysis).toHaveBeenCalledWith(501);

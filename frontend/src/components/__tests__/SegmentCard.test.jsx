@@ -192,7 +192,7 @@ describe('SegmentCard', () => {
     fireEvent.click(screen.getByRole('button', { name: '生成新片段' }));
     expect(onGenerateAllShots).toHaveBeenCalledWith(1, null, {
       useReferenceVideo: false,
-      useRepresentativeFrame: true
+      useRepresentativeFrame: false
     });
 
     fireEvent.click(screen.getByRole('button', { name: '编辑' }));
@@ -221,7 +221,7 @@ describe('SegmentCard', () => {
     expect(onOptimize).toHaveBeenCalledWith(1, '@主角 在 #咖啡馆内景 中继续推进剧情');
     expect(onGenerate).toHaveBeenCalledWith(1, '@主角 在 #咖啡馆内景 中继续推进剧情', {
       useReferenceVideo: false,
-      useRepresentativeFrame: true
+      useRepresentativeFrame: false
     });
 
     fireEvent.click(screen.getByRole('button', { name: '优化镜头提示词' }));
@@ -238,7 +238,7 @@ describe('SegmentCard', () => {
     return waitFor(() => {
       expect(onGenerateShot).toHaveBeenCalledWith(1, 'shot-1', '@主角 推门走进 #咖啡馆内景', {
         useReferenceVideo: false,
-        useRepresentativeFrame: true
+        useRepresentativeFrame: false
       });
     }).then(async () => {
       expect(onSaveShots).not.toHaveBeenCalled();
@@ -252,7 +252,6 @@ describe('SegmentCard', () => {
       fireEvent.change(summaryInputs[1], { target: { value: '新增镜头摘要' } });
       fireEvent.change(promptEditors[1], { target: { value: '@主角 在 #咖啡馆内景 中落座' } });
       fireEvent.click(screen.getAllByRole('button', { name: '参考原片视频：关' })[0]);
-      fireEvent.click(screen.getAllByRole('button', { name: '参考典型帧：开' })[0]);
 
       fireEvent.click(screen.getAllByRole('button', { name: '生成当前镜头' })[1]);
 
