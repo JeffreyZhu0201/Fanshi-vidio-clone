@@ -26,6 +26,7 @@ const serializeGenerationMeta = (task) => {
     ratio: String(taskMeta.ratio ?? '').trim(),
     style_mode: normalizeStyleMode(taskMeta.styleMode ?? taskMeta.style_mode ?? DEFAULT_STYLE_MODE),
     use_reference_video: normalizeUseReferenceVideo(taskMeta.useReferenceVideo ?? taskMeta.use_reference_video, true),
+    use_reference_frame: normalizeUseReferenceFrame(taskMeta.useReferenceFrame ?? taskMeta.use_reference_frame, true),
     remote_status: String(taskMeta.remoteStatus ?? '').trim(),
     remote_status_label: String(taskMeta.remoteStatusLabel ?? '').trim(),
     remote_created_at: Number(taskMeta.remoteCreatedAt ?? 0) || null,
@@ -82,6 +83,14 @@ const normalizeGenerationRatio = (value) => {
 };
 
 const normalizeUseReferenceVideo = (value, fallbackValue = true) => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  return fallbackValue;
+};
+
+const normalizeUseReferenceFrame = (value, fallbackValue = true) => {
   if (typeof value === 'boolean') {
     return value;
   }
@@ -544,6 +553,49 @@ const getSegmentSceneNames = (segment) => {
   );
 };
 
+const getSegmentRepresentativeFrameLocalTime = (segment) => {
+  const representativeFrameTime = Number(
+    segment?.analysis?.representativeFrameTime ?? segment?.analysis?.representative_frame_time
+  );
+  const segmentStartTime = Number(segment?.startTime ?? 0);
+  const segmentEndTime = Number(segment?.endTime ?? segmentStartTime);
+  const segmentDuration = Math.max(0, segmentEndTime - segmentStartTime);
+
+  if (!Number.isFinite(representativeFrameTime) || representativeFrameTime < 0 || segmentDuration <= 0) {
+    return null;
+  }
+
+  return Number(Math.max(0, Math.min(segmentDuration, representativeFrameTime - segmentStartTime)).toFixed(2));
+};
+
+const buildSegmentFrameReference = async ({
+  segment,
+  sourceSegmentAbsolutePath,
+  basenamePrefix
+}) => {
+  const representativeFrameLocalTime = getSegmentRepresentativeFrameLocalTime(segment);
+
+  if (!sourceSegmentAbsolutePath || representativeFrameLocalTime === null) {
+    return null;
+  }
+
+  const extractedFrame = await extractVideoFrame(sourceSegmentAbsolutePath, representativeFrameLocalTime, {
+    basename: `${basenamePrefix}-segment-frame-reference`
+  });
+
+  if (!extractedFrame?.filePath) {
+    return null;
+  }
+
+  return {
+    relativePath: extractedFrame.filePath,
+    url: extractedFrame.fileUrl,
+    role: 'reference_image',
+    sourceKind: 'segment_representative_frame',
+    displayLabel: '大片段典型帧'
+  };
+};
+
 const resolveRelevantCharacters = (segment, overallAnalysis, prompt = '') => {
   const overallCharacters = Array.isArray(overallAnalysis?.characters) ? overallAnalysis.characters.filter(Boolean) : [];
 
@@ -999,7 +1051,14 @@ const getSeedDanceDurationForSegment = (segment) => {
 
 const normalizeComparablePrompt = (value) => String(value ?? '').trim();
 
-const doesSegmentTaskMatchGenerationRequest = ({ task, prompt, ratio, styleMode = '', useReferenceVideo = true }) => {
+const doesSegmentTaskMatchGenerationRequest = ({
+  task,
+  prompt,
+  ratio,
+  styleMode = '',
+  useReferenceVideo = true,
+  useReferenceFrame = true
+}) => {
   if (!task) {
     return false;
   }
@@ -1009,6 +1068,8 @@ const doesSegmentTaskMatchGenerationRequest = ({ task, prompt, ratio, styleMode 
     normalizeGenerationRatio(task.meta?.ratio) === normalizeGenerationRatio(ratio) &&
     normalizeUseReferenceVideo(task.meta?.useReferenceVideo ?? task.meta?.use_reference_video, true) ===
       normalizeUseReferenceVideo(useReferenceVideo, true) &&
+    normalizeUseReferenceFrame(task.meta?.useReferenceFrame ?? task.meta?.use_reference_frame, true) ===
+      normalizeUseReferenceFrame(useReferenceFrame, true) &&
     normalizeStyleMode(task.meta?.styleMode ?? task.meta?.style_mode ?? DEFAULT_STYLE_MODE) ===
       normalizeStyleMode(styleMode || task.meta?.styleMode || task.meta?.style_mode || DEFAULT_STYLE_MODE)
   );
@@ -1026,7 +1087,8 @@ const buildSeedDanceReconstructionPrompt = ({
   isShot = false,
   videoGenerationStylePrompt = '',
   durationSeconds = null,
-  useReferenceVideo = true
+  useReferenceVideo = true,
+  useReferenceFrame = true
 }) => {
   const normalizedCharacterNames = dedupeNameList(characterNames, normalizeCharacterIdentity);
   const normalizedSceneNames = dedupeNameList(sceneNames, normalizeSceneIdentity);
@@ -1084,7 +1146,9 @@ const buildSeedDanceReconstructionPrompt = ({
     '角色三视图、场景参考图和展开后的资源提示词是本次视频重生成的第一视觉真值，优先级高于原片视频、关键帧和原片人物/场景表面细节。',
     isShot ? '严格还原原片当前小镜头，不要把多个镜头语义混成一个新镜头。' : '严格延续原片当前片段的剧情、镜头语言和表演逻辑。',
     isShot
-      ? '小镜头典型帧只用于提取当前镜头的人物左中右站位、前后景层次、视线方向、机位朝向和动作瞬间，不能主导人物脸、服装、场景材质和整体美术风格。'
+      ? useReferenceFrame
+        ? '小镜头典型帧只用于提取当前镜头的人物左中右站位、前后景层次、视线方向、机位朝向和动作瞬间，不能主导人物脸、服装、场景材质和整体美术风格。'
+        : '本次不提供小镜头典型帧，人物站位、机位、前后景层次和动作瞬间主要依赖镜头提示词、角色三视图和场景图来重建。'
       : useReferenceVideo
         ? '参考视频只用于继承当前片段的运动节奏、镜头顺序、空间走位和动作骨架，不是人物外观和场景美术的主真值。'
         : '本次不提供原片片段参考视频，必须主要根据大片段提示词、角色三视图、场景图和其它参考重建同剧情方向的新片段。',
@@ -1243,6 +1307,7 @@ const processGenerationTask = async (taskId) => {
         DEFAULT_STYLE_MODE
     );
     const useReferenceVideo = normalizeUseReferenceVideo(task.meta?.useReferenceVideo ?? task.meta?.use_reference_video, true);
+    const useReferenceFrame = normalizeUseReferenceFrame(task.meta?.useReferenceFrame ?? task.meta?.use_reference_frame, true);
     const videoGenerationStylePrompt = resolveStyleTemplate({
       styleMode: resolvedStyleMode,
       styleTemplates:
@@ -1296,8 +1361,16 @@ const processGenerationTask = async (taskId) => {
         backgroundBinding?.backgroundName || ''
       ],
       isShot: false,
-      useReferenceVideo
+      useReferenceVideo,
+      useReferenceFrame
     });
+    const primarySegmentReferenceImage = useReferenceFrame
+      ? await buildSegmentFrameReference({
+          segment: task.segment,
+          sourceSegmentAbsolutePath: sourceAbsolutePath,
+          basenamePrefix: `segment-${task.segmentId}-task-${task.id}`
+        })
+      : null;
     const characterReferenceImages = await collectCharacterReferenceImages({
       videoId: task.segment?.video?.id,
       segment: task.segment,
@@ -1317,8 +1390,10 @@ const processGenerationTask = async (taskId) => {
       basenamePrefix: `segment-${task.segmentId}-task-${task.id}`
     });
     const referenceImages = composeSeedDanceReferenceImages({
+      primaryImages: primarySegmentReferenceImage ? [primarySegmentReferenceImage] : [],
       characterImages: characterReferenceImages,
-      sceneImages: sceneReferenceImages
+      sceneImages: sceneReferenceImages,
+      primaryImagePlacement: 'after_assets'
     });
 
     await task.update({
@@ -1364,6 +1439,7 @@ const processGenerationTask = async (taskId) => {
         engine: result.engine || '',
         isMock: Boolean(result.isMock),
         useReferenceVideo,
+        useReferenceFrame,
         remoteTaskId: result.remoteTaskId || '',
         remoteUrl: result.remoteUrl || '',
         sentReferenceImages: result.sentReferenceImages ?? task.meta?.sentReferenceImages ?? [],
@@ -1396,7 +1472,14 @@ const processGenerationTask = async (taskId) => {
   }
 };
 
-const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '', useReferenceVideo = true }) => {
+const startGeneration = async ({
+  segmentId,
+  prompt,
+  ratio,
+  styleMode = '',
+  useReferenceVideo = true,
+  useReferenceFrame = true
+}) => {
   const segment = await Segment.findByPk(segmentId);
 
   if (!segment) {
@@ -1409,6 +1492,7 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '', useRe
 
   const resolvedRatio = normalizeGenerationRatio(ratio);
   const resolvedUseReferenceVideo = normalizeUseReferenceVideo(useReferenceVideo, true);
+  const resolvedUseReferenceFrame = normalizeUseReferenceFrame(useReferenceFrame, true);
   const resolvedStyleMode = normalizeStyleMode(
     styleMode || segment?.analysis?.analysisOptions?.styleMode || DEFAULT_STYLE_MODE
   );
@@ -1429,7 +1513,8 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '', useRe
       prompt,
       ratio: resolvedRatio,
       styleMode: resolvedStyleMode,
-      useReferenceVideo: resolvedUseReferenceVideo
+      useReferenceVideo: resolvedUseReferenceVideo,
+      useReferenceFrame: resolvedUseReferenceFrame
     })
   ) {
     return {
@@ -1438,7 +1523,8 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '', useRe
       progress: latestAttemptTask.progress,
       ratio: resolvedRatio,
       style_mode: resolvedStyleMode,
-      use_reference_video: resolvedUseReferenceVideo
+      use_reference_video: resolvedUseReferenceVideo,
+      use_reference_frame: resolvedUseReferenceFrame
     };
   }
 
@@ -1449,7 +1535,8 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '', useRe
       prompt,
       ratio: resolvedRatio,
       styleMode: resolvedStyleMode,
-      useReferenceVideo: resolvedUseReferenceVideo
+      useReferenceVideo: resolvedUseReferenceVideo,
+      useReferenceFrame: resolvedUseReferenceFrame
     })
   ) {
     return {
@@ -1458,7 +1545,8 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '', useRe
       progress: latestCompletedTask.progress,
       ratio: resolvedRatio,
       style_mode: resolvedStyleMode,
-      use_reference_video: resolvedUseReferenceVideo
+      use_reference_video: resolvedUseReferenceVideo,
+      use_reference_frame: resolvedUseReferenceFrame
     };
   }
 
@@ -1472,6 +1560,7 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '', useRe
       ratio: resolvedRatio,
       styleMode: resolvedStyleMode,
       useReferenceVideo: resolvedUseReferenceVideo,
+      useReferenceFrame: resolvedUseReferenceFrame,
       engine: '',
       remoteStatus: '',
       remoteStatusLabel: '',
@@ -1495,7 +1584,8 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '', useRe
     progress: task.progress,
     ratio: resolvedRatio,
     style_mode: resolvedStyleMode,
-    use_reference_video: resolvedUseReferenceVideo
+    use_reference_video: resolvedUseReferenceVideo,
+    use_reference_frame: resolvedUseReferenceFrame
   };
 };
 
@@ -1523,6 +1613,7 @@ export {
   getPromptMentionNames,
   getPromptSceneNames,
   getGenerationTaskStatus,
+  normalizeUseReferenceFrame,
   normalizeUseReferenceVideo,
   processGenerationTask,
   resolveRelevantCharacters,

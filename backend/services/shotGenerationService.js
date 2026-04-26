@@ -16,6 +16,7 @@ import {
   composeSeedDanceReferenceImages,
   expandPromptMentions,
   getBackgroundBindingForSegment,
+  normalizeUseReferenceFrame,
   normalizeUseReferenceVideo,
   getPromptMentionNames,
   getPromptSceneNames
@@ -434,7 +435,15 @@ const prepareDialogueGenerationPayload = async ({
   };
 };
 
-const doesShotTaskMatchGenerationRequest = ({ task, shot, prompt, ratio, styleMode = '', useReferenceVideo = true }) => {
+const doesShotTaskMatchGenerationRequest = ({
+  task,
+  shot,
+  prompt,
+  ratio,
+  styleMode = '',
+  useReferenceVideo = true,
+  useReferenceFrame = true
+}) => {
   if (!task || !shot) {
     return false;
   }
@@ -445,6 +454,8 @@ const doesShotTaskMatchGenerationRequest = ({ task, shot, prompt, ratio, styleMo
     normalizeGenerationRatio(task.meta?.ratio) === normalizeGenerationRatio(ratio) &&
     normalizeUseReferenceVideo(task.meta?.useReferenceVideo ?? task.meta?.use_reference_video, true) ===
       normalizeUseReferenceVideo(useReferenceVideo, true) &&
+    normalizeUseReferenceFrame(task.meta?.useReferenceFrame ?? task.meta?.use_reference_frame, true) ===
+      normalizeUseReferenceFrame(useReferenceFrame, true) &&
     normalizeStyleMode(task.meta?.styleMode ?? task.meta?.style_mode ?? DEFAULT_STYLE_MODE) ===
       resolveShotGenerationStyleMode(styleMode || task.meta?.styleMode || task.meta?.style_mode || DEFAULT_STYLE_MODE) &&
     String(task.meta?.speechSignature ?? '').trim() === buildShotSpeechSignature(shot) &&
@@ -479,7 +490,8 @@ const getExistingReusableShotTask = ({
   prompt,
   ratio,
   styleMode = '',
-  useReferenceVideo = true
+  useReferenceVideo = true,
+  useReferenceFrame = true
 }) => {
   const latestAttemptTask = latestAttemptTaskByShotId.get(String(shot?.id ?? '').trim()) ?? null;
 
@@ -492,7 +504,8 @@ const getExistingReusableShotTask = ({
       prompt,
       ratio,
       styleMode,
-      useReferenceVideo
+      useReferenceVideo,
+      useReferenceFrame
     })
   ) {
     return latestAttemptTask;
@@ -508,7 +521,8 @@ const getExistingReusableShotTask = ({
       prompt,
       ratio,
       styleMode,
-      useReferenceVideo
+      useReferenceVideo,
+      useReferenceFrame
     })
   ) {
     return latestCompletedTask;
@@ -561,6 +575,7 @@ const createCompletedReuseTaskForBatch = async ({
       ratio: normalizeGenerationRatio(ratio),
       styleMode: resolveShotGenerationStyleMode(styleMode),
       useReferenceVideo: normalizeUseReferenceVideo(sourceTask.meta?.useReferenceVideo ?? sourceTask.meta?.use_reference_video, true),
+      useReferenceFrame: normalizeUseReferenceFrame(sourceTask.meta?.useReferenceFrame ?? sourceTask.meta?.use_reference_frame, true),
       speechSignature: buildShotSpeechSignature(shot),
       characterStateSignature: buildShotCharacterStateSignature(shot),
       reusedFromTaskId: sourceTask.id
@@ -598,6 +613,7 @@ const createResumedReuseTaskForBatch = async ({
       ratio: normalizeGenerationRatio(ratio),
       styleMode: resolveShotGenerationStyleMode(styleMode),
       useReferenceVideo: normalizeUseReferenceVideo(sourceTask.meta?.useReferenceVideo ?? sourceTask.meta?.use_reference_video, true),
+      useReferenceFrame: normalizeUseReferenceFrame(sourceTask.meta?.useReferenceFrame ?? sourceTask.meta?.use_reference_frame, true),
       speechSignature: buildShotSpeechSignature(shot),
       characterStateSignature: buildShotCharacterStateSignature(shot),
       reusedFromTaskId: sourceTask.id
@@ -616,6 +632,7 @@ const serializeShotGenerationMeta = (task) => {
     ratio: String(taskMeta.ratio ?? '').trim(),
     style_mode: normalizeStyleMode(taskMeta.styleMode ?? taskMeta.style_mode ?? DEFAULT_STYLE_MODE),
     use_reference_video: normalizeUseReferenceVideo(taskMeta.useReferenceVideo ?? taskMeta.use_reference_video, true),
+    use_reference_frame: normalizeUseReferenceFrame(taskMeta.useReferenceFrame ?? taskMeta.use_reference_frame, true),
     remote_status: String(taskMeta.remoteStatus ?? '').trim(),
     remote_status_label: String(taskMeta.remoteStatusLabel ?? '').trim(),
     remote_created_at: Number(taskMeta.remoteCreatedAt ?? 0) || null,
@@ -1236,6 +1253,7 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
       analysisOptions
     );
     const useReferenceVideo = normalizeUseReferenceVideo(task.meta?.useReferenceVideo ?? task.meta?.use_reference_video, true);
+    const useReferenceFrame = normalizeUseReferenceFrame(task.meta?.useReferenceFrame ?? task.meta?.use_reference_frame, true);
     const videoGenerationStylePrompt = resolveStyleTemplate({
       styleMode: resolvedStyleMode,
       styleTemplates: analysisOptions?.styleTemplates ?? overallAnalysis?.analysisOptions?.styleTemplates ?? null,
@@ -1391,11 +1409,12 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
           : null,
       isShot: true,
       durationSeconds: getShotDurationForGeneration(shot),
-      useReferenceVideo
+      useReferenceVideo,
+      useReferenceFrame
     });
     let primaryShotReferenceImage = null;
 
-    if (shot.representativeFrameImagePath || shot.representativeFrameImageUrl) {
+    if (useReferenceFrame && (shot.representativeFrameImagePath || shot.representativeFrameImageUrl)) {
       primaryShotReferenceImage = {
         relativePath: shot.representativeFrameImagePath || '',
         url: shot.representativeFrameImageUrl || '',
@@ -1403,7 +1422,7 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
         sourceKind: 'shot_representative_frame',
         displayLabel: '小镜头典型帧'
       };
-    } else {
+    } else if (useReferenceFrame) {
       const fallbackFrameSourceAbsolutePath = shotSourceAbsolutePath || segmentSourceAbsolutePath;
       const fallbackFrameTime = shotSourceAbsolutePath
         ? shot.representativeFrameActualTime ??
@@ -1513,6 +1532,7 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
         engine: result.engine || '',
         isMock: Boolean(result.isMock),
         useReferenceVideo,
+        useReferenceFrame,
         remoteTaskId: result.remoteTaskId || '',
         remoteUrl: result.remoteUrl || '',
         sentReferenceImages: result.sentReferenceImages ?? task.meta?.sentReferenceImages ?? [],
@@ -1589,7 +1609,15 @@ const processShotGenerationTask = async (taskId, options = {}) => {
   return processPromise;
 };
 
-const startShotGeneration = async ({ segmentId, shotId, prompt, ratio, styleMode = '', useReferenceVideo = true }) => {
+const startShotGeneration = async ({
+  segmentId,
+  shotId,
+  prompt,
+  ratio,
+  styleMode = '',
+  useReferenceVideo = true,
+  useReferenceFrame = true
+}) => {
   const segment = await getSegmentWithContextById(segmentId);
   const shot = getShotByIdFromSegment(segment, shotId);
   const resolvedPrompt = String(prompt ?? '').trim() || shot.prompt;
@@ -1599,6 +1627,7 @@ const startShotGeneration = async ({ segmentId, shotId, prompt, ratio, styleMode
     normalizeAnalysisOptions(segment?.analysis?.analysisOptions ?? segment?.video?.analysis?.analysisOptions)
   );
   const resolvedUseReferenceVideo = normalizeUseReferenceVideo(useReferenceVideo, true);
+  const resolvedUseReferenceFrame = normalizeUseReferenceFrame(useReferenceFrame, true);
 
   if (!resolvedPrompt) {
     throw new AppError('请先提供镜头提示词，再生成小镜头。', 400, {
@@ -1619,7 +1648,8 @@ const startShotGeneration = async ({ segmentId, shotId, prompt, ratio, styleMode
     prompt: resolvedPrompt,
     ratio: resolvedRatio,
     styleMode: resolvedStyleMode,
-    useReferenceVideo: resolvedUseReferenceVideo
+    useReferenceVideo: resolvedUseReferenceVideo,
+    useReferenceFrame: resolvedUseReferenceFrame
   });
 
   if (existingTask) {
@@ -1649,6 +1679,7 @@ const startShotGeneration = async ({ segmentId, shotId, prompt, ratio, styleMode
       ratio: resolvedRatio,
       styleMode: resolvedStyleMode,
       useReferenceVideo: resolvedUseReferenceVideo,
+      useReferenceFrame: resolvedUseReferenceFrame,
       engine: '',
       remoteStatus: '',
       remoteStatusLabel: '',
@@ -1685,6 +1716,7 @@ const processShotBatchGeneration = async ({
   ratio,
   styleMode = '',
   useReferenceVideo = true,
+  useReferenceFrame = true,
   startedAt = ''
 }) => {
   const segment = await getSegmentWithContextById(segmentId);
@@ -1695,6 +1727,7 @@ const processShotBatchGeneration = async ({
     normalizeAnalysisOptions(segment?.analysis?.analysisOptions ?? segment?.video?.analysis?.analysisOptions)
   );
   const resolvedUseReferenceVideo = normalizeUseReferenceVideo(useReferenceVideo, true);
+  const resolvedUseReferenceFrame = normalizeUseReferenceFrame(useReferenceFrame, true);
   const { latestAttemptTaskBySegmentId, latestCompletedTaskBySegmentId } = await getLatestShotTaskMapsBySegmentIds([
     segmentId
   ]);
@@ -1711,7 +1744,8 @@ const processShotBatchGeneration = async ({
       prompt: targetPrompt,
       ratio: resolvedRatio,
       styleMode: resolvedStyleMode,
-      useReferenceVideo: resolvedUseReferenceVideo
+      useReferenceVideo: resolvedUseReferenceVideo,
+      useReferenceFrame: resolvedUseReferenceFrame
     });
 
     if (reusableTask?.status === TASK_STATUS.completed && reusableTask.resultUrl) {
@@ -1760,6 +1794,7 @@ const processShotBatchGeneration = async ({
         ratio: resolvedRatio,
         styleMode: resolvedStyleMode,
         useReferenceVideo: resolvedUseReferenceVideo,
+        useReferenceFrame: resolvedUseReferenceFrame,
         engine: '',
         remoteStatus: '',
         remoteStatusLabel: '',
@@ -1801,7 +1836,14 @@ const processShotBatchGeneration = async ({
   }
 };
 
-const startShotBatchGeneration = async ({ segmentId, shots = [], ratio, styleMode = '', useReferenceVideo = true }) => {
+const startShotBatchGeneration = async ({
+  segmentId,
+  shots = [],
+  ratio,
+  styleMode = '',
+  useReferenceVideo = true,
+  useReferenceFrame = true
+}) => {
   const segment = await getSegmentWithContextById(segmentId);
   const normalizedShots = getNormalizedSegmentShots(segment);
   const resolvedRatio = normalizeGenerationRatio(ratio);
@@ -1810,6 +1852,7 @@ const startShotBatchGeneration = async ({ segmentId, shots = [], ratio, styleMod
     normalizeAnalysisOptions(segment?.analysis?.analysisOptions ?? segment?.video?.analysis?.analysisOptions)
   );
   const resolvedUseReferenceVideo = normalizeUseReferenceVideo(useReferenceVideo, true);
+  const resolvedUseReferenceFrame = normalizeUseReferenceFrame(useReferenceFrame, true);
 
   if (!normalizedShots.length) {
     throw new AppError('当前大片段没有可用的小镜头。', 400, {
@@ -1852,6 +1895,7 @@ const startShotBatchGeneration = async ({ segmentId, shots = [], ratio, styleMod
         ratio: resolvedRatio,
         style_mode: resolvedStyleMode,
         use_reference_video: resolvedUseReferenceVideo,
+        use_reference_frame: resolvedUseReferenceFrame,
         progress: currentSummary.progress,
         completed_shot_count: currentSummary.completed_shot_count,
         failed_shot_count: currentSummary.failed_shot_count,
@@ -1886,6 +1930,7 @@ const startShotBatchGeneration = async ({ segmentId, shots = [], ratio, styleMod
       ratio: resolvedRatio,
       styleMode: resolvedStyleMode,
       useReferenceVideo: resolvedUseReferenceVideo,
+      useReferenceFrame: resolvedUseReferenceFrame,
       startedAt
     });
   });
@@ -1897,7 +1942,8 @@ const startShotBatchGeneration = async ({ segmentId, shots = [], ratio, styleMod
     started_at: startedAt,
     ratio: resolvedRatio,
     style_mode: resolvedStyleMode,
-    use_reference_video: resolvedUseReferenceVideo
+    use_reference_video: resolvedUseReferenceVideo,
+    use_reference_frame: resolvedUseReferenceFrame
   };
 };
 

@@ -11,7 +11,8 @@ const generateSegment = async (request, response) => {
     prompt: request.body.prompt,
     ratio: request.body.ratio,
     styleMode: request.body.style_mode,
-    useReferenceVideo: request.body.use_reference_video
+    useReferenceVideo: request.body.use_reference_video,
+    useReferenceFrame: request.body.use_reference_frame
   });
 
   response.status(202).json(result);
@@ -29,7 +30,8 @@ const generateShot = async (request, response) => {
     prompt: request.body.prompt,
     ratio: request.body.ratio,
     styleMode: request.body.style_mode,
-    useReferenceVideo: request.body.use_reference_video
+    useReferenceVideo: request.body.use_reference_video,
+    useReferenceFrame: request.body.use_reference_frame
   });
 
   response.status(202).json(result);
@@ -41,7 +43,8 @@ const generateShotBatch = async (request, response) => {
     shots: request.body.shots ?? [],
     ratio: request.body.ratio,
     styleMode: request.body.style_mode,
-    useReferenceVideo: request.body.use_reference_video
+    useReferenceVideo: request.body.use_reference_video,
+    useReferenceFrame: request.body.use_reference_frame
   });
 
   response.status(202).json(result);
