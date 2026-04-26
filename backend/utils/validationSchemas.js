@@ -153,7 +153,8 @@ const generateSegmentBodySchema = Joi.object({
   segment_id: Joi.number().integer().positive().required(),
   prompt: Joi.string().trim().min(1).required(),
   ratio: videoRatioSchema.optional(),
-  style_mode: Joi.string().trim().valid('realistic', 'comic_drama').optional()
+  style_mode: Joi.string().trim().valid('realistic', 'comic_drama').optional(),
+  use_reference_video: Joi.boolean().optional()
 });
 
 const generateShotBodySchema = Joi.object({
@@ -161,13 +162,15 @@ const generateShotBodySchema = Joi.object({
   shot_id: Joi.string().trim().min(1).required(),
   prompt: Joi.string().trim().min(1).required(),
   ratio: videoRatioSchema.optional(),
-  style_mode: Joi.string().trim().valid('realistic', 'comic_drama').optional()
+  style_mode: Joi.string().trim().valid('realistic', 'comic_drama').optional(),
+  use_reference_video: Joi.boolean().optional()
 });
 
 const generateShotBatchBodySchema = Joi.object({
   segment_id: Joi.number().integer().positive().required(),
   ratio: videoRatioSchema.optional(),
   style_mode: Joi.string().trim().valid('realistic', 'comic_drama').optional(),
+  use_reference_video: Joi.boolean().optional(),
   shots: Joi.array()
     .items(
       Joi.object({

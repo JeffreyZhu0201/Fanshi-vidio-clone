@@ -10,7 +10,8 @@ const generateSegment = async (request, response) => {
     segmentId: request.body.segment_id,
     prompt: request.body.prompt,
     ratio: request.body.ratio,
-    styleMode: request.body.style_mode
+    styleMode: request.body.style_mode,
+    useReferenceVideo: request.body.use_reference_video
   });
 
   response.status(202).json(result);
@@ -27,7 +28,8 @@ const generateShot = async (request, response) => {
     shotId: request.body.shot_id,
     prompt: request.body.prompt,
     ratio: request.body.ratio,
-    styleMode: request.body.style_mode
+    styleMode: request.body.style_mode,
+    useReferenceVideo: request.body.use_reference_video
   });
 
   response.status(202).json(result);
@@ -38,7 +40,8 @@ const generateShotBatch = async (request, response) => {
     segmentId: request.body.segment_id,
     shots: request.body.shots ?? [],
     ratio: request.body.ratio,
-    styleMode: request.body.style_mode
+    styleMode: request.body.style_mode,
+    useReferenceVideo: request.body.use_reference_video
   });
 
   response.status(202).json(result);
