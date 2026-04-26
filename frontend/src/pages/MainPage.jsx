@@ -318,18 +318,6 @@ const MainPage = () => {
     }));
   };
 
-  const buildShotSavePayload = (shot, promptOverride = '') => ({
-    id: shot.id,
-    startTime: shot.startTime,
-    endTime: shot.endTime,
-    summary: shot.summary ?? '',
-    prompt: String(promptOverride ?? '').trim() || String(shot.prompt ?? shot.summary ?? '').trim(),
-    sceneNames: Array.isArray(shot.sceneNames) ? shot.sceneNames : [],
-    characterNames: Array.isArray(shot.characterNames) ? shot.characterNames : [],
-    representativeFrameTime: shot.representativeFrameTime ?? null,
-    representativeFrameNote: shot.representativeFrameNote ?? ''
-  });
-
   const waitForSegmentAssembly = async (segmentId) => {
     const startedAt = Date.now();
 
@@ -447,7 +435,7 @@ const MainPage = () => {
     setResourceRefreshKey((currentValue) => currentValue + 1);
   };
 
-  const optimizeAndGenerateSegments = async () => {
+  const generateSegmentsFromCurrentPrompts = async () => {
     let latestSegments = useGenerationStore.getState().segments ?? [];
 
     if (!latestSegments.length) {
@@ -467,57 +455,21 @@ const MainPage = () => {
 
       updateAutoProduceState({
         progress: 42 + Math.round(((segmentIndex + 1) / latestSegments.length) * 40),
-        message: `正在优化并生成 ${segmentLabel}`
+        message: `正在按当前提示词生成 ${segmentLabel}`
       });
-
-      const optimizedSegmentPayload = await optimizeSegmentPrompt(
-        currentSegment.id,
-        currentSegment.prompt || currentSegment.scenePrompt || currentSegment.sceneSummary || ''
-      );
-      const optimizedSegmentPrompt =
-        String(optimizedSegmentPayload?.optimized_prompt ?? '').trim() ||
-        currentSegment.prompt ||
-        currentSegment.scenePrompt ||
-        currentSegment.sceneSummary ||
-        '';
-
-      if (optimizedSegmentPrompt) {
-        setSegmentPrompt(currentSegment.id, optimizedSegmentPrompt);
-      }
 
       const latestSegment =
         useGenerationStore.getState().segments.find((segment) => segment.id === currentSegment.id) ?? currentSegment;
-      const optimizedShotPayloads = [];
+      const shotsForGeneration = Array.isArray(latestSegment.shots) ? latestSegment.shots : [];
 
-      for (const shot of latestSegment.shots ?? []) {
-        const optimizedShotPayload = await optimizeShotPrompt({
-          segmentId: latestSegment.id,
-          shotId: shot.id,
-          promptOverride: shot.prompt || shot.summary || '',
-          segmentPromptOverride: optimizedSegmentPrompt,
-          sceneNames: shot.sceneNames ?? [],
-          characterNames: shot.characterNames ?? []
-        });
-        const optimizedShotPrompt =
-          String(optimizedShotPayload?.optimized_prompt ?? '').trim() || shot.prompt || shot.summary || '';
-
-        setShotPrompt(latestSegment.id, shot.id, optimizedShotPrompt);
-        optimizedShotPayloads.push(buildShotSavePayload(shot, optimizedShotPrompt));
-      }
-
-      if (!optimizedShotPayloads.length) {
+      if (!shotsForGeneration.length) {
         throw new Error(`${segmentLabel} 还没有可生成的小镜头。`);
       }
 
-      const savedSegmentPayload = await saveSegmentShotDefinitions(latestSegment.id, optimizedShotPayloads);
-
-      if (!savedSegmentPayload) {
-        throw new Error(`${segmentLabel} 的镜头提示词保存失败。`);
-      }
-
-      const persistedSegment =
-        useGenerationStore.getState().segments.find((segment) => segment.id === latestSegment.id) ?? latestSegment;
-      const batchPayload = await generateAllShotsForSegment(latestSegment.id, persistedSegment.shots ?? []);
+      const batchPayload = await generateAllShotsForSegment(latestSegment.id, shotsForGeneration, {
+        useReferenceVideo: false,
+        useRepresentativeFrame: false
+      });
 
       if (!batchPayload) {
         throw new Error(`${segmentLabel} 的小镜头批量生成启动失败。`);
@@ -578,9 +530,9 @@ const MainPage = () => {
 
       updateAutoProduceState({
         progress: 44,
-        message: '步骤 4/5：优化片段提示词并批量生成新镜头'
+        message: '步骤 4/5：按当前片段与镜头提示词批量生成新镜头'
       });
-      await optimizeAndGenerateSegments();
+      await generateSegmentsFromCurrentPrompts();
 
       updateAutoProduceState({
         progress: 92,
@@ -800,7 +752,10 @@ const MainPage = () => {
                     className="inline-flex items-center justify-center rounded-full border border-emerald-500/25 bg-emerald-500/12 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition hover:border-emerald-500/40 hover:bg-emerald-500/18 disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={() => void runAutoProduce()}
                     disabled={!canStartAutoProduce}
-                    title={autoProduceBlockedReason || '自动执行整片理解、资源出图、小镜头生成和成片拼接。'}
+                    title={
+                      autoProduceBlockedReason ||
+                      '自动执行整片理解、资源出图，并在三视图就绪后直接按当前提示词生成小镜头与拼接成片。'
+                    }
                   >
                     {isAutoProducing ? '一键出片进行中...' : '一键出片'}
                   </button>
