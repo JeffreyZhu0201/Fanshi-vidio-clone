@@ -6,7 +6,8 @@ import { broadcastRealtimeEvent } from './realtimeService.js';
 const tasks = new Map();
 const taskEventTypeMap = Object.freeze({
   split: 'split:progress',
-  merge: 'merge:progress'
+  merge: 'merge:progress',
+  segment_export: 'segment-export:progress'
 });
 
 const broadcastTaskUpdate = (task) => {

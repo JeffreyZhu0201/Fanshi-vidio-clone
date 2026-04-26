@@ -33,12 +33,14 @@ import {
   MAX_SEED_DANCE_REFERENCE_AUDIO_COMPRESSION_RATIO,
   MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS,
   buildDialogueDeliveryConstraint,
+  resolveDialogueCompletionTargetSeconds,
   resolveDialogueTimingPlan,
   scaleSubtitleLinesForCompression
 } from './dialogueTimingService.js';
 import { broadcastRealtimeEvent } from './realtimeService.js';
 import {
   assertSeedDanceReady,
+  assertSeedDanceRequestedDurationSupported,
   generateSegment as generateWithSeedDance,
   resolveSeedDanceProviderDuration,
   resumeRemoteGenerationTask
@@ -58,6 +60,7 @@ import { normalizeCharacterStateRefs } from './characterStateService.js';
 const SHOT_TASK_EVENT = 'shot:progress';
 const SHOT_ASSEMBLY_EVENT = 'shot-assembly:progress';
 const inflightShotGenerationTaskProcesses = new Map();
+const DIALOGUE_COMPLETION_TAIL_MARGIN_SECONDS = 0.25;
 
 const normalizeOptionalNumber = (value) => {
   const parsedValue = Number(value);
@@ -211,6 +214,28 @@ const estimateTranscriptDurationSeconds = (speech = null) => {
   return Number(Math.max(lastSubtitleEndTime, heuristicTranscriptDuration, 0).toFixed(2));
 };
 
+const getShotDurationForGeneration = (shot) => {
+  const durationSeconds = Number(shot?.durationSeconds ?? Number(shot?.endTime) - Number(shot?.startTime));
+
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return undefined;
+  }
+
+  return Number(durationSeconds.toFixed(2));
+};
+
+const getRequestedDurationForTaskMeta = (taskMeta = {}, fallbackDurationSeconds = undefined) => {
+  const requestedDurationSeconds = Number(
+    taskMeta?.requestedDurationSeconds ?? taskMeta?.requested_duration_seconds
+  );
+
+  if (Number.isFinite(requestedDurationSeconds) && requestedDurationSeconds > 0) {
+    return Number(requestedDurationSeconds.toFixed(2));
+  }
+
+  return fallbackDurationSeconds;
+};
+
 const resolveShotGenerationStyleMode = (styleMode = '', analysisOptions = null) => {
   return normalizeStyleMode(styleMode || analysisOptions?.styleMode || analysisOptions?.style_mode || DEFAULT_STYLE_MODE);
 };
@@ -238,7 +263,10 @@ const prepareDialogueGenerationPayload = async ({
       effectiveAudioAbsolutePath,
       effectiveAudioPublicUrl,
       speechForGeneration,
-      generationWarnings
+      generationWarnings,
+      requestedGenerationDurationSeconds: Number(Math.max(0.3, shotDurationSeconds || 0.3).toFixed(2)),
+      requiredDialogueDurationSeconds: null,
+      minimumAcceptableDurationSeconds: null
     };
   }
 
@@ -247,144 +275,135 @@ const prepareDialogueGenerationPayload = async ({
     ...speechForGeneration,
     transcript
   });
-  const providerDurationSeconds = resolveSeedDanceProviderDuration(shotDurationSeconds);
+  const lastSubtitleEndTime = speechForGeneration.subtitleLines.length
+    ? Number(speechForGeneration.subtitleLines[speechForGeneration.subtitleLines.length - 1].endTime ?? 0)
+    : 0;
+  const safeShotDurationSeconds = Number(Math.max(0.3, shotDurationSeconds || 0.3).toFixed(2));
+  let originalAudioDurationSeconds = 0;
 
-  if (!sourceAudioAbsolutePath) {
-    const dialogueTimingPlan = resolveDialogueTimingPlan({
-      shotDurationSeconds,
-      providerDurationSeconds,
-      estimatedTranscriptDurationSeconds
-    });
-    const estimatedCompressionRatio = dialogueTimingPlan.requiredCompressionRatio;
+  if (sourceAudioAbsolutePath) {
+    const audioMetadata = await getVideoMetadata(sourceAudioAbsolutePath);
+    originalAudioDurationSeconds = Number(audioMetadata?.durationSecondsExact ?? audioMetadata?.duration ?? 0);
+  }
 
-    if (estimatedCompressionRatio > MAX_SEED_DANCE_REFERENCE_AUDIO_COMPRESSION_RATIO) {
+  const requiredDialogueDurationSeconds = Number(
+    Math.max(
+      0.3,
+      originalAudioDurationSeconds,
+      estimatedTranscriptDurationSeconds,
+      lastSubtitleEndTime
+    ).toFixed(2)
+  );
+  let requestedGenerationDurationSeconds = Number(
+    Math.max(safeShotDurationSeconds, requiredDialogueDurationSeconds + DIALOGUE_COMPLETION_TAIL_MARGIN_SECONDS).toFixed(2)
+  );
+  let dialogueCompletionTimeSeconds = Number(
+    Math.min(
+      requiredDialogueDurationSeconds,
+      resolveDialogueCompletionTargetSeconds(requestedGenerationDurationSeconds)
+    ).toFixed(2)
+  );
+  let compressionRatio = 1;
+
+  try {
+    assertSeedDanceRequestedDurationSupported(requestedGenerationDurationSeconds, `镜头 ${shot?.id ?? ''}`);
+  } catch (error) {
+    const maxAllowedDurationSeconds = 15;
+    const maxDialogueCompletionTimeSeconds = Number(
+      Math.max(0.3, resolveDialogueCompletionTargetSeconds(maxAllowedDurationSeconds)).toFixed(2)
+    );
+    compressionRatio = Number((requiredDialogueDurationSeconds / maxDialogueCompletionTimeSeconds).toFixed(3));
+
+    if (compressionRatio > MAX_SEED_DANCE_REFERENCE_AUDIO_COMPRESSION_RATIO) {
       throw new AppError(
-        `当前镜头对白按文字估算需要约 ${estimatedTranscriptDurationSeconds.toFixed(2)} 秒，已超过镜头 ${shotDurationSeconds.toFixed(
+        `当前镜头对白约需 ${requiredDialogueDurationSeconds.toFixed(
           2
-        )} 秒可承载范围；需要压缩到 ${estimatedCompressionRatio.toFixed(2)}x，超过 1.5x 上限，请先拆镜头或缩短台词。`,
+        )} 秒，超过 Seedance 单次 ${maxAllowedDurationSeconds} 秒上限；需要压缩到 ${compressionRatio.toFixed(
+          2
+        )}x，超过 1.5x 上限，请先拆镜头或缩短台词。`,
         409,
         {
           segment_id: segment?.id,
           shot_id: shot?.id,
-          estimated_transcript_duration_seconds: estimatedTranscriptDurationSeconds,
-          shot_duration_seconds: shotDurationSeconds,
-          required_compression_ratio: Number(estimatedCompressionRatio.toFixed(3))
+          required_dialogue_duration_seconds: requiredDialogueDurationSeconds,
+          original_shot_duration_seconds: safeShotDurationSeconds,
+          required_compression_ratio: Number(compressionRatio.toFixed(3))
         }
       );
     }
 
-    speechForGeneration = {
-      ...speechForGeneration,
-      transcript,
-      subtitleLines:
-        estimatedCompressionRatio > 1.001
-          ? scaleSubtitleLinesForCompression(
-              speechForGeneration.subtitleLines,
-              estimatedCompressionRatio,
-              dialogueTimingPlan.dialogueCompletionTimeSeconds
-            )
-          : speechForGeneration.subtitleLines,
-      fitWithinDuration:
-        estimatedCompressionRatio > 1.02 ||
-        dialogueTimingPlan.providerTailPaddingSeconds > 0.05 ||
-        dialogueTimingPlan.trimSafetyTailSeconds > 0.02,
-      deliveryRateMultiplier: estimatedCompressionRatio > 1 ? Number(estimatedCompressionRatio.toFixed(2)) : 1,
-      dialogueCompletionTimeSeconds: dialogueTimingPlan.dialogueCompletionTimeSeconds,
-      providerTargetDurationSeconds: dialogueTimingPlan.providerDurationSeconds,
-      trimSafetyTailSeconds: dialogueTimingPlan.trimSafetyTailSeconds,
-      providerTailPaddingSeconds: dialogueTimingPlan.providerTailPaddingSeconds,
-      deliveryConstraint: buildDialogueDeliveryConstraint(dialogueTimingPlan)
-    };
-
-    return {
-      effectiveAudioAbsolutePath,
-      effectiveAudioPublicUrl,
-      speechForGeneration,
-      generationWarnings
-    };
+    requestedGenerationDurationSeconds = maxAllowedDurationSeconds;
+    dialogueCompletionTimeSeconds = maxDialogueCompletionTimeSeconds;
   }
 
-  const audioMetadata = await getVideoMetadata(sourceAudioAbsolutePath);
-  const originalAudioDurationSeconds = Number(audioMetadata?.durationSecondsExact ?? audioMetadata?.duration ?? 0);
-  const dialogueTimingPlan = resolveDialogueTimingPlan({
-    shotDurationSeconds,
-    providerDurationSeconds,
-    sourceAudioDurationSeconds: originalAudioDurationSeconds,
-    estimatedTranscriptDurationSeconds
-  });
-  const compressionRatio = dialogueTimingPlan.requiredCompressionRatio;
-
-  if (compressionRatio > MAX_SEED_DANCE_REFERENCE_AUDIO_COMPRESSION_RATIO) {
-    throw new AppError(
-      `当前镜头参考音频约 ${originalAudioDurationSeconds.toFixed(2)} 秒，已超过镜头 ${shotDurationSeconds.toFixed(
-        2
-      )} 秒可承载范围；需要压缩到 ${compressionRatio.toFixed(2)}x，超过 1.5x 上限，请先拆镜头或缩短台词。`,
-      409,
-      {
-        segment_id: segment?.id,
-        shot_id: shot?.id,
-        reference_audio_duration_seconds: originalAudioDurationSeconds,
-        shot_duration_seconds: shotDurationSeconds,
-        required_compression_ratio: Number(compressionRatio.toFixed(3))
-      }
-    );
-  }
-
+  const providerDurationSeconds = resolveSeedDanceProviderDuration(requestedGenerationDurationSeconds);
   let effectiveAudioDurationSeconds = originalAudioDurationSeconds;
 
   if (compressionRatio > 1.001) {
-    const compressedAudio = await compressAudioClipToDuration(
-      sourceAudioAbsolutePath,
-      dialogueTimingPlan.dialogueCompletionTimeSeconds,
-      {
-      basename: `segment-${segment.id}-${shot.id}-task-${taskId}-speech-audio-fitted`
-      }
-    );
+    if (sourceAudioAbsolutePath) {
+      const compressedAudio = await compressAudioClipToDuration(
+        sourceAudioAbsolutePath,
+        dialogueCompletionTimeSeconds,
+        {
+          basename: `segment-${segment.id}-${shot.id}-task-${taskId}-speech-audio-fitted`
+        }
+      );
 
-    if (!compressedAudio?.filePath) {
-      throw new AppError('参考音频压缩失败，已停止本次镜头生成，请稍后重试。', 500, {
-        segment_id: segment?.id,
-        shot_id: shot?.id
-      });
+      if (!compressedAudio?.filePath) {
+        throw new AppError('参考音频压缩失败，已停止本次镜头生成，请稍后重试。', 500, {
+          segment_id: segment?.id,
+          shot_id: shot?.id
+        });
+      }
+
+      effectiveAudioAbsolutePath = resolveUploadPath(compressedAudio.filePath);
+      effectiveAudioPublicUrl = toAbsolutePublicUploadUrl(compressedAudio.filePath) || compressedAudio.fileUrl || '';
+      effectiveAudioDurationSeconds = dialogueCompletionTimeSeconds;
     }
 
-    effectiveAudioAbsolutePath = resolveUploadPath(compressedAudio.filePath);
-    effectiveAudioPublicUrl = toAbsolutePublicUploadUrl(compressedAudio.filePath) || compressedAudio.fileUrl || '';
-    effectiveAudioDurationSeconds = dialogueTimingPlan.dialogueCompletionTimeSeconds;
-    speechForGeneration = {
-      ...speechForGeneration,
-      transcript,
-      subtitleLines: scaleSubtitleLinesForCompression(
-        speechForGeneration.subtitleLines,
-        compressionRatio,
-        dialogueTimingPlan.dialogueCompletionTimeSeconds
-      ),
-      fitWithinDuration: true,
-      deliveryRateMultiplier: Number(compressionRatio.toFixed(2)),
-      dialogueCompletionTimeSeconds: dialogueTimingPlan.dialogueCompletionTimeSeconds,
-      providerTargetDurationSeconds: dialogueTimingPlan.providerDurationSeconds,
-      trimSafetyTailSeconds: dialogueTimingPlan.trimSafetyTailSeconds,
-      providerTailPaddingSeconds: dialogueTimingPlan.providerTailPaddingSeconds,
-      deliveryConstraint: buildDialogueDeliveryConstraint(dialogueTimingPlan)
-    };
     generationWarnings.push(
-      `小镜头参考音频长于镜头时长，已先按 ${compressionRatio.toFixed(2)}x 压缩到约 ${dialogueTimingPlan.dialogueCompletionTimeSeconds.toFixed(
+      `对白总时长超过单次生成上限，已按 ${compressionRatio.toFixed(2)}x 压缩对白节奏，保证完整台词能在约 ${requestedGenerationDurationSeconds.toFixed(
         2
-      )} 秒的镜头有效时长内`
+      )} 秒内说完`
     );
-  } else {
-    speechForGeneration = {
-      ...speechForGeneration,
-      transcript,
-      fitWithinDuration:
-        dialogueTimingPlan.providerTailPaddingSeconds > 0.05 || dialogueTimingPlan.trimSafetyTailSeconds > 0.02,
-      dialogueCompletionTimeSeconds: dialogueTimingPlan.dialogueCompletionTimeSeconds,
-      providerTargetDurationSeconds: dialogueTimingPlan.providerDurationSeconds,
-      trimSafetyTailSeconds: dialogueTimingPlan.trimSafetyTailSeconds,
-      providerTailPaddingSeconds: dialogueTimingPlan.providerTailPaddingSeconds,
-      deliveryConstraint: buildDialogueDeliveryConstraint(dialogueTimingPlan)
-    };
   }
+
+  const dialogueTimingPlan = resolveDialogueTimingPlan({
+    shotDurationSeconds: requestedGenerationDurationSeconds,
+    providerDurationSeconds,
+    sourceAudioDurationSeconds: effectiveAudioDurationSeconds,
+    estimatedTranscriptDurationSeconds:
+      compressionRatio > 1.001 ? dialogueCompletionTimeSeconds : estimatedTranscriptDurationSeconds
+  });
+  const scaledSubtitleLines =
+    compressionRatio > 1.001
+      ? scaleSubtitleLinesForCompression(
+          speechForGeneration.subtitleLines,
+          compressionRatio,
+          dialogueCompletionTimeSeconds
+        )
+      : speechForGeneration.subtitleLines;
+
+  speechForGeneration = {
+    ...speechForGeneration,
+    transcript,
+    subtitleLines: scaledSubtitleLines,
+    fitWithinDuration: compressionRatio > 1.02,
+    deliveryRateMultiplier: compressionRatio > 1 ? Number(compressionRatio.toFixed(2)) : 1,
+    dialogueCompletionTimeSeconds,
+    providerTargetDurationSeconds: providerDurationSeconds,
+    trimSafetyTailSeconds: Number(
+      Math.max(0, requestedGenerationDurationSeconds - dialogueCompletionTimeSeconds).toFixed(2)
+    ),
+    providerTailPaddingSeconds: Number(Math.max(0, providerDurationSeconds - dialogueCompletionTimeSeconds).toFixed(2)),
+    deliveryConstraint: buildDialogueDeliveryConstraint({
+      ...dialogueTimingPlan,
+      shotDurationSeconds: requestedGenerationDurationSeconds,
+      providerDurationSeconds,
+      dialogueCompletionTimeSeconds,
+      requiredCompressionRatio: compressionRatio
+    })
+  };
 
   if (
     effectiveAudioAbsolutePath &&
@@ -405,7 +424,7 @@ const prepareDialogueGenerationPayload = async ({
       generationWarnings.push(
         `对白参考音频已补到 ${dialogueTimingPlan.finalReferenceAudioDurationSeconds.toFixed(
           2
-        )} 秒，确保裁回镜头时台词仍完整，并尽量贴近镜头末尾收口`
+        )} 秒，避免供应商内部处理时丢失尾字`
       );
     } else if (effectiveAudioDurationSeconds < MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS) {
       generationWarnings.push(
@@ -431,7 +450,10 @@ const prepareDialogueGenerationPayload = async ({
           styleMode: resolveShotGenerationStyleMode(styleMode)
         }
       : speechForGeneration,
-    generationWarnings
+    generationWarnings,
+    requestedGenerationDurationSeconds,
+    requiredDialogueDurationSeconds,
+    minimumAcceptableDurationSeconds: dialogueCompletionTimeSeconds
   };
 };
 
@@ -642,6 +664,23 @@ const serializeShotGenerationMeta = (task) => {
     fallback_reason: String(taskMeta.fallbackReason ?? '').trim(),
     provider_error: String(taskMeta.providerError ?? '').trim(),
     source: String(taskMeta.source ?? '').trim(),
+    requested_duration_seconds: normalizeOptionalNumber(
+      taskMeta.requestedDurationSeconds ?? taskMeta.requested_duration_seconds
+    ),
+    provider_duration_seconds: normalizeOptionalNumber(
+      taskMeta.providerDurationSeconds ?? taskMeta.provider_duration_seconds
+    ),
+    actual_duration_seconds: normalizeOptionalNumber(
+      taskMeta.actualDurationSeconds ?? taskMeta.actual_duration_seconds
+    ),
+    has_dialogue:
+      typeof (taskMeta.hasDialogue ?? taskMeta.has_dialogue) === 'boolean'
+        ? Boolean(taskMeta.hasDialogue ?? taskMeta.has_dialogue)
+        : null,
+    trimmed_to_requested:
+      typeof (taskMeta.trimmedToRequested ?? taskMeta.trimmed_to_requested) === 'boolean'
+        ? Boolean(taskMeta.trimmedToRequested ?? taskMeta.trimmed_to_requested)
+        : false,
     sent_reference_images: Array.isArray(taskMeta.sentReferenceImages) ? taskMeta.sentReferenceImages : [],
     sent_reference_videos: Array.isArray(taskMeta.sentReferenceVideos) ? taskMeta.sentReferenceVideos : [],
     sent_reference_audios: Array.isArray(taskMeta.sentReferenceAudios) ? taskMeta.sentReferenceAudios : []
@@ -745,6 +784,40 @@ const serializeShotAssemblyState = (segmentId, shotAssembly = {}, fallbackSummar
       shotAssembly.assemblyGenerationTaskId ?? fallbackSummary.assembly_generation_task_id ?? 0
     ) || null,
     source: String(shotAssembly.source ?? fallbackSummary.source ?? 'shot_assembly').trim() || 'shot_assembly',
+    requested_duration_seconds:
+      normalizeOptionalNumber(
+        shotAssembly.requestedDurationSeconds ??
+          shotAssembly.requested_duration_seconds ??
+          fallbackSummary.requested_duration_seconds
+      ) ?? null,
+    provider_duration_seconds:
+      normalizeOptionalNumber(
+        shotAssembly.providerDurationSeconds ??
+          shotAssembly.provider_duration_seconds ??
+          fallbackSummary.provider_duration_seconds
+      ) ?? null,
+    actual_duration_seconds:
+      normalizeOptionalNumber(
+        shotAssembly.actualDurationSeconds ??
+          shotAssembly.actual_duration_seconds ??
+          fallbackSummary.actual_duration_seconds
+      ) ?? null,
+    has_dialogue:
+      typeof (shotAssembly.hasDialogue ?? shotAssembly.has_dialogue ?? fallbackSummary.has_dialogue) === 'boolean'
+        ? Boolean(shotAssembly.hasDialogue ?? shotAssembly.has_dialogue ?? fallbackSummary.has_dialogue)
+        : null,
+    trimmed_to_requested:
+      typeof (
+        shotAssembly.trimmedToRequested ??
+        shotAssembly.trimmed_to_requested ??
+        fallbackSummary.trimmed_to_requested
+      ) === 'boolean'
+        ? Boolean(
+            shotAssembly.trimmedToRequested ??
+              shotAssembly.trimmed_to_requested ??
+              fallbackSummary.trimmed_to_requested
+          )
+        : false,
     started_at: shotAssembly.startedAt ?? fallbackSummary.started_at ?? '',
     updated_at: shotAssembly.updatedAt ?? fallbackSummary.updated_at ?? ''
   };
@@ -1097,6 +1170,15 @@ const createSegmentAssemblyGenerationTask = async ({
     });
   }
 
+  const mergedVideoMetadata = mergedResult?.filePath ? await getVideoMetadata(resolveUploadPath(mergedResult.filePath)) : null;
+  const actualDurationSeconds =
+    Number.isFinite(Number(mergedVideoMetadata?.durationSecondsExact)) && Number(mergedVideoMetadata.durationSecondsExact) > 0
+      ? Number(Number(mergedVideoMetadata.durationSecondsExact).toFixed(2))
+      : Number.isFinite(Number(mergedVideoMetadata?.duration)) && Number(mergedVideoMetadata.duration) > 0
+        ? Number(Number(mergedVideoMetadata.duration).toFixed(2))
+        : null;
+  const hasDialogue = shotTasks.some((task) => Boolean(task?.meta?.hasDialogue ?? task?.meta?.has_dialogue));
+
   const assemblyTask = await GenerationTask.create({
     segmentId: segment.id,
     prompt,
@@ -1111,6 +1193,11 @@ const createSegmentAssemblyGenerationTask = async ({
       remoteTaskId: '',
       fallbackReason: '',
       providerError: '',
+      requestedDurationSeconds: null,
+      providerDurationSeconds: null,
+      actualDurationSeconds,
+      hasDialogue,
+      trimmedToRequested: false,
       shotGenerationWarnings: shotTasks
         .map((task) => String(task.meta?.fallbackReason ?? '').trim())
         .filter(Boolean),
@@ -1164,6 +1251,16 @@ const attemptPendingShotAssembly = async (segmentId) => {
   const mergedResult = await mergeVideos(mergeInputPaths, {
     basename: `segment-${segmentId}-shot-assembly`
   });
+  const mergedVideoMetadata = mergedResult?.filePath ? await getVideoMetadata(resolveUploadPath(mergedResult.filePath)) : null;
+  const actualDurationSeconds =
+    Number.isFinite(Number(mergedVideoMetadata?.durationSecondsExact)) && Number(mergedVideoMetadata.durationSecondsExact) > 0
+      ? Number(Number(mergedVideoMetadata.durationSecondsExact).toFixed(2))
+      : Number.isFinite(Number(mergedVideoMetadata?.duration)) && Number(mergedVideoMetadata.duration) > 0
+        ? Number(Number(mergedVideoMetadata.duration).toFixed(2))
+        : null;
+  const hasDialogue = normalizedShots.some((shot) =>
+    Boolean(latestCompletedTaskByShotId.get(shot.id)?.meta?.hasDialogue ?? latestCompletedTaskByShotId.get(shot.id)?.meta?.has_dialogue)
+  );
   const assemblyPrompt = normalizedShots
     .map((shot) => latestCompletedTaskByShotId.get(shot.id)?.optimizedPrompt || latestCompletedTaskByShotId.get(shot.id)?.prompt || shot.prompt)
     .filter(Boolean)
@@ -1184,23 +1281,18 @@ const attemptPendingShotAssembly = async (segmentId) => {
     resultUrl: mergedResult.fileUrl,
     errorMessage: '',
     assemblyGenerationTaskId: assemblyTask.id,
-    source: 'shot_assembly'
+    source: 'shot_assembly',
+    requestedDurationSeconds: null,
+    providerDurationSeconds: null,
+    actualDurationSeconds,
+    hasDialogue,
+    trimmedToRequested: false
   });
 
   return {
     mergedResult,
     assemblyTask
   };
-};
-
-const getShotDurationForGeneration = (shot) => {
-  const durationSeconds = Number(shot?.durationSeconds ?? Number(shot?.endTime) - Number(shot?.startTime));
-
-  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-    return undefined;
-  }
-
-  return Number(durationSeconds.toFixed(2));
 };
 
 const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = true } = {}) => {
@@ -1281,16 +1373,27 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
     const sourcePublicUrl = shotSourcePublicUrl || segmentSourcePublicUrl;
     const remoteTaskId = String(task.meta?.remoteTaskId ?? '').trim();
     let speechForGeneration = shouldGenerateDialogue ? shotSpeech : null;
+    const fallbackRequestedDurationSeconds = getShotDurationForGeneration(shot);
+    const requestedDurationSecondsFromTask = getRequestedDurationForTaskMeta(
+      task.meta ?? {},
+      fallbackRequestedDurationSeconds
+    );
+    const minimumAcceptableDurationSeconds =
+      normalizeOptionalNumber(
+        task.meta?.minimumAcceptableDurationSeconds ?? task.meta?.minimum_acceptable_duration_seconds
+      ) ?? null;
 
     if (remoteTaskId) {
       const result = await resumeRemoteGenerationTask({
         remoteTaskId,
         basename: `segment-${segment.id}-${task.shotId}-task-${task.id}`,
-        duration: getShotDurationForGeneration(shot),
+        duration: requestedDurationSecondsFromTask,
         expectAudioTrack: shouldGenerateDialogue || Boolean(task.meta?.generateAudio),
         onProgress: async (progressPayload) => {
           await applySeedDanceShotTaskProgress(task, progressPayload);
-        }
+        },
+        trimToRequestedDuration: !shouldGenerateDialogue,
+        minimumAcceptableDurationSeconds: shouldGenerateDialogue ? minimumAcceptableDurationSeconds : null
       });
 
       await task.update({
@@ -1312,6 +1415,12 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
           remoteStatusLabel: '远端已完成',
           remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
           remoteUpdatedAt: task.meta?.remoteUpdatedAt ?? null,
+          requestedDurationSeconds: result.requestedDurationSeconds ?? requestedDurationSecondsFromTask ?? null,
+          providerDurationSeconds: result.providerDurationSeconds ?? null,
+          actualDurationSeconds: result.actualDurationSeconds ?? null,
+          hasDialogue: shouldGenerateDialogue,
+          trimmedToRequested:
+            typeof result.trimmedToRequested === 'boolean' ? result.trimmedToRequested : !shouldGenerateDialogue,
           fallbackReason: result.fallbackReason || '',
           providerError: result.providerError || ''
         }
@@ -1362,7 +1471,42 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
       effectiveShotSourceAudioPublicUrl = dialoguePayload.effectiveAudioPublicUrl;
       speechForGeneration = dialoguePayload.speechForGeneration;
       generationWarnings.push(...dialoguePayload.generationWarnings);
+      await task.update({
+        meta: {
+          ...(task.meta ?? {}),
+          requestedDurationSeconds: dialoguePayload.requestedGenerationDurationSeconds ?? fallbackRequestedDurationSeconds ?? null,
+          providerDurationSeconds:
+            resolveSeedDanceProviderDuration(
+              dialoguePayload.requestedGenerationDurationSeconds ?? fallbackRequestedDurationSeconds ?? 0
+            ) ?? null,
+          actualDurationSeconds: null,
+          hasDialogue: true,
+          trimmedToRequested: false,
+          minimumAcceptableDurationSeconds: dialoguePayload.minimumAcceptableDurationSeconds ?? null
+        }
+      });
+    } else {
+      await task.update({
+        meta: {
+          ...(task.meta ?? {}),
+          requestedDurationSeconds: fallbackRequestedDurationSeconds ?? null,
+          providerDurationSeconds:
+            fallbackRequestedDurationSeconds !== undefined
+              ? resolveSeedDanceProviderDuration(fallbackRequestedDurationSeconds)
+              : null,
+          actualDurationSeconds: null,
+          hasDialogue: false,
+          trimmedToRequested: true,
+          minimumAcceptableDurationSeconds: null
+        }
+      });
     }
+
+    await task.reload();
+    const resolvedRequestedDurationSeconds = getRequestedDurationForTaskMeta(
+      task.meta ?? {},
+      shouldGenerateDialogue ? speechForGeneration?.providerTargetDurationSeconds : fallbackRequestedDurationSeconds
+    );
 
     let backgroundAsset = null;
 
@@ -1408,7 +1552,7 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
             }
           : null,
       isShot: true,
-      durationSeconds: getShotDurationForGeneration(shot),
+      durationSeconds: resolvedRequestedDurationSeconds,
       useReferenceVideo,
       useReferenceFrame
     });
@@ -1487,12 +1631,19 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
       prompt: seedDancePrompt,
       basename: `segment-${segment.id}-${task.shotId}-task-${task.id}`,
       ratio: normalizeGenerationRatio(task.meta?.ratio),
-      duration: getShotDurationForGeneration(shot),
+      duration: resolvedRequestedDurationSeconds,
       onProgress: async (progressPayload) => {
         await applySeedDanceShotTaskProgress(task, progressPayload);
       },
       generateAudio: shouldGenerateDialogue,
       expectAudioTrack: shouldGenerateDialogue,
+      trimToRequestedDuration: !shouldGenerateDialogue,
+      minimumAcceptableDurationSeconds:
+        shouldGenerateDialogue
+          ? normalizeOptionalNumber(
+              task.meta?.minimumAcceptableDurationSeconds ?? task.meta?.minimum_acceptable_duration_seconds
+            ) ?? speechForGeneration?.dialogueCompletionTimeSeconds ?? null
+          : null,
       referenceImages,
       referenceAudios:
         shouldGenerateDialogue && (effectiveShotSourceAudioAbsolutePath || effectiveShotSourceAudioPublicUrl)
@@ -1542,6 +1693,12 @@ const processShotGenerationTaskUnlocked = async (taskId, { attemptAssembly = tru
         remoteStatusLabel: '远端已完成',
         remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
         remoteUpdatedAt: task.meta?.remoteUpdatedAt ?? null,
+        requestedDurationSeconds: result.requestedDurationSeconds ?? resolvedRequestedDurationSeconds ?? null,
+        providerDurationSeconds: result.providerDurationSeconds ?? null,
+        actualDurationSeconds: result.actualDurationSeconds ?? null,
+        hasDialogue: shouldGenerateDialogue,
+        trimmedToRequested:
+          typeof result.trimmedToRequested === 'boolean' ? result.trimmedToRequested : !shouldGenerateDialogue,
         fallbackReason: [generationWarnings.join('；'), result.fallbackReason || ''].filter(Boolean).join('；'),
         providerError: result.providerError || '',
         speechSignature: buildShotSpeechSignature(shot),
@@ -1689,6 +1846,12 @@ const startShotGeneration = async ({
       remoteTaskId: '',
       fallbackReason: '',
       providerError: '',
+      requestedDurationSeconds: null,
+      providerDurationSeconds: null,
+      actualDurationSeconds: null,
+      hasDialogue: null,
+      trimmedToRequested: false,
+      minimumAcceptableDurationSeconds: null,
       speechSignature: buildShotSpeechSignature(shot),
       characterStateSignature: buildShotCharacterStateSignature(shot),
       generateAudio: isSpeechAnalysisEnabled(
@@ -1804,6 +1967,12 @@ const processShotBatchGeneration = async ({
         remoteTaskId: '',
         fallbackReason: '',
         providerError: '',
+        requestedDurationSeconds: null,
+        providerDurationSeconds: null,
+        actualDurationSeconds: null,
+        hasDialogue: null,
+        trimmedToRequested: false,
+        minimumAcceptableDurationSeconds: null,
         speechSignature: buildShotSpeechSignature(shot),
         characterStateSignature: buildShotCharacterStateSignature(shot),
         generateAudio: isSpeechAnalysisEnabled(

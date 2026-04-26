@@ -20,6 +20,10 @@ import { broadcastRealtimeEvent } from './realtimeService.js';
 
 const serializeGenerationMeta = (task) => {
   const taskMeta = task?.meta ?? {};
+  const normalizeDurationValue = (value) => {
+    const parsedValue = Number(value);
+    return Number.isFinite(parsedValue) && parsedValue >= 0 ? Number(parsedValue.toFixed(2)) : null;
+  };
 
   return {
     engine: String(taskMeta.engine ?? '').trim(),
@@ -36,6 +40,21 @@ const serializeGenerationMeta = (task) => {
     fallback_reason: String(taskMeta.fallbackReason ?? '').trim(),
     provider_error: String(taskMeta.providerError ?? '').trim(),
     source: String(taskMeta.source ?? '').trim(),
+    requested_duration_seconds: normalizeDurationValue(
+      taskMeta.requestedDurationSeconds ?? taskMeta.requested_duration_seconds
+    ),
+    provider_duration_seconds: normalizeDurationValue(
+      taskMeta.providerDurationSeconds ?? taskMeta.provider_duration_seconds
+    ),
+    actual_duration_seconds: normalizeDurationValue(taskMeta.actualDurationSeconds ?? taskMeta.actual_duration_seconds),
+    has_dialogue:
+      typeof (taskMeta.hasDialogue ?? taskMeta.has_dialogue) === 'boolean'
+        ? Boolean(taskMeta.hasDialogue ?? taskMeta.has_dialogue)
+        : null,
+    trimmed_to_requested:
+      typeof (taskMeta.trimmedToRequested ?? taskMeta.trimmed_to_requested) === 'boolean'
+        ? Boolean(taskMeta.trimmedToRequested ?? taskMeta.trimmed_to_requested)
+        : false,
     sent_reference_images: Array.isArray(taskMeta.sentReferenceImages) ? taskMeta.sentReferenceImages : [],
     sent_reference_videos: Array.isArray(taskMeta.sentReferenceVideos) ? taskMeta.sentReferenceVideos : [],
     sent_reference_audios: Array.isArray(taskMeta.sentReferenceAudios) ? taskMeta.sentReferenceAudios : []
@@ -1197,7 +1216,7 @@ const buildSeedDanceReconstructionPrompt = ({
     isShot && hasDialogue && speechTimingSummary ? `字幕节奏参考：${speechTimingSummary}` : '',
     isShot && hasDialogue && speechStyle ? `说话方式：${speechStyle}` : '',
     isShot && hasDialogue && speechDialogueCompletionTimeSeconds > 0
-      ? `对白必须尽量覆盖当前镜头有效时长，并在第 ${speechDialogueCompletionTimeSeconds.toFixed(2)} 秒附近自然收口。`
+      ? `对白必须尽量覆盖本次目标视频时长，并在第 ${speechDialogueCompletionTimeSeconds.toFixed(2)} 秒附近自然收口。`
       : '',
     isShot &&
     hasDialogue &&
@@ -1205,13 +1224,13 @@ const buildSeedDanceReconstructionPrompt = ({
     Number.isFinite(Number(durationSeconds))
       ? `如果供应商内部按 ${speechProviderTargetDurationSeconds.toFixed(2)} 秒生成后再裁回当前镜头 ${Number(
           durationSeconds
-        ).toFixed(2)} 秒，也要让对白和口型尽量延续到裁切点附近，不要在镜头中前段提前说完。`
+        ).toFixed(2)} 秒，也要让对白和口型尽量延续到裁切点附近，不要在目标视频中前段提前说完。`
       : '',
     isShot && hasDialogue && speechTrimSafetyTailSeconds > 0.02
       ? `镜头末尾只允许保留约 ${speechTrimSafetyTailSeconds.toFixed(2)} 秒极短收口余量，不要提前长时间闭口。`
       : '',
     isShot && hasDialogue && shouldFitDialogueWithinShot && Number.isFinite(Number(durationSeconds))
-      ? `必须把完整对白压缩在当前镜头 ${Number(durationSeconds).toFixed(2)} 秒内说完，允许适度加快语速和压缩停顿，但不要截断台词结尾。`
+      ? `必须把完整对白控制在本次目标视频 ${Number(durationSeconds).toFixed(2)} 秒内说完，允许适度加快语速和压缩停顿，但不要截断台词结尾。`
       : '',
     isShot && hasDialogue && String(speech?.deliveryConstraint ?? speech?.delivery_constraint ?? '').trim()
       ? `对白时长约束：${String(speech?.deliveryConstraint ?? speech?.delivery_constraint ?? '').trim()}`
@@ -1258,15 +1277,22 @@ const processGenerationTask = async (taskId) => {
     broadcastGenerationTaskUpdate(task);
 
     const remoteTaskId = String(task.meta?.remoteTaskId ?? '').trim();
+    const requestedDurationSeconds =
+      Number(task.meta?.requestedDurationSeconds ?? task.meta?.requested_duration_seconds) ||
+      getSeedDanceDurationForSegment(task.segment);
+    const providerDurationSeconds =
+      Number(task.meta?.providerDurationSeconds ?? task.meta?.provider_duration_seconds) ||
+      requestedDurationSeconds;
 
     if (remoteTaskId) {
       const result = await resumeRemoteGenerationTask({
         remoteTaskId,
         basename: `segment-${task.segmentId}-task-${task.id}`,
-        duration: getSeedDanceDurationForSegment(task.segment),
+        duration: requestedDurationSeconds,
         onProgress: async (progressPayload) => {
           await applySeedDanceTaskProgress(task, progressPayload);
-        }
+        },
+        trimToRequestedDuration: true
       });
 
       await task.update({
@@ -1288,6 +1314,12 @@ const processGenerationTask = async (taskId) => {
           remoteStatusLabel: '远端已完成',
           remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
           remoteUpdatedAt: task.meta?.remoteUpdatedAt ?? null,
+          requestedDurationSeconds: result.requestedDurationSeconds ?? requestedDurationSeconds,
+          providerDurationSeconds: result.providerDurationSeconds ?? providerDurationSeconds,
+          actualDurationSeconds: result.actualDurationSeconds ?? null,
+          hasDialogue: false,
+          trimmedToRequested:
+            typeof result.trimmedToRequested === 'boolean' ? result.trimmedToRequested : true,
           fallbackReason: result.fallbackReason || '',
           providerError: result.providerError || ''
         }
@@ -1349,6 +1381,7 @@ const processGenerationTask = async (taskId) => {
     }
 
     const optimizedPrompt = expandPromptMentions(task.prompt, characters, overallAnalysis?.backgrounds ?? []);
+    const targetDurationSeconds = getSeedDanceDurationForSegment(task.segment);
     const seedDancePrompt = buildSeedDanceReconstructionPrompt({
       prompt: optimizedPrompt,
       plot: overallAnalysis?.plot ?? '',
@@ -1361,6 +1394,7 @@ const processGenerationTask = async (taskId) => {
         backgroundBinding?.backgroundName || ''
       ],
       isShot: false,
+      durationSeconds: targetDurationSeconds,
       useReferenceVideo,
       useReferenceFrame
     });
@@ -1398,7 +1432,15 @@ const processGenerationTask = async (taskId) => {
 
     await task.update({
       optimizedPrompt,
-      progress: 45
+      progress: 45,
+      meta: {
+        ...(task.meta ?? {}),
+        requestedDurationSeconds: targetDurationSeconds ?? null,
+        providerDurationSeconds: targetDurationSeconds ?? null,
+        actualDurationSeconds: null,
+        hasDialogue: false,
+        trimmedToRequested: true
+      }
     });
     broadcastGenerationTaskUpdate(task);
 
@@ -1410,10 +1452,11 @@ const processGenerationTask = async (taskId) => {
       prompt: seedDancePrompt,
       basename: `segment-${task.segmentId}-task-${task.id}`,
       ratio: normalizeGenerationRatio(task.meta?.ratio),
-      duration: getSeedDanceDurationForSegment(task.segment),
+      duration: targetDurationSeconds,
       onProgress: async (progressPayload) => {
         await applySeedDanceTaskProgress(task, progressPayload);
       },
+      trimToRequestedDuration: true,
       referenceImages,
       referenceVideos: [
         backgroundAsset?.assetPath || backgroundAsset?.assetUrl
@@ -1449,6 +1492,12 @@ const processGenerationTask = async (taskId) => {
         remoteStatusLabel: '远端已完成',
         remoteCreatedAt: task.meta?.remoteCreatedAt ?? null,
         remoteUpdatedAt: task.meta?.remoteUpdatedAt ?? null,
+        requestedDurationSeconds: result.requestedDurationSeconds ?? targetDurationSeconds ?? null,
+        providerDurationSeconds: result.providerDurationSeconds ?? targetDurationSeconds ?? null,
+        actualDurationSeconds: result.actualDurationSeconds ?? null,
+        hasDialogue: false,
+        trimmedToRequested:
+          typeof result.trimmedToRequested === 'boolean' ? result.trimmedToRequested : true,
         fallbackReason: result.fallbackReason || '',
         providerError: result.providerError || ''
       }
@@ -1569,7 +1618,12 @@ const startGeneration = async ({
       isMock: false,
       remoteTaskId: '',
       fallbackReason: '',
-      providerError: ''
+      providerError: '',
+      requestedDurationSeconds: null,
+      providerDurationSeconds: null,
+      actualDurationSeconds: null,
+      hasDialogue: false,
+      trimmedToRequested: true
     }
   });
   broadcastGenerationTaskUpdate(task);

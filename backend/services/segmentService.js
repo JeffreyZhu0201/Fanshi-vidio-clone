@@ -32,6 +32,10 @@ const serializeGenerationTask = (task) => {
   }
 
   const taskMeta = task.meta ?? {};
+  const normalizeDurationValue = (value) => {
+    const parsedValue = Number(value);
+    return Number.isFinite(parsedValue) && parsedValue >= 0 ? Number(parsedValue.toFixed(2)) : null;
+  };
 
   return {
     id: task.id,
@@ -49,6 +53,21 @@ const serializeGenerationTask = (task) => {
     fallback_reason: String(taskMeta.fallbackReason ?? '').trim(),
     provider_error: String(taskMeta.providerError ?? '').trim(),
     source: String(taskMeta.source ?? '').trim(),
+    requested_duration_seconds: normalizeDurationValue(
+      taskMeta.requestedDurationSeconds ?? taskMeta.requested_duration_seconds
+    ),
+    provider_duration_seconds: normalizeDurationValue(
+      taskMeta.providerDurationSeconds ?? taskMeta.provider_duration_seconds
+    ),
+    actual_duration_seconds: normalizeDurationValue(taskMeta.actualDurationSeconds ?? taskMeta.actual_duration_seconds),
+    has_dialogue:
+      typeof (taskMeta.hasDialogue ?? taskMeta.has_dialogue) === 'boolean'
+        ? Boolean(taskMeta.hasDialogue ?? taskMeta.has_dialogue)
+        : null,
+    trimmed_to_requested:
+      typeof (taskMeta.trimmedToRequested ?? taskMeta.trimmed_to_requested) === 'boolean'
+        ? Boolean(taskMeta.trimmedToRequested ?? taskMeta.trimmed_to_requested)
+        : false,
     sent_reference_images: Array.isArray(taskMeta.sentReferenceImages) ? taskMeta.sentReferenceImages : [],
     sent_reference_videos: Array.isArray(taskMeta.sentReferenceVideos) ? taskMeta.sentReferenceVideos : [],
     sent_reference_audios: Array.isArray(taskMeta.sentReferenceAudios) ? taskMeta.sentReferenceAudios : [],

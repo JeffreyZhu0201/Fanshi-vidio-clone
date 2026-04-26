@@ -74,6 +74,24 @@ const normalizeShotGenerationTask = (taskPayload) => {
     fallback_reason: taskPayload.fallback_reason ?? '',
     provider_error: taskPayload.provider_error ?? '',
     source: taskPayload.source ?? '',
+    requested_duration_seconds:
+      Number.isFinite(Number(taskPayload.requested_duration_seconds)) &&
+      Number(taskPayload.requested_duration_seconds) >= 0
+        ? Number(Number(taskPayload.requested_duration_seconds).toFixed(2))
+        : null,
+    provider_duration_seconds:
+      Number.isFinite(Number(taskPayload.provider_duration_seconds)) &&
+      Number(taskPayload.provider_duration_seconds) >= 0
+        ? Number(Number(taskPayload.provider_duration_seconds).toFixed(2))
+        : null,
+    actual_duration_seconds:
+      Number.isFinite(Number(taskPayload.actual_duration_seconds)) &&
+      Number(taskPayload.actual_duration_seconds) >= 0
+        ? Number(Number(taskPayload.actual_duration_seconds).toFixed(2))
+        : null,
+    has_dialogue:
+      typeof taskPayload.has_dialogue === 'boolean' ? Boolean(taskPayload.has_dialogue) : null,
+    trimmed_to_requested: Boolean(taskPayload.trimmed_to_requested),
     sent_reference_images: Array.isArray(taskPayload.sent_reference_images) ? taskPayload.sent_reference_images : [],
     sent_reference_videos: Array.isArray(taskPayload.sent_reference_videos) ? taskPayload.sent_reference_videos : [],
     sent_reference_audios: Array.isArray(taskPayload.sent_reference_audios) ? taskPayload.sent_reference_audios : [],
@@ -120,6 +138,24 @@ const normalizeShotGenerationSummary = (summaryPayload) => {
     error_message: summaryPayload.error_message ?? '',
     assembly_generation_task_id: Number(summaryPayload.assembly_generation_task_id ?? 0) || null,
     source: summaryPayload.source ?? '',
+    requested_duration_seconds:
+      Number.isFinite(Number(summaryPayload.requested_duration_seconds)) &&
+      Number(summaryPayload.requested_duration_seconds) >= 0
+        ? Number(Number(summaryPayload.requested_duration_seconds).toFixed(2))
+        : null,
+    provider_duration_seconds:
+      Number.isFinite(Number(summaryPayload.provider_duration_seconds)) &&
+      Number(summaryPayload.provider_duration_seconds) >= 0
+        ? Number(Number(summaryPayload.provider_duration_seconds).toFixed(2))
+        : null,
+    actual_duration_seconds:
+      Number.isFinite(Number(summaryPayload.actual_duration_seconds)) &&
+      Number(summaryPayload.actual_duration_seconds) >= 0
+        ? Number(Number(summaryPayload.actual_duration_seconds).toFixed(2))
+        : null,
+    has_dialogue:
+      typeof summaryPayload.has_dialogue === 'boolean' ? Boolean(summaryPayload.has_dialogue) : null,
+    trimmed_to_requested: Boolean(summaryPayload.trimmed_to_requested),
     started_at: summaryPayload.started_at ?? '',
     updated_at: summaryPayload.updated_at ?? ''
   };
@@ -147,6 +183,24 @@ const normalizeSegment = (segment) => {
       fallback_reason: taskPayload.fallback_reason ?? '',
       provider_error: taskPayload.provider_error ?? '',
       source: taskPayload.source ?? '',
+      requested_duration_seconds:
+        Number.isFinite(Number(taskPayload.requested_duration_seconds)) &&
+        Number(taskPayload.requested_duration_seconds) >= 0
+          ? Number(Number(taskPayload.requested_duration_seconds).toFixed(2))
+          : null,
+      provider_duration_seconds:
+        Number.isFinite(Number(taskPayload.provider_duration_seconds)) &&
+        Number(taskPayload.provider_duration_seconds) >= 0
+          ? Number(Number(taskPayload.provider_duration_seconds).toFixed(2))
+          : null,
+      actual_duration_seconds:
+        Number.isFinite(Number(taskPayload.actual_duration_seconds)) &&
+        Number(taskPayload.actual_duration_seconds) >= 0
+          ? Number(Number(taskPayload.actual_duration_seconds).toFixed(2))
+          : null,
+      has_dialogue:
+        typeof taskPayload.has_dialogue === 'boolean' ? Boolean(taskPayload.has_dialogue) : null,
+      trimmed_to_requested: Boolean(taskPayload.trimmed_to_requested),
       sent_reference_images: Array.isArray(taskPayload.sent_reference_images) ? taskPayload.sent_reference_images : [],
       sent_reference_videos: Array.isArray(taskPayload.sent_reference_videos) ? taskPayload.sent_reference_videos : [],
       sent_reference_audios: Array.isArray(taskPayload.sent_reference_audios) ? taskPayload.sent_reference_audios : [],
