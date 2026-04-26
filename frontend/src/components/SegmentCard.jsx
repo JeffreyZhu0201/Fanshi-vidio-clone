@@ -559,7 +559,7 @@ const SegmentCard = ({
   isSavingShots = false
 }) => {
   const [draftPrompt, setDraftPrompt] = useState(segment.prompt ?? '');
-  const [useReferenceVideo, setUseReferenceVideo] = useState(true);
+  const [useReferenceVideo, setUseReferenceVideo] = useState(false);
   const [shotEditorItems, setShotEditorItems] = useState(() =>
     (segment.shots ?? []).map((shot, shotIndex) => buildShotEditorItem(shot, shotIndex))
   );
@@ -643,7 +643,7 @@ const SegmentCard = ({
   }, [originalSegmentPrompt, segment.id, segment.prompt]);
 
   useEffect(() => {
-    setUseReferenceVideo(true);
+    setUseReferenceVideo(false);
   }, [segment.id]);
 
   useEffect(() => {
@@ -671,8 +671,8 @@ const SegmentCard = ({
 
   const referenceVideoToggleLabel = useReferenceVideo ? '参考原片视频：开' : '参考原片视频：关';
   const referenceVideoToggleHint = useReferenceVideo
-    ? '当前会把大片段源视频或小镜头源视频一并发送给 Seedance 作为参考。'
-    : '当前不发送原片源视频，仍会继续使用角色三视图、场景图、典型帧、背景资产视频和参考音频。';
+    ? '当前会把大片段源视频或小镜头源视频一并发送给 Seedance，但人物和场景仍以资源三视图与提示词作为主真值。'
+    : '当前不发送原片源视频，主要依赖角色三视图、场景图、资源提示词、典型帧、背景资产视频和参考音频。';
 
   const handleSegmentStyleModeChange = (nextStyleMode) => {
     onAnalysisOptionsChange({

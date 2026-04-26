@@ -289,13 +289,17 @@ describe('generationService helpers', () => {
       isShot: true
     });
 
+    expect(prompt).toContain('第一视觉真值');
     expect(prompt).toContain('小镜头典型帧只用于提取当前镜头的人物左中右站位');
     expect(prompt).toContain('@主角');
     expect(prompt).toContain('#街道夜景');
     expect(prompt).toContain('人物左右位置');
     expect(prompt).toContain('角色三视图替换进原片对应人物');
+    expect(prompt).toContain('以角色三视图和角色提示词为准');
+    expect(prompt).toContain('以场景参考图和场景提示词为准');
     expect(prompt).toContain('状态时间线');
     expect(prompt).toContain('重拍版本或平行版本');
+    expect(prompt).toContain('主要由角色三视图、场景图和提示词重建');
     expect(prompt).toContain('不要把原片表面纹理');
     expect(prompt).toContain('不要让生成结果和关键帧过于相似');
     expect(prompt).toContain('不要任何字幕');
