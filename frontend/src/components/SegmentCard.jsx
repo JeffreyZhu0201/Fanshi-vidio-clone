@@ -590,7 +590,7 @@ const SegmentCard = ({
 }) => {
   const [draftPrompt, setDraftPrompt] = useState(segment.prompt ?? '');
   const [useReferenceVideo, setUseReferenceVideo] = useState(false);
-  const [useReferenceFrame, setUseReferenceFrame] = useState(true);
+  const [useReferenceFrame, setUseReferenceFrame] = useState(false);
   const [shotEditorItems, setShotEditorItems] = useState(() =>
     (segment.shots ?? []).map((shot, shotIndex) => buildShotEditorItem(shot, shotIndex))
   );
@@ -678,7 +678,7 @@ const SegmentCard = ({
   }, [segment.id]);
 
   useEffect(() => {
-    setUseReferenceFrame(true);
+    setUseReferenceFrame(false);
   }, [segment.id]);
 
   useEffect(() => {

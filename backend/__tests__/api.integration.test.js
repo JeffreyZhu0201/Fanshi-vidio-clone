@@ -5,9 +5,11 @@ import request from 'supertest';
 import { jest } from '@jest/globals';
 
 const databaseMock = {
+  sequelize: {},
   checkDatabaseHealth: jest.fn(),
   closeDatabaseConnection: jest.fn(),
-  connectDatabase: jest.fn()
+  connectDatabase: jest.fn(),
+  ensureDatabaseCompatibility: jest.fn()
 };
 
 const videoServiceMock = {
@@ -19,7 +21,8 @@ const videoServiceMock = {
 const analysisServiceMock = {
   analyzeVideoById: jest.fn(),
   getAnalysisByVideoId: jest.fn(),
-  optimizePrompt: jest.fn()
+  optimizePrompt: jest.fn(),
+  updateAnalysisCharactersByVideoId: jest.fn()
 };
 
 const segmentServiceMock = {
@@ -55,8 +58,22 @@ const mergeServiceMock = {
   getMergeTaskDownload: jest.fn()
 };
 
+const segmentExportServiceMock = {
+  startSegmentExport: jest.fn(),
+  getSegmentExportProgress: jest.fn(),
+  getSegmentExportDownload: jest.fn()
+};
+
 const taskServiceMock = {
+  createTask: jest.fn(),
+  updateTask: jest.fn(),
+  completeTask: jest.fn(),
+  failTask: jest.fn(),
   getTask: jest.fn()
+};
+
+const taskRecoveryServiceMock = {
+  recoverInFlightTasks: jest.fn()
 };
 
 await jest.unstable_mockModule('../config/database.js', () => databaseMock);
@@ -68,7 +85,9 @@ await jest.unstable_mockModule('../services/shotGenerationService.js', () => sho
 await jest.unstable_mockModule('../services/backgroundAssetService.js', () => backgroundAssetServiceMock);
 await jest.unstable_mockModule('../services/resourceImageService.js', () => resourceImageServiceMock);
 await jest.unstable_mockModule('../services/mergeService.js', () => mergeServiceMock);
+await jest.unstable_mockModule('../services/segmentExportService.js', () => segmentExportServiceMock);
 await jest.unstable_mockModule('../services/taskService.js', () => taskServiceMock);
+await jest.unstable_mockModule('../services/taskRecoveryService.js', () => taskRecoveryServiceMock);
 
 const { createApp } = await import('../app.js');
 const { AppError } = await import('../middleware/errorHandler.js');
@@ -622,6 +641,7 @@ describe('Backend API integration', () => {
         prompt: '@主角 在 #测试场景 中完成保存后的镜头动作',
         sceneNames: ['测试场景'],
         characterNames: ['主角'],
+        characterStateRefs: [],
         representativeFrameTime: 1,
         representativeFrameNote: '保存后的典型帧'
       }

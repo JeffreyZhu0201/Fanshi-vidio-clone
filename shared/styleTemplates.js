@@ -1,4 +1,4 @@
-const DEFAULT_STYLE_MODE = 'realistic';
+const DEFAULT_STYLE_MODE = 'comic_drama';
 
 const STYLE_MODE_OPTIONS = Object.freeze([
   {
