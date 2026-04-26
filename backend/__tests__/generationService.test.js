@@ -302,6 +302,9 @@ describe('generationService helpers', () => {
     expect(prompt).toContain('主要由角色三视图、场景图和提示词重建');
     expect(prompt).toContain('不要把原片表面纹理');
     expect(prompt).toContain('不要让生成结果和关键帧过于相似');
+    expect(prompt).toContain('左/中/右位置、站姿/坐姿/蹲姿');
+    expect(prompt).toContain('不要把站立人物生成成坐姿');
+    expect(prompt).toContain('不要把画面左侧人物生成到右侧');
     expect(prompt).toContain('不要任何字幕');
     expect(prompt).toContain('输出结果必须是带完整音轨的视频文件');
     expect(prompt).toContain('生成音频与口型都必须尽量对齐参考音频');

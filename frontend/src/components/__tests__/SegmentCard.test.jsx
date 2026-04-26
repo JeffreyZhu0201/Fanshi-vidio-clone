@@ -188,6 +188,7 @@ describe('SegmentCard', () => {
     expect(screen.getByAltText('镜头 01 典型帧')).toBeInTheDocument();
     expect(screen.getAllByText('小镜头典型帧').length).toBeGreaterThan(0);
     expect(screen.getAllByText('@主角 三视图').length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: '重新生成镜头' }).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: '生成新片段' }));
     expect(onGenerateAllShots).toHaveBeenCalledWith(1, null, {
@@ -235,7 +236,8 @@ describe('SegmentCard', () => {
       characterNames: ['主角']
     });
 
-    fireEvent.click(screen.getByRole('button', { name: '生成当前镜头' }));
+    const editorDialog = screen.getByRole('dialog', { name: /编辑工作台/ });
+    fireEvent.click(within(editorDialog).getByRole('button', { name: '重新生成镜头' }));
     return waitFor(() => {
       expect(onGenerateShot).toHaveBeenCalledWith(1, 'shot-1', '@主角 推门走进 #咖啡馆内景', {
         useReferenceVideo: false,
@@ -254,7 +256,7 @@ describe('SegmentCard', () => {
       fireEvent.change(promptEditors[1], { target: { value: '@主角 在 #咖啡馆内景 中落座' } });
       fireEvent.click(screen.getAllByRole('button', { name: '参考原片视频：关' })[0]);
 
-      fireEvent.click(screen.getAllByRole('button', { name: '生成当前镜头' })[1]);
+      fireEvent.click(within(editorDialog).getByRole('button', { name: '生成当前镜头' }));
 
       await waitFor(() => {
         expect(onSaveShots).toHaveBeenCalledTimes(1);
