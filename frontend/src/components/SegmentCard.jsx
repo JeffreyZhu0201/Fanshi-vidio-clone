@@ -134,18 +134,22 @@ const TaskReferenceDebugPanel = ({ task }) => {
   const imageItems = getTaskReferenceItems(task, 'sent_reference_images');
   const videoItems = getTaskReferenceItems(task, 'sent_reference_videos');
   const audioItems = getTaskReferenceItems(task, 'sent_reference_audios');
+  const useReferenceVideo = task?.use_reference_video !== false;
   const groups = [
     { label: '参考图', items: imageItems },
     { label: '参考视频', items: videoItems },
     { label: '参考音频', items: audioItems }
   ].filter((group) => group.items.length);
 
-  if (!groups.length) {
+  if (!groups.length && useReferenceVideo) {
     return null;
   }
 
   return (
     <div className="mt-2 space-y-2 rounded-[12px] border border-white/8 bg-black/15 px-3 py-2">
+      {!useReferenceVideo ? (
+        <p className="text-[11px] leading-5 text-white/65">本次生成已关闭原片参考视频，只使用其它参考素材。</p>
+      ) : null}
       {groups.map((group) => (
         <div key={group.label} className="space-y-1">
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/40">
@@ -170,6 +174,7 @@ const TaskReferenceDebugPanel = ({ task }) => {
 
 TaskReferenceDebugPanel.propTypes = {
   task: PropTypes.shape({
+    use_reference_video: PropTypes.bool,
     sent_reference_images: PropTypes.arrayOf(PropTypes.object),
     sent_reference_videos: PropTypes.arrayOf(PropTypes.object),
     sent_reference_audios: PropTypes.arrayOf(PropTypes.object)
@@ -554,6 +559,7 @@ const SegmentCard = ({
   isSavingShots = false
 }) => {
   const [draftPrompt, setDraftPrompt] = useState(segment.prompt ?? '');
+  const [useReferenceVideo, setUseReferenceVideo] = useState(true);
   const [shotEditorItems, setShotEditorItems] = useState(() =>
     (segment.shots ?? []).map((shot, shotIndex) => buildShotEditorItem(shot, shotIndex))
   );
@@ -637,6 +643,10 @@ const SegmentCard = ({
   }, [originalSegmentPrompt, segment.id, segment.prompt]);
 
   useEffect(() => {
+    setUseReferenceVideo(true);
+  }, [segment.id]);
+
+  useEffect(() => {
     setShotEditorItems((segment.shots ?? []).map((shot, shotIndex) => buildShotEditorItem(shot, shotIndex)));
   }, [segment.id, segment.shots]);
 
@@ -658,6 +668,11 @@ const SegmentCard = ({
 
     return onOptimize(segment.id, normalizedPrompt);
   };
+
+  const referenceVideoToggleLabel = useReferenceVideo ? '参考原片视频：开' : '参考原片视频：关';
+  const referenceVideoToggleHint = useReferenceVideo
+    ? '当前会把大片段源视频或小镜头源视频一并发送给 Seedance 作为参考。'
+    : '当前不发送原片源视频，仍会继续使用角色三视图、场景图、典型帧、背景资产视频和参考音频。';
 
   const handleSegmentStyleModeChange = (nextStyleMode) => {
     onAnalysisOptionsChange({
@@ -816,7 +831,7 @@ const SegmentCard = ({
     }
 
     if (!persistDrafts) {
-      return onGenerateAllShots(segment.id);
+      return onGenerateAllShots(segment.id, null, { useReferenceVideo });
     }
 
     const persistResult = await persistShotDrafts({
@@ -829,11 +844,11 @@ const SegmentCard = ({
       return null;
     }
 
-    return onGenerateAllShots(segment.id, persistResult.savedShotDrafts);
+    return onGenerateAllShots(segment.id, persistResult.savedShotDrafts, { useReferenceVideo });
   };
 
   const handleDirectGenerate = () => {
-    return onGenerate(segment.id, effectivePrompt);
+    return onGenerate(segment.id, effectivePrompt, { useReferenceVideo });
   };
 
   const updateShotDraft = (shotId, partialDraft) => {
@@ -1027,7 +1042,8 @@ const SegmentCard = ({
     return onGenerateShot(
       segment.id,
       persistedShotDraft.id,
-      String(persistedShotDraft.prompt ?? nextPrompt).trim()
+      String(persistedShotDraft.prompt ?? nextPrompt).trim(),
+      { useReferenceVideo }
     );
   };
 
@@ -1079,6 +1095,19 @@ const SegmentCard = ({
               </button>
               <button
                 type="button"
+                aria-pressed={useReferenceVideo}
+                className={`rounded-full border px-3 py-1 text-[11px] font-semibold transition ${
+                  useReferenceVideo
+                    ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100 hover:border-emerald-400/35 hover:bg-emerald-500/15'
+                    : 'border-white/10 bg-white/[0.04] text-white/75 hover:border-white/20 hover:bg-white/[0.08]'
+                }`}
+                title={referenceVideoToggleHint}
+                onClick={() => setUseReferenceVideo((currentValue) => !currentValue)}
+              >
+                {referenceVideoToggleLabel}
+              </button>
+              <button
+                type="button"
                 className="rounded-full border border-brand-500/20 bg-brand-500/10 px-3 py-1 text-[11px] font-semibold text-brand-100 transition hover:border-brand-500/35 hover:bg-brand-500/15 disabled:opacity-50"
                 onClick={() => void handleOptimizeSegment(effectivePrompt)}
                 disabled={!effectivePrompt || isOptimizing}
@@ -1106,6 +1135,10 @@ const SegmentCard = ({
               {seedDanceUnavailableReason} 当前片段与镜头视频生成按钮会保持禁用，配置完成后可立即恢复。
             </div>
           ) : null}
+
+          <div className="rounded-[14px] border border-white/10 bg-black/20 px-3 py-2 text-[12px] leading-5 text-white/68">
+            {referenceVideoToggleHint}
+          </div>
 
           <section className="rounded-[18px] border border-white/10 bg-white/[0.04] px-3 py-3">
             <div className="flex items-center justify-between gap-3">
@@ -1184,7 +1217,7 @@ const SegmentCard = ({
                           <button
                             type="button"
                             className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-white/75 transition hover:border-white/20 hover:bg-white/[0.08] disabled:opacity-50"
-                            onClick={() => void onGenerateShot(segment.id, shot.id, shot.prompt)}
+                            onClick={() => void onGenerateShot(segment.id, shot.id, shot.prompt, { useReferenceVideo })}
                             disabled={isShotGenerating || !canStartGeneration}
                           >
                             {isShotGenerating ? '生成中...' : '生成镜头'}
@@ -1335,6 +1368,18 @@ const SegmentCard = ({
               />
 
               <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  aria-pressed={useReferenceVideo}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                    useReferenceVideo
+                      ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100 hover:border-emerald-400/35 hover:bg-emerald-500/15'
+                      : 'border-white/10 bg-white/[0.04] text-white/75 hover:border-white/20 hover:bg-white/[0.08]'
+                  }`}
+                  onClick={() => setUseReferenceVideo((currentValue) => !currentValue)}
+                >
+                  {referenceVideoToggleLabel}
+                </button>
                 <button
                   type="button"
                   className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/75 transition hover:border-white/20 hover:bg-white/[0.08] disabled:opacity-50"
@@ -2044,6 +2089,7 @@ SegmentCard.propTypes = {
       optimizedPrompt: PropTypes.string,
       engine: PropTypes.string,
       is_mock: PropTypes.bool,
+      use_reference_video: PropTypes.bool,
       remote_task_id: PropTypes.string,
       fallback_reason: PropTypes.string,
       provider_error: PropTypes.string,

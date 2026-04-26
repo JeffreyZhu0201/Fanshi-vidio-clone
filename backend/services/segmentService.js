@@ -43,6 +43,7 @@ const serializeGenerationTask = (task) => {
     error_message: task.errorMessage,
     engine: String(taskMeta.engine ?? '').trim(),
     is_mock: Boolean(taskMeta.isMock),
+    use_reference_video: taskMeta.useReferenceVideo ?? taskMeta.use_reference_video ?? true,
     remote_task_id: String(taskMeta.remoteTaskId ?? '').trim(),
     fallback_reason: String(taskMeta.fallbackReason ?? '').trim(),
     provider_error: String(taskMeta.providerError ?? '').trim(),

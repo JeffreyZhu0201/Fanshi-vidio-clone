@@ -248,35 +248,38 @@ const getTaskStatus = async (taskId) => {
   return response.data;
 };
 
-const generateSegment = async (segmentId, prompt, ratio = '', styleMode = '') => {
+const generateSegment = async (segmentId, prompt, ratio = '', styleMode = '', useReferenceVideo = true) => {
   const response = await api.post('/generation/generate', {
     segment_id: segmentId,
     prompt,
     ...(ratio ? { ratio } : {}),
-    ...(styleMode ? { style_mode: styleMode } : {})
+    ...(styleMode ? { style_mode: styleMode } : {}),
+    use_reference_video: Boolean(useReferenceVideo)
   });
 
   return response.data;
 };
 
-const generateShot = async (segmentId, shotId, prompt, ratio = '', styleMode = '') => {
+const generateShot = async (segmentId, shotId, prompt, ratio = '', styleMode = '', useReferenceVideo = true) => {
   const response = await api.post('/generation/shots/generate', {
     segment_id: segmentId,
     shot_id: shotId,
     prompt,
     ...(ratio ? { ratio } : {}),
-    ...(styleMode ? { style_mode: styleMode } : {})
+    ...(styleMode ? { style_mode: styleMode } : {}),
+    use_reference_video: Boolean(useReferenceVideo)
   });
 
   return response.data;
 };
 
-const generateShotBatch = async (segmentId, shots = [], ratio = '', styleMode = '') => {
+const generateShotBatch = async (segmentId, shots = [], ratio = '', styleMode = '', useReferenceVideo = true) => {
   const response = await api.post('/generation/shots/generate-batch', {
     segment_id: segmentId,
     shots,
     ...(ratio ? { ratio } : {}),
-    ...(styleMode ? { style_mode: styleMode } : {})
+    ...(styleMode ? { style_mode: styleMode } : {}),
+    use_reference_video: Boolean(useReferenceVideo)
   });
 
   return response.data;

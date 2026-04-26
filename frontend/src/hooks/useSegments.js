@@ -35,6 +35,8 @@ const getTaskErrorMessage = (taskPayload, fallback = '') => {
   );
 };
 
+const normalizeUseReferenceVideo = (value) => value !== false;
+
 const normalizeShotGenerationTask = (taskPayload) => {
   if (!taskPayload) {
     return null;
@@ -65,6 +67,7 @@ const normalizeShotGenerationTask = (taskPayload) => {
     error_message: taskPayload.error_message ?? '',
     engine: taskPayload.engine ?? '',
     is_mock: Boolean(taskPayload.is_mock),
+    use_reference_video: normalizeUseReferenceVideo(taskPayload.use_reference_video),
     remote_task_id: taskPayload.remote_task_id ?? '',
     fallback_reason: taskPayload.fallback_reason ?? '',
     provider_error: taskPayload.provider_error ?? '',
@@ -136,6 +139,7 @@ const normalizeSegment = (segment) => {
       error_message: taskPayload.error_message ?? '',
       engine: taskPayload.engine ?? '',
       is_mock: Boolean(taskPayload.is_mock),
+      use_reference_video: normalizeUseReferenceVideo(taskPayload.use_reference_video),
       remote_task_id: taskPayload.remote_task_id ?? '',
       fallback_reason: taskPayload.fallback_reason ?? '',
       provider_error: taskPayload.provider_error ?? '',

@@ -25,6 +25,7 @@ const serializeGenerationMeta = (task) => {
     engine: String(taskMeta.engine ?? '').trim(),
     ratio: String(taskMeta.ratio ?? '').trim(),
     style_mode: normalizeStyleMode(taskMeta.styleMode ?? taskMeta.style_mode ?? DEFAULT_STYLE_MODE),
+    use_reference_video: normalizeUseReferenceVideo(taskMeta.useReferenceVideo ?? taskMeta.use_reference_video, true),
     remote_status: String(taskMeta.remoteStatus ?? '').trim(),
     remote_status_label: String(taskMeta.remoteStatusLabel ?? '').trim(),
     remote_created_at: Number(taskMeta.remoteCreatedAt ?? 0) || null,
@@ -78,6 +79,14 @@ const broadcastGenerationTaskUpdate = (task) => {
 const normalizeGenerationRatio = (value) => {
   const trimmedValue = String(value ?? '').trim();
   return /^[1-9]\d{0,2}:[1-9]\d{0,2}$/u.test(trimmedValue) ? trimmedValue : env.SEED_DANCE_RATIO;
+};
+
+const normalizeUseReferenceVideo = (value, fallbackValue = true) => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  return fallbackValue;
 };
 
 const applySeedDanceTaskProgress = async (task, progressPayload = {}) => {
@@ -990,7 +999,7 @@ const getSeedDanceDurationForSegment = (segment) => {
 
 const normalizeComparablePrompt = (value) => String(value ?? '').trim();
 
-const doesSegmentTaskMatchGenerationRequest = ({ task, prompt, ratio, styleMode = '' }) => {
+const doesSegmentTaskMatchGenerationRequest = ({ task, prompt, ratio, styleMode = '', useReferenceVideo = true }) => {
   if (!task) {
     return false;
   }
@@ -998,6 +1007,8 @@ const doesSegmentTaskMatchGenerationRequest = ({ task, prompt, ratio, styleMode 
   return (
     normalizeComparablePrompt(task.prompt) === normalizeComparablePrompt(prompt) &&
     normalizeGenerationRatio(task.meta?.ratio) === normalizeGenerationRatio(ratio) &&
+    normalizeUseReferenceVideo(task.meta?.useReferenceVideo ?? task.meta?.use_reference_video, true) ===
+      normalizeUseReferenceVideo(useReferenceVideo, true) &&
     normalizeStyleMode(task.meta?.styleMode ?? task.meta?.style_mode ?? DEFAULT_STYLE_MODE) ===
       normalizeStyleMode(styleMode || task.meta?.styleMode || task.meta?.style_mode || DEFAULT_STYLE_MODE)
   );
@@ -1014,7 +1025,8 @@ const buildSeedDanceReconstructionPrompt = ({
   speech = null,
   isShot = false,
   videoGenerationStylePrompt = '',
-  durationSeconds = null
+  durationSeconds = null,
+  useReferenceVideo = true
 }) => {
   const normalizedCharacterNames = dedupeNameList(characterNames, normalizeCharacterIdentity);
   const normalizedSceneNames = dedupeNameList(sceneNames, normalizeSceneIdentity);
@@ -1072,7 +1084,9 @@ const buildSeedDanceReconstructionPrompt = ({
     isShot ? '严格还原原片当前小镜头，不要把多个镜头语义混成一个新镜头。' : '严格延续原片当前片段的剧情、镜头语言和表演逻辑。',
     isShot
       ? '小镜头典型帧只用于提取当前镜头的人物左中右站位、前后景层次、视线方向、机位朝向和动作瞬间，不要把它当成需要逐帧复刻的目标画面。'
-      : '参考视频是当前片段的原始镜头依据，必须优先沿用它的运动节奏、镜头顺序和空间连续性。',
+      : useReferenceVideo
+        ? '参考视频是当前片段的原始镜头依据，必须优先沿用它的运动节奏、镜头顺序和空间连续性。'
+        : '本次不提供原片片段参考视频，必须主要根据大片段提示词、角色三视图、场景图和其它参考重建同剧情方向的新片段。',
     normalizedCharacterNames.length
       ? `必须把这些角色三视图替换进原片对应人物，并把它们作为人物身份真值：${normalizedCharacterNames
           .map((name) => `@${name}`)
@@ -1097,8 +1111,12 @@ const buildSeedDanceReconstructionPrompt = ({
       : '如果提供了场景参考图，必须优先用它们替换原片场景并锁定空间结构、布景、材质、布光和色彩。',
     '保持原片相同或最接近的景别、拍摄高度、视角方向、人物左右位置、前中后景层次、遮挡关系、进出画路径、视线方向、镜头运动和动作节奏。',
     isShot
-      ? '小镜头源视频主要用于继承构图、机位、站位、动作骨架和节奏；人物外观与场景外观应由角色三视图、场景图和提示词重建，不要把原片表面纹理、背景小物和微表情逐帧照搬。'
-      : '原片片段主要用于继承构图、机位、站位、动作骨架和节奏，不要逐帧照搬原片表面纹理。',
+      ? useReferenceVideo
+        ? '小镜头源视频主要用于继承构图、机位、站位、动作骨架和节奏；人物外观与场景外观应由角色三视图、场景图和提示词重建，不要把原片表面纹理、背景小物和微表情逐帧照搬。'
+        : '本次不提供小镜头源视频，人物站位、机位、动作关系和节奏主要参考镜头提示词、小镜头典型帧、角色三视图和场景图来重建，不要假设存在未提供的源视频轨迹。'
+      : useReferenceVideo
+        ? '原片片段主要用于继承构图、机位、站位、动作骨架和节奏，不要逐帧照搬原片表面纹理。'
+        : '本次不提供原片片段视频，构图、机位、站位和节奏主要依赖提示词、角色三视图、场景图与其它参考重建，同时保持与当前剧情目标一致。',
     isShot
       ? '不要让生成结果和关键帧过于相似；保留同镜头的站位、机位和动作关系即可，人物细节、材质纹理、背景纹理和局部表演需要重新生成。'
       : '',
@@ -1112,7 +1130,7 @@ const buildSeedDanceReconstructionPrompt = ({
     isShot && hasDialogue && speechTimingSummary ? `字幕节奏参考：${speechTimingSummary}` : '',
     isShot && hasDialogue && speechStyle ? `说话方式：${speechStyle}` : '',
     isShot && hasDialogue && speechDialogueCompletionTimeSeconds > 0
-      ? `对白必须在前 ${speechDialogueCompletionTimeSeconds.toFixed(2)} 秒内完整结束。`
+      ? `对白必须尽量覆盖当前镜头有效时长，并在第 ${speechDialogueCompletionTimeSeconds.toFixed(2)} 秒附近自然收口。`
       : '',
     isShot &&
     hasDialogue &&
@@ -1120,12 +1138,10 @@ const buildSeedDanceReconstructionPrompt = ({
     Number.isFinite(Number(durationSeconds))
       ? `如果供应商内部按 ${speechProviderTargetDurationSeconds.toFixed(2)} 秒生成后再裁回当前镜头 ${Number(
           durationSeconds
-        ).toFixed(2)} 秒，也要保证对白集中在前 ${speechDialogueCompletionTimeSeconds.toFixed(
-          2
-        )} 秒说完，后段只保留闭口和自然呼吸。`
+        ).toFixed(2)} 秒，也要让对白和口型尽量延续到裁切点附近，不要在镜头中前段提前说完。`
       : '',
     isShot && hasDialogue && speechTrimSafetyTailSeconds > 0.02
-      ? `镜头末尾预留约 ${speechTrimSafetyTailSeconds.toFixed(2)} 秒收口缓冲，不要把最后一个字贴边说完。`
+      ? `镜头末尾只允许保留约 ${speechTrimSafetyTailSeconds.toFixed(2)} 秒极短收口余量，不要提前长时间闭口。`
       : '',
     isShot && hasDialogue && shouldFitDialogueWithinShot && Number.isFinite(Number(durationSeconds))
       ? `必须把完整对白压缩在当前镜头 ${Number(durationSeconds).toFixed(2)} 秒内说完，允许适度加快语速和压缩停顿，但不要截断台词结尾。`
@@ -1223,6 +1239,7 @@ const processGenerationTask = async (taskId) => {
         overallAnalysis?.analysis_options?.styleMode ??
         DEFAULT_STYLE_MODE
     );
+    const useReferenceVideo = normalizeUseReferenceVideo(task.meta?.useReferenceVideo ?? task.meta?.use_reference_video, true);
     const videoGenerationStylePrompt = resolveStyleTemplate({
       styleMode: resolvedStyleMode,
       styleTemplates:
@@ -1275,7 +1292,8 @@ const processGenerationTask = async (taskId) => {
         ...getSegmentSceneNames(task.segment),
         backgroundBinding?.backgroundName || ''
       ],
-      isShot: false
+      isShot: false,
+      useReferenceVideo
     });
     const characterReferenceImages = await collectCharacterReferenceImages({
       videoId: task.segment?.video?.id,
@@ -1307,8 +1325,8 @@ const processGenerationTask = async (taskId) => {
     broadcastGenerationTaskUpdate(task);
 
     const result = await generateWithSeedDance({
-      sourceAbsolutePath,
-      sourcePublicUrl,
+      sourceAbsolutePath: useReferenceVideo ? sourceAbsolutePath : '',
+      sourcePublicUrl: useReferenceVideo ? sourcePublicUrl : '',
       sourceReferenceSourceKind: 'source_video',
       sourceReferenceDisplayLabel: '大片段源视频',
       prompt: seedDancePrompt,
@@ -1342,6 +1360,7 @@ const processGenerationTask = async (taskId) => {
         source: 'segment_generation',
         engine: result.engine || '',
         isMock: Boolean(result.isMock),
+        useReferenceVideo,
         remoteTaskId: result.remoteTaskId || '',
         remoteUrl: result.remoteUrl || '',
         sentReferenceImages: result.sentReferenceImages ?? task.meta?.sentReferenceImages ?? [],
@@ -1374,7 +1393,7 @@ const processGenerationTask = async (taskId) => {
   }
 };
 
-const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '' }) => {
+const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '', useReferenceVideo = true }) => {
   const segment = await Segment.findByPk(segmentId);
 
   if (!segment) {
@@ -1386,6 +1405,7 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '' }) => 
   assertSeedDanceReady();
 
   const resolvedRatio = normalizeGenerationRatio(ratio);
+  const resolvedUseReferenceVideo = normalizeUseReferenceVideo(useReferenceVideo, true);
   const resolvedStyleMode = normalizeStyleMode(
     styleMode || segment?.analysis?.analysisOptions?.styleMode || DEFAULT_STYLE_MODE
   );
@@ -1405,7 +1425,8 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '' }) => 
       task: latestAttemptTask,
       prompt,
       ratio: resolvedRatio,
-      styleMode: resolvedStyleMode
+      styleMode: resolvedStyleMode,
+      useReferenceVideo: resolvedUseReferenceVideo
     })
   ) {
     return {
@@ -1413,7 +1434,8 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '' }) => 
       status: latestAttemptTask.status,
       progress: latestAttemptTask.progress,
       ratio: resolvedRatio,
-      style_mode: resolvedStyleMode
+      style_mode: resolvedStyleMode,
+      use_reference_video: resolvedUseReferenceVideo
     };
   }
 
@@ -1423,7 +1445,8 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '' }) => 
       task: latestCompletedTask,
       prompt,
       ratio: resolvedRatio,
-      styleMode: resolvedStyleMode
+      styleMode: resolvedStyleMode,
+      useReferenceVideo: resolvedUseReferenceVideo
     })
   ) {
     return {
@@ -1431,7 +1454,8 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '' }) => 
       status: latestCompletedTask.status,
       progress: latestCompletedTask.progress,
       ratio: resolvedRatio,
-      style_mode: resolvedStyleMode
+      style_mode: resolvedStyleMode,
+      use_reference_video: resolvedUseReferenceVideo
     };
   }
 
@@ -1444,6 +1468,7 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '' }) => 
       source: 'segment_generation',
       ratio: resolvedRatio,
       styleMode: resolvedStyleMode,
+      useReferenceVideo: resolvedUseReferenceVideo,
       engine: '',
       remoteStatus: '',
       remoteStatusLabel: '',
@@ -1466,7 +1491,8 @@ const startGeneration = async ({ segmentId, prompt, ratio, styleMode = '' }) => 
     status: task.status,
     progress: task.progress,
     ratio: resolvedRatio,
-    style_mode: resolvedStyleMode
+    style_mode: resolvedStyleMode,
+    use_reference_video: resolvedUseReferenceVideo
   };
 };
 
@@ -1494,6 +1520,7 @@ export {
   getPromptMentionNames,
   getPromptSceneNames,
   getGenerationTaskStatus,
+  normalizeUseReferenceVideo,
   processGenerationTask,
   resolveRelevantCharacters,
   resolveRelevantScenes,
