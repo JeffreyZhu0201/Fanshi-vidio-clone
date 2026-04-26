@@ -200,6 +200,7 @@ describe('SegmentCard', () => {
     expect(screen.getByText('片段理解提示词')).toBeInTheDocument();
     expect(screen.getByText('新增镜头')).toBeInTheDocument();
     expect(screen.getByText('保存镜头')).toBeInTheDocument();
+    expect(screen.queryByText('字幕列表')).not.toBeInTheDocument();
     expect(screen.getByText(/片段局部 0\.00 - 2\.00 秒/)).toBeInTheDocument();
 
     const segmentEditor = screen.getByLabelText('片段提示词编辑器');
