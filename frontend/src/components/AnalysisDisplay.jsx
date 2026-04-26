@@ -1073,6 +1073,7 @@ const AnalysisDisplay = ({
   const videoAnalysisPrompt = videoAnalysisPromptSections?.finalPrompt ?? '';
   const videoAnalysisFixedPrompt = videoAnalysisPromptSections?.fixedStructurePrompt ?? '';
   const videoAnalysisStylePrompt = videoAnalysisPromptSections?.stylePrompt ?? '';
+  const isAnalysisProcessing = loading || status === 'processing';
   const handleStyleModeChange = (nextStyleMode) => {
     const normalizedStyleMode = normalizeStyleMode(nextStyleMode);
     onAnalysisOptionsChange({
@@ -1103,8 +1104,24 @@ const AnalysisDisplay = ({
       }
     });
   };
-  const analysisStatusLabel = analysis?.is_mock ? 'Gemini失败已回退' : 'Gemini真实结果';
-  const analysisStatusTone = analysis?.is_mock ? 'fallback' : 'completed';
+  const analysisStatusLabel = error
+    ? '整片分析失败'
+    : isAnalysisProcessing
+      ? '整片分析进行中'
+      : analysis?.is_mock
+        ? 'Gemini失败已回退'
+        : analysis
+          ? 'Gemini真实结果'
+          : '等待分析';
+  const analysisStatusTone = error
+    ? 'failed'
+    : isAnalysisProcessing
+      ? 'processing'
+      : analysis?.is_mock
+        ? 'fallback'
+        : analysis
+          ? 'completed'
+          : 'idle';
   const keyFrameCount = [...characters, ...sceneCards].filter((item) => {
     return getRepresentativeFrameTime(item) !== null;
   }).length;
@@ -2166,10 +2183,7 @@ const AnalysisDisplay = ({
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <StatusBadge
-                    status={analysis ? analysisStatusTone : 'idle'}
-                    label={analysis ? analysisStatusLabel : '等待分析'}
-                  />
+                  <StatusBadge status={analysisStatusTone} label={analysisStatusLabel} />
                   <span className="toolbar-pill">
                     字幕解析 {analysisOptions?.extractSubtitles ? '开' : '关'}
                   </span>
@@ -2184,7 +2198,7 @@ const AnalysisDisplay = ({
               </div>
             </div>
 
-            {(loading || status === 'processing') && (
+            {isAnalysisProcessing && (
               <div className="rounded-[26px] border border-brand-500/20 bg-brand-500/10 px-5 py-4">
                 <ProgressBar value={progress} status={status} label={statusMessage || '正在分析整片视频'} />
               </div>
@@ -2444,6 +2458,16 @@ const AnalysisDisplay = ({
                   </div>
                 </div>
               </>
+            ) : isAnalysisProcessing ? (
+              <div className="rounded-[28px] border border-brand-500/20 bg-brand-500/10 px-6 py-12 text-center">
+                <p className="text-lg font-semibold text-white">整片分析进行中</p>
+                <p className="mt-2 text-sm leading-6 text-white/70">
+                  {statusMessage || '正在调用 Gemini 做整片理解，请稍候。'}
+                </p>
+                <p className="mt-3 text-xs leading-5 text-white/45">
+                  当前阶段会持续更新进度和文案，不再显示“尚未开始”。
+                </p>
+              </div>
             ) : (
               <div className="rounded-[28px] border border-dashed border-white/[0.12] bg-white/[0.04] px-6 py-12 text-center">
                 <p className="text-lg font-semibold text-white">整片分析尚未开始</p>

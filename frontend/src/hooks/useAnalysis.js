@@ -8,6 +8,28 @@ import { sleep } from '../utils/sleep.js';
 
 const ANALYSIS_RESULT_CONFIRM_MAX_RETRIES = 8;
 const ANALYSIS_RESULT_CONFIRM_INTERVAL_MS = 3000;
+const ANALYSIS_HEARTBEAT_INTERVAL_MS = 4000;
+const ANALYSIS_HEARTBEAT_MAX_PROGRESS = 88;
+
+const getHeartbeatMessage = (elapsedSeconds = 0, progress = 0) => {
+  if (progress < 26) {
+    return `已提交 Gemini 整片分析任务，正在准备整片素材（已等待 ${elapsedSeconds} 秒）`;
+  }
+
+  if (progress < 42) {
+    return `正在上传整片分析素材到 Gemini（已等待 ${elapsedSeconds} 秒）`;
+  }
+
+  if (progress < 60) {
+    return `Gemini 正在理解剧情、角色、场景和对白（已等待 ${elapsedSeconds} 秒）`;
+  }
+
+  if (progress < 76) {
+    return `Gemini 正在细化大片段和小镜头时间锚点（已等待 ${elapsedSeconds} 秒）`;
+  }
+
+  return `正在整理整片分析结果并等待返回（已等待 ${elapsedSeconds} 秒）`;
+};
 
 const createAnalysisRecoveryError = () => {
   return '分析请求超时，且在确认窗口内未获取到结果，请稍后重试。';
@@ -53,8 +75,55 @@ const useAnalysis = () => {
   const activeVideoIdRef = useRef(currentVideo?.id ?? null);
   const previousVideoIdRef = useRef(currentVideo?.id ?? null);
   const analysisRequestTokenRef = useRef(0);
+  const analysisHeartbeatTimerRef = useRef(null);
+
+  const stopAnalysisHeartbeat = () => {
+    if (analysisHeartbeatTimerRef.current) {
+      window.clearInterval(analysisHeartbeatTimerRef.current);
+      analysisHeartbeatTimerRef.current = null;
+    }
+  };
+
+  const startAnalysisHeartbeat = (requestToken, videoId) => {
+    stopAnalysisHeartbeat();
+
+    const startedAt = Date.now();
+
+    analysisHeartbeatTimerRef.current = window.setInterval(() => {
+      if (isAnalysisRequestCancelled(requestToken, videoId)) {
+        stopAnalysisHeartbeat();
+        return;
+      }
+
+      const currentState = useAnalysisStore.getState();
+
+      if (currentState.status !== 'processing') {
+        stopAnalysisHeartbeat();
+        return;
+      }
+
+      const currentProgress = Number(currentState.progress ?? 0) || 0;
+
+      if (currentProgress >= ANALYSIS_HEARTBEAT_MAX_PROGRESS) {
+        return;
+      }
+
+      const nextProgress = Math.min(
+        ANALYSIS_HEARTBEAT_MAX_PROGRESS,
+        Math.max(currentProgress + 6, currentProgress < 20 ? 20 : currentProgress + 3)
+      );
+      const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+
+      setProgressState({
+        progress: nextProgress,
+        status: 'processing',
+        message: getHeartbeatMessage(elapsedSeconds, nextProgress)
+      });
+    }, ANALYSIS_HEARTBEAT_INTERVAL_MS);
+  };
 
   const cancelAnalysisRequest = () => {
+    stopAnalysisHeartbeat();
     analysisRequestTokenRef.current += 1;
   };
 
@@ -238,12 +307,12 @@ const useAnalysis = () => {
       status: 'analyzing'
     });
 
-    websocketService.emitLocal('analysis:progress', {
-      video_id: currentVideoId,
+    setProgressState({
       progress: 12,
       status: 'processing',
       message: '正在提交 Gemini 整片分析任务'
     });
+    startAnalysisHeartbeat(requestToken, currentVideoId);
 
     try {
       const analysisPayload = await analyzeVideo(currentVideo.id, analysisOptions);
@@ -286,6 +355,8 @@ const useAnalysis = () => {
       setError(errorMessage);
 
       return null;
+    } finally {
+      stopAnalysisHeartbeat();
     }
   };
 

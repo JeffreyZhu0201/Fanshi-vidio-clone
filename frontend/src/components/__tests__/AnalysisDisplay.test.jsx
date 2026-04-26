@@ -198,4 +198,29 @@ describe('AnalysisDisplay', () => {
     expect(screen.getByText(/鉴权方式：bearer/)).toBeInTheDocument();
     expect(screen.getAllByText(/429/).length).toBeGreaterThan(0);
   });
+
+  it('shows a consistent processing state before analysis data returns', async () => {
+    render(
+      <AnalysisDisplay
+        video={{ id: 1, filename: 'demo.mp4', duration: 15, file_url: '/uploads/videos/demo.mp4' }}
+        analysis={null}
+        loading
+        error=""
+        progress={28}
+        status="processing"
+        statusMessage="Gemini 正在理解剧情、角色、场景和对白（已等待 8 秒）"
+        splitProgress={{ status: 'idle', progress: 0, message: '' }}
+        onAnalyze={jest.fn()}
+        onSplit={jest.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(getResourceImages).toHaveBeenCalledWith(1);
+    });
+
+    expect(screen.getAllByText('整片分析进行中').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Gemini 正在理解剧情、角色、场景和对白（已等待 8 秒）').length).toBeGreaterThan(0);
+    expect(screen.queryByText('整片分析尚未开始')).not.toBeInTheDocument();
+  });
 });
