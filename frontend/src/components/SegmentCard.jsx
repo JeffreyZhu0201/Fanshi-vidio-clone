@@ -118,6 +118,18 @@ const getGenerationTaskStatusLabel = (task, fallbackLabel = '视频待生成') =
   return fallbackLabel;
 };
 
+const getShotGenerateButtonLabel = ({ isGenerating = false, latestTask = null, generatedUrl = '' } = {}) => {
+  if (isGenerating) {
+    return '生成中...';
+  }
+
+  if (latestTask?.status === 'completed' || generatedUrl) {
+    return '重新生成镜头';
+  }
+
+  return '生成当前镜头';
+};
+
 const getDurationComparisonLabel = (referenceDurationSeconds = null, generatedDurationSeconds = null) => {
   const normalizedReferenceDuration =
     Number.isFinite(Number(referenceDurationSeconds)) && Number(referenceDurationSeconds) > 0
@@ -1214,7 +1226,13 @@ const SegmentCard = ({
                             }
                             disabled={isShotGenerating || !canStartGeneration}
                           >
-                            {isShotGenerating ? '生成中...' : '生成镜头'}
+                            {shot.latestGenerationTask?.status === 'completed' || shot.generatedUrl
+                              ? isShotGenerating
+                                ? '生成中...'
+                                : '重新生成镜头'
+                              : isShotGenerating
+                                ? '生成中...'
+                                : '生成镜头'}
                           </button>
                         </div>
 
@@ -1599,7 +1617,11 @@ const SegmentCard = ({
                           onClick={() => void handleGenerateShotFromEditor(shotDraft.id)}
                           disabled={isShotGenerating || isSavingShots || !canStartGeneration}
                         >
-                          {isShotGenerating ? '生成中...' : '生成当前镜头'}
+                          {getShotGenerateButtonLabel({
+                            isGenerating: isShotGenerating,
+                            latestTask: shotDraft.latestGenerationTask,
+                            generatedUrl: shotDraft.generatedUrl
+                          })}
                         </button>
                       </div>
                     </div>

@@ -1,6 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
-import { writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -37,6 +37,16 @@ const ANALYSIS_PROXY_TRANSCODE_CANDIDATES = [
   {
     engine: 'ffmpeg-analysis-proxy-mpeg4',
     args: ['-c:v', 'mpeg4', '-q:v', '12']
+  }
+];
+const MERGE_TRANSCODE_CANDIDATES = [
+  {
+    engine: 'ffmpeg-merge-libx264',
+    args: ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p']
+  },
+  {
+    engine: 'ffmpeg-merge-mpeg4',
+    args: ['-c:v', 'mpeg4', '-q:v', '4']
   }
 ];
 
@@ -589,6 +599,49 @@ const transcodeVideoForAnalysis = async (
   return null;
 };
 
+const transcodeVideoForMerge = async (
+  absoluteSourcePath,
+  absoluteTargetPath,
+  { forceSilentAudio = false, hasAudio = null } = {}
+) => {
+  let lastError = null;
+
+  for (const candidate of MERGE_TRANSCODE_CANDIDATES) {
+    try {
+      const commandArgs = ['-y', '-fflags', '+genpts', '-i', absoluteSourcePath];
+
+      if (forceSilentAudio) {
+        commandArgs.push('-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000');
+      }
+
+      commandArgs.push('-map', '0:v:0');
+      commandArgs.push('-map', forceSilentAudio ? '1:a:0' : '0:a:0?');
+      commandArgs.push('-vf', 'setpts=PTS-STARTPTS,format=yuv420p');
+      commandArgs.push(...candidate.args);
+      commandArgs.push('-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2');
+
+      if (forceSilentAudio) {
+        commandArgs.push('-shortest');
+      } else if (hasAudio === true) {
+        commandArgs.push('-af', 'aresample=async=1:first_pts=0');
+      }
+
+      commandArgs.push('-movflags', '+faststart', absoluteTargetPath);
+
+      await execFileAsync('ffmpeg', commandArgs);
+
+      return {
+        engine: candidate.engine,
+        hasAudio: true
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error('FFmpeg merge transcode failed.');
+};
+
 const mergeVideos = async (absoluteInputPaths, { basename = 'merged-video', onProgress } = {}) => {
   if (!absoluteInputPaths.length) {
     throw new Error('No input files available for merging.');
@@ -619,29 +672,76 @@ const mergeVideos = async (absoluteInputPaths, { basename = 'merged-video', onPr
   }
 
   const listFilePath = path.join(os.tmpdir(), `fanshi-merge-${Date.now()}.txt`);
+  const normalizedTempDir = await mkdtemp(path.join(os.tmpdir(), 'fanshi-merge-inputs-'));
 
   try {
-    const listContent = absoluteInputPaths
+    const normalizedInputPaths = [];
+
+    for (const [index, filePath] of absoluteInputPaths.entries()) {
+      const metadata = await getVideoMetadata(filePath);
+      const normalizedInputPath = path.join(normalizedTempDir, `normalized-${index}.mp4`);
+
+      await transcodeVideoForMerge(filePath, normalizedInputPath, {
+        forceSilentAudio: metadata.hasAudio === false,
+        hasAudio: metadata.hasAudio
+      });
+
+      normalizedInputPaths.push(normalizedInputPath);
+
+      if (typeof onProgress === 'function') {
+        onProgress(Math.max(10, Math.round(((index + 1) / absoluteInputPaths.length) * 30)));
+      }
+    }
+
+    const listContent = normalizedInputPaths
       .map((filePath) => `file '${filePath.replace(/'/g, "'\\''")}'`)
       .join('\n');
 
     await writeFile(listFilePath, listContent, 'utf8');
     if (typeof onProgress === 'function') {
-      onProgress(35);
+      onProgress(40);
     }
 
-    await execFileAsync('ffmpeg', [
-      '-y',
-      '-f',
-      'concat',
-      '-safe',
-      '0',
-      '-i',
-      listFilePath,
-      '-c',
-      'copy',
-      absoluteTargetPath
-    ]);
+    let mergeCompleted = false;
+    let lastMergeError = null;
+
+    for (const candidate of MERGE_TRANSCODE_CANDIDATES) {
+      try {
+        await execFileAsync('ffmpeg', [
+          '-y',
+          '-fflags',
+          '+genpts',
+          '-f',
+          'concat',
+          '-safe',
+          '0',
+          '-i',
+          listFilePath,
+          '-vsync',
+          'cfr',
+          ...candidate.args,
+          '-c:a',
+          'aac',
+          '-b:a',
+          '192k',
+          '-ar',
+          '48000',
+          '-ac',
+          '2',
+          '-movflags',
+          '+faststart',
+          absoluteTargetPath
+        ]);
+        mergeCompleted = true;
+        break;
+      } catch (error) {
+        lastMergeError = error;
+      }
+    }
+
+    if (!mergeCompleted) {
+      throw lastMergeError ?? new Error('FFmpeg merge transcode failed.');
+    }
   } catch (error) {
     logger.warn('FFmpeg merge failed; refusing to fake a merged result by copying only the first input.', {
       message: error.message,
@@ -651,6 +751,7 @@ const mergeVideos = async (absoluteInputPaths, { basename = 'merged-video', onPr
     throw new Error('FFmpeg merge failed, so no merged output was produced.');
   } finally {
     await rm(listFilePath, { force: true });
+    await rm(normalizedTempDir, { recursive: true, force: true });
   }
 
   if (typeof onProgress === 'function') {
