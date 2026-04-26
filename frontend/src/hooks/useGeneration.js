@@ -48,6 +48,7 @@ const getGenerationErrorMessage = (error, phase = '片段生成') => {
 };
 
 const normalizeUseReferenceVideo = (value) => value !== false;
+const normalizeUseReferenceFrame = (value) => value !== false;
 
 const normalizeBackgroundAsset = (backgroundAsset) => {
   return {
@@ -105,6 +106,7 @@ const normalizeShotTask = (taskPayload) => {
     engine: taskPayload.engine ?? '',
     is_mock: Boolean(taskPayload.is_mock),
     use_reference_video: normalizeUseReferenceVideo(taskPayload.use_reference_video),
+    use_reference_frame: normalizeUseReferenceFrame(taskPayload.use_reference_frame),
     remote_task_id: taskPayload.remote_task_id ?? '',
     remote_status: taskPayload.remote_status ?? '',
     remote_status_label: taskPayload.remote_status_label ?? '',
@@ -143,6 +145,7 @@ const normalizeGenerationTask = (taskPayload) => {
     engine: taskPayload.engine ?? '',
     is_mock: Boolean(taskPayload.is_mock),
     use_reference_video: normalizeUseReferenceVideo(taskPayload.use_reference_video),
+    use_reference_frame: normalizeUseReferenceFrame(taskPayload.use_reference_frame),
     remote_task_id: taskPayload.remote_task_id ?? '',
     remote_status: taskPayload.remote_status ?? '',
     remote_status_label: taskPayload.remote_status_label ?? '',
@@ -1121,6 +1124,7 @@ const useGeneration = () => {
 
     const sourcePrompt = String(promptOverride ?? '').trim() || segment.prompt;
     const useReferenceVideo = normalizeUseReferenceVideo(options.useReferenceVideo);
+    const useReferenceFrame = normalizeUseReferenceFrame(options.useRepresentativeFrame);
 
     if (!sourcePrompt?.trim()) {
       setSegmentsError('请先输入片段提示词，再生成片段。');
@@ -1146,7 +1150,8 @@ const useGeneration = () => {
         sourcePrompt,
         getResolvedVideoRatio(),
         getResolvedStyleMode(),
-        useReferenceVideo
+        useReferenceVideo,
+        useReferenceFrame
       );
       activeTaskId = startPayload.task_id ?? '';
 
@@ -1234,6 +1239,7 @@ const useGeneration = () => {
 
     const sourcePrompt = String(promptOverride ?? '').trim() || shot.prompt;
     const useReferenceVideo = normalizeUseReferenceVideo(options.useReferenceVideo);
+    const useReferenceFrame = normalizeUseReferenceFrame(options.useRepresentativeFrame);
 
     if (!sourcePrompt?.trim()) {
       setSegmentsError('请先输入镜头提示词，再生成小镜头。');
@@ -1260,7 +1266,8 @@ const useGeneration = () => {
         sourcePrompt,
         getResolvedVideoRatio(),
         getResolvedStyleMode(),
-        useReferenceVideo
+        useReferenceVideo,
+        useReferenceFrame
       );
       activeTaskId = startPayload.task_id ?? '';
 
@@ -1337,6 +1344,7 @@ const useGeneration = () => {
     }
 
     const useReferenceVideo = normalizeUseReferenceVideo(options.useReferenceVideo);
+    const useReferenceFrame = normalizeUseReferenceFrame(options.useRepresentativeFrame);
     const shotsForGeneration =
       Array.isArray(shotsOverride) && shotsOverride.length ? shotsOverride : segment.shots ?? [];
 
@@ -1357,7 +1365,8 @@ const useGeneration = () => {
         })),
         getResolvedVideoRatio(),
         getResolvedStyleMode(),
-        useReferenceVideo
+        useReferenceVideo,
+        useReferenceFrame
       );
       const nextSummary = {
         segment_id: segmentId,

@@ -190,7 +190,10 @@ describe('SegmentCard', () => {
     expect(screen.getAllByText('@主角 三视图').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: '生成新片段' }));
-    expect(onGenerateAllShots).toHaveBeenCalledWith(1, null, { useReferenceVideo: false });
+    expect(onGenerateAllShots).toHaveBeenCalledWith(1, null, {
+      useReferenceVideo: false,
+      useRepresentativeFrame: true
+    });
 
     fireEvent.click(screen.getByRole('button', { name: '编辑' }));
     expect(screen.getByText('整片分析原始大片段内容')).toBeInTheDocument();
@@ -217,7 +220,8 @@ describe('SegmentCard', () => {
     expect(onAnalyze).toHaveBeenCalledWith(1);
     expect(onOptimize).toHaveBeenCalledWith(1, '@主角 在 #咖啡馆内景 中继续推进剧情');
     expect(onGenerate).toHaveBeenCalledWith(1, '@主角 在 #咖啡馆内景 中继续推进剧情', {
-      useReferenceVideo: false
+      useReferenceVideo: false,
+      useRepresentativeFrame: true
     });
 
     fireEvent.click(screen.getByRole('button', { name: '优化镜头提示词' }));
@@ -233,7 +237,8 @@ describe('SegmentCard', () => {
     fireEvent.click(screen.getByRole('button', { name: '生成当前镜头' }));
     return waitFor(() => {
       expect(onGenerateShot).toHaveBeenCalledWith(1, 'shot-1', '@主角 推门走进 #咖啡馆内景', {
-        useReferenceVideo: false
+        useReferenceVideo: false,
+        useRepresentativeFrame: true
       });
     }).then(async () => {
       expect(onSaveShots).not.toHaveBeenCalled();
@@ -247,13 +252,15 @@ describe('SegmentCard', () => {
       fireEvent.change(summaryInputs[1], { target: { value: '新增镜头摘要' } });
       fireEvent.change(promptEditors[1], { target: { value: '@主角 在 #咖啡馆内景 中落座' } });
       fireEvent.click(screen.getAllByRole('button', { name: '参考原片视频：关' })[0]);
+      fireEvent.click(screen.getAllByRole('button', { name: '参考典型帧：开' })[0]);
 
       fireEvent.click(screen.getAllByRole('button', { name: '生成当前镜头' })[1]);
 
       await waitFor(() => {
         expect(onSaveShots).toHaveBeenCalledTimes(1);
         expect(onGenerateShot).toHaveBeenCalledWith(1, 'saved-shot-2', '@主角 在 #咖啡馆内景 中落座', {
-          useReferenceVideo: true
+          useReferenceVideo: true,
+          useRepresentativeFrame: false
         });
       });
 
@@ -276,7 +283,10 @@ describe('SegmentCard', () => {
               prompt: '@主角 在 #咖啡馆内景 中落座'
             })
           ]),
-          { useReferenceVideo: true }
+          {
+            useReferenceVideo: true,
+            useRepresentativeFrame: false
+          }
         );
       });
 

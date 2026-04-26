@@ -135,13 +135,14 @@ const TaskReferenceDebugPanel = ({ task }) => {
   const videoItems = getTaskReferenceItems(task, 'sent_reference_videos');
   const audioItems = getTaskReferenceItems(task, 'sent_reference_audios');
   const useReferenceVideo = task?.use_reference_video !== false;
+  const useReferenceFrame = task?.use_reference_frame !== false;
   const groups = [
     { label: '参考图', items: imageItems },
     { label: '参考视频', items: videoItems },
     { label: '参考音频', items: audioItems }
   ].filter((group) => group.items.length);
 
-  if (!groups.length && useReferenceVideo) {
+  if (!groups.length && useReferenceVideo && useReferenceFrame) {
     return null;
   }
 
@@ -149,6 +150,9 @@ const TaskReferenceDebugPanel = ({ task }) => {
     <div className="mt-2 space-y-2 rounded-[12px] border border-white/8 bg-black/15 px-3 py-2">
       {!useReferenceVideo ? (
         <p className="text-[11px] leading-5 text-white/65">本次生成已关闭原片参考视频，只使用其它参考素材。</p>
+      ) : null}
+      {!useReferenceFrame ? (
+        <p className="text-[11px] leading-5 text-white/65">本次生成已关闭典型帧参考图，不会把当前片段或镜头的典型帧发送给 Seedance。</p>
       ) : null}
       {groups.map((group) => (
         <div key={group.label} className="space-y-1">
@@ -175,6 +179,7 @@ const TaskReferenceDebugPanel = ({ task }) => {
 TaskReferenceDebugPanel.propTypes = {
   task: PropTypes.shape({
     use_reference_video: PropTypes.bool,
+    use_reference_frame: PropTypes.bool,
     sent_reference_images: PropTypes.arrayOf(PropTypes.object),
     sent_reference_videos: PropTypes.arrayOf(PropTypes.object),
     sent_reference_audios: PropTypes.arrayOf(PropTypes.object)
@@ -560,6 +565,7 @@ const SegmentCard = ({
 }) => {
   const [draftPrompt, setDraftPrompt] = useState(segment.prompt ?? '');
   const [useReferenceVideo, setUseReferenceVideo] = useState(false);
+  const [useReferenceFrame, setUseReferenceFrame] = useState(true);
   const [shotEditorItems, setShotEditorItems] = useState(() =>
     (segment.shots ?? []).map((shot, shotIndex) => buildShotEditorItem(shot, shotIndex))
   );
@@ -647,6 +653,10 @@ const SegmentCard = ({
   }, [segment.id]);
 
   useEffect(() => {
+    setUseReferenceFrame(true);
+  }, [segment.id]);
+
+  useEffect(() => {
     setShotEditorItems((segment.shots ?? []).map((shot, shotIndex) => buildShotEditorItem(shot, shotIndex)));
   }, [segment.id, segment.shots]);
 
@@ -673,6 +683,10 @@ const SegmentCard = ({
   const referenceVideoToggleHint = useReferenceVideo
     ? '当前会把大片段源视频或小镜头源视频一并发送给 Seedance，但人物和场景仍以资源三视图与提示词作为主真值。'
     : '当前不发送原片源视频，主要依赖角色三视图、场景图、资源提示词、典型帧、背景资产视频和参考音频。';
+  const referenceFrameToggleLabel = useReferenceFrame ? '参考典型帧：开' : '参考典型帧：关';
+  const referenceFrameToggleHint = useReferenceFrame
+    ? '当前会把大片段典型帧或小镜头典型帧作为 Seedance 参考图之一，但它只负责站位、机位、层次和动作瞬间参考。'
+    : '当前不发送典型帧，主要依赖角色三视图、场景图、资源提示词、参考音频和可选原片视频来生成。';
 
   const handleSegmentStyleModeChange = (nextStyleMode) => {
     onAnalysisOptionsChange({
@@ -831,7 +845,10 @@ const SegmentCard = ({
     }
 
     if (!persistDrafts) {
-      return onGenerateAllShots(segment.id, null, { useReferenceVideo });
+      return onGenerateAllShots(segment.id, null, {
+        useReferenceVideo,
+        useRepresentativeFrame: useReferenceFrame
+      });
     }
 
     const persistResult = await persistShotDrafts({
@@ -844,11 +861,17 @@ const SegmentCard = ({
       return null;
     }
 
-    return onGenerateAllShots(segment.id, persistResult.savedShotDrafts, { useReferenceVideo });
+    return onGenerateAllShots(segment.id, persistResult.savedShotDrafts, {
+      useReferenceVideo,
+      useRepresentativeFrame: useReferenceFrame
+    });
   };
 
   const handleDirectGenerate = () => {
-    return onGenerate(segment.id, effectivePrompt, { useReferenceVideo });
+    return onGenerate(segment.id, effectivePrompt, {
+      useReferenceVideo,
+      useRepresentativeFrame: useReferenceFrame
+    });
   };
 
   const updateShotDraft = (shotId, partialDraft) => {
@@ -1043,7 +1066,10 @@ const SegmentCard = ({
       segment.id,
       persistedShotDraft.id,
       String(persistedShotDraft.prompt ?? nextPrompt).trim(),
-      { useReferenceVideo }
+      {
+        useReferenceVideo,
+        useRepresentativeFrame: useReferenceFrame
+      }
     );
   };
 
@@ -1108,6 +1134,19 @@ const SegmentCard = ({
               </button>
               <button
                 type="button"
+                aria-pressed={useReferenceFrame}
+                className={`rounded-full border px-3 py-1 text-[11px] font-semibold transition ${
+                  useReferenceFrame
+                    ? 'border-sky-400/25 bg-sky-500/10 text-sky-100 hover:border-sky-400/35 hover:bg-sky-500/15'
+                    : 'border-white/10 bg-white/[0.04] text-white/75 hover:border-white/20 hover:bg-white/[0.08]'
+                }`}
+                title={referenceFrameToggleHint}
+                onClick={() => setUseReferenceFrame((currentValue) => !currentValue)}
+              >
+                {referenceFrameToggleLabel}
+              </button>
+              <button
+                type="button"
                 className="rounded-full border border-brand-500/20 bg-brand-500/10 px-3 py-1 text-[11px] font-semibold text-brand-100 transition hover:border-brand-500/35 hover:bg-brand-500/15 disabled:opacity-50"
                 onClick={() => void handleOptimizeSegment(effectivePrompt)}
                 disabled={!effectivePrompt || isOptimizing}
@@ -1137,7 +1176,8 @@ const SegmentCard = ({
           ) : null}
 
           <div className="rounded-[14px] border border-white/10 bg-black/20 px-3 py-2 text-[12px] leading-5 text-white/68">
-            {referenceVideoToggleHint}
+            <p>{referenceVideoToggleHint}</p>
+            <p className="mt-1">{referenceFrameToggleHint}</p>
           </div>
 
           <section className="rounded-[18px] border border-white/10 bg-white/[0.04] px-3 py-3">
@@ -1217,7 +1257,12 @@ const SegmentCard = ({
                           <button
                             type="button"
                             className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-white/75 transition hover:border-white/20 hover:bg-white/[0.08] disabled:opacity-50"
-                            onClick={() => void onGenerateShot(segment.id, shot.id, shot.prompt, { useReferenceVideo })}
+                            onClick={() =>
+                              void onGenerateShot(segment.id, shot.id, shot.prompt, {
+                                useReferenceVideo,
+                                useRepresentativeFrame: useReferenceFrame
+                              })
+                            }
                             disabled={isShotGenerating || !canStartGeneration}
                           >
                             {isShotGenerating ? '生成中...' : '生成镜头'}
@@ -1379,6 +1424,18 @@ const SegmentCard = ({
                   onClick={() => setUseReferenceVideo((currentValue) => !currentValue)}
                 >
                   {referenceVideoToggleLabel}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={useReferenceFrame}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                    useReferenceFrame
+                      ? 'border-sky-400/25 bg-sky-500/10 text-sky-100 hover:border-sky-400/35 hover:bg-sky-500/15'
+                      : 'border-white/10 bg-white/[0.04] text-white/75 hover:border-white/20 hover:bg-white/[0.08]'
+                  }`}
+                  onClick={() => setUseReferenceFrame((currentValue) => !currentValue)}
+                >
+                  {referenceFrameToggleLabel}
                 </button>
                 <button
                   type="button"
@@ -2090,6 +2147,7 @@ SegmentCard.propTypes = {
       engine: PropTypes.string,
       is_mock: PropTypes.bool,
       use_reference_video: PropTypes.bool,
+      use_reference_frame: PropTypes.bool,
       remote_task_id: PropTypes.string,
       fallback_reason: PropTypes.string,
       provider_error: PropTypes.string,
