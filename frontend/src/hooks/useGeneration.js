@@ -1334,9 +1334,104 @@ const useGeneration = () => {
     }
   };
 
-  // DEPRECATED: Shot generation functions removed - replaced with full-video generation
-  // const generateShotVideo = async (segmentId, shotId, promptOverride = '', options = {}) => { ... }
-  // const generateAllShotsForSegment = async (segmentId, shotsOverride = null, options = {}) => { ... }
+  const generateFullVideo = async (videoId, prompt, options = {}) => {
+    if (!videoId) {
+      setSegmentsError('请先上传并选择视频，再生成完整视频。');
+      return null;
+    }
+
+    if (!prompt?.trim()) {
+      setSegmentsError('请先输入视频提示词，再生成完整视频。');
+      return null;
+    }
+
+    const useReferenceVideo = normalizeUseReferenceVideo(options.useReferenceVideo);
+    const useReferenceFrame = normalizeUseReferenceFrame(options.useRepresentativeFrame);
+    const requestVideoId = Number(videoId);
+    const requestToken = beginGenerationPolling('full-video');
+    let activeTaskId = '';
+
+    setSegmentsError('');
+    markSegmentGenerating('full-video', true);
+
+    try {
+      const startPayload = await generateSegment(
+        null,
+        prompt,
+        getResolvedVideoRatio(),
+        getResolvedStyleMode(),
+        useReferenceVideo,
+        useReferenceFrame,
+        videoId
+      );
+      activeTaskId = startPayload.task_id ?? '';
+
+      if (isGenerationPollingCancelled('full-video', requestToken, requestVideoId)) {
+        return null;
+      }
+
+      addTask({
+        ...startPayload,
+        video_id: videoId
+      });
+      websocketService.emitLocal('generation:progress', {
+        ...startPayload,
+        video_id: videoId
+      });
+      window.setTimeout(() => {
+        void refreshBackgroundAssets(requestVideoId, {
+          silent: true
+        });
+      }, 500);
+
+      while (!isGenerationPollingCancelled('full-video', requestToken, requestVideoId)) {
+        let taskPayload;
+
+        try {
+          taskPayload = await getGenerationTask(startPayload.task_id);
+        } catch (error) {
+          if (isGenerationPollingCancelled('full-video', requestToken, requestVideoId)) {
+            return null;
+          }
+
+          const errorMessage = getGenerationErrorMessage(error, '完整视频生成轮询');
+
+          setSegmentsError(errorMessage);
+          return null;
+        }
+
+        if (isGenerationPollingCancelled('full-video', requestToken, requestVideoId)) {
+          return null;
+        }
+
+        websocketService.emitLocal('generation:progress', taskPayload);
+
+        if (taskPayload.status === 'completed' || taskPayload.status === 'failed') {
+          void refreshBackgroundAssets(requestVideoId, {
+            silent: true
+          });
+          return taskPayload;
+        }
+
+        await sleep(1200);
+      }
+
+      return null;
+    } catch (error) {
+      if (isGenerationPollingCancelled('full-video', requestToken, requestVideoId)) {
+        return null;
+      }
+
+      const errorMessage = getGenerationErrorMessage(error, activeTaskId ? '完整视频生成' : '完整视频生成启动');
+
+      setSegmentsError(errorMessage);
+      return null;
+    } finally {
+      if (!isGenerationPollingCancelled('full-video', requestToken, requestVideoId)) {
+        markSegmentGenerating('full-video', false);
+      }
+    }
+  };
 
   const startMerge = async () => {
     if (!currentVideo?.id) {
@@ -1584,6 +1679,7 @@ const useGeneration = () => {
     saveSegmentShotDefinitions,
     setVideoRatio,
     generateSegmentVideo,
+    generateFullVideo,
     refreshBackgroundAssets,
     startMerge,
     downloadMergedVideo,

@@ -254,16 +254,25 @@ const generateSegment = async (
   ratio = '',
   styleMode = '',
   useReferenceVideo = true,
-  useReferenceFrame = true
+  useReferenceFrame = true,
+  videoId = null
 ) => {
-  const response = await api.post('/generation/generate', {
-    segment_id: segmentId,
+  const requestBody = {
     prompt,
     ...(ratio ? { ratio } : {}),
     ...(styleMode ? { style_mode: styleMode } : {}),
     use_reference_video: Boolean(useReferenceVideo),
     use_reference_frame: Boolean(useReferenceFrame)
-  });
+  };
+
+  // Support both segment_id (segment generation) and video_id (full-video generation)
+  if (segmentId) {
+    requestBody.segment_id = segmentId;
+  } else if (videoId) {
+    requestBody.video_id = videoId;
+  }
+
+  const response = await api.post('/generation/generate', requestBody);
 
   return response.data;
 };
