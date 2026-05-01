@@ -1624,95 +1624,120 @@ const processGenerationTask = async (taskId) => {
 };
 
 const startGeneration = async ({
-  segmentId,
-  prompt,
-  ratio,
-  styleMode = '',
+  segmentId = null,
+  videoId = null,
+  prompt = '',
+  ratio = env.SEED_DANCE_RATIO,
+  styleMode = null,
   useReferenceVideo = true,
   useReferenceFrame = true
 }) => {
-  const segment = await Segment.findByPk(segmentId);
+  // Get video and analysis
+  let video = null;
+  let segment = null;
 
-  if (!segment) {
-    throw new AppError('Segment not found.', 404, {
-      segment_id: segmentId
-    });
+  if (segmentId) {
+    segment = await Segment.findByPk(segmentId);
+    if (!segment) {
+      throw new AppError('Segment not found', 404);
+    }
+    videoId = segment.videoId;
+  }
+
+  if (!videoId) {
+    throw new AppError('Video ID is required', 400);
+  }
+
+  video = await Video.findByPk(videoId);
+  if (!video) {
+    throw new AppError('Video not found', 404);
+  }
+
+  const analysis = await Analysis.findOne({ where: { videoId } });
+  if (!analysis) {
+    throw new AppError('Analysis not found. Please analyze the video first.', 404);
   }
 
   assertSeedDanceReady();
 
-  const resolvedRatio = normalizeGenerationRatio(ratio);
-  const resolvedUseReferenceVideo = normalizeUseReferenceVideo(useReferenceVideo, true);
-  const resolvedUseReferenceFrame = normalizeUseReferenceFrame(useReferenceFrame, true);
-  const resolvedStyleMode = normalizeStyleMode(
-    styleMode || segment?.analysis?.analysisOptions?.styleMode || DEFAULT_STYLE_MODE
-  );
-  const latestTasks = await GenerationTask.findAll({
-    where: {
-      segmentId
-    },
-    order: [['createdAt', 'DESC']]
+  // Determine style mode
+  const analysisOptions = analysis.analysisOptions || {};
+  const effectiveStyleMode = normalizeStyleMode(styleMode ?? analysisOptions.styleMode);
+
+  // Build full video prompt
+  const fullPrompt = buildFullVideoPrompt({
+    analysis: analysis.result,
+    video,
+    styleMode: effectiveStyleMode,
+    styleTemplates: analysisOptions.styleTemplates,
+    useReferenceVideo,
+    useReferenceFrame
   });
-  const latestAttemptTask = latestTasks[0] ?? null;
-  const latestCompletedTask = latestTasks.find((task) => isUsableCompletedGenerationTask(task)) ?? null;
 
-  if (
-    latestAttemptTask &&
-    [TASK_STATUS.pending, TASK_STATUS.processing].includes(latestAttemptTask.status) &&
-    doesSegmentTaskMatchGenerationRequest({
-      task: latestAttemptTask,
-      prompt,
-      ratio: resolvedRatio,
-      styleMode: resolvedStyleMode,
-      useReferenceVideo: resolvedUseReferenceVideo,
-      useReferenceFrame: resolvedUseReferenceFrame
-    })
-  ) {
-    return {
-      task_id: latestAttemptTask.id,
-      status: latestAttemptTask.status,
-      progress: latestAttemptTask.progress,
-      ratio: resolvedRatio,
-      style_mode: resolvedStyleMode,
-      use_reference_video: resolvedUseReferenceVideo,
-      use_reference_frame: resolvedUseReferenceFrame
-    };
+  // Collect all character reference images
+  const allCharacterIds = (analysis.result.characters || []).map(c => c.id);
+  const characterImages = await collectCharacterReferenceImages({
+    videoId,
+    segment: null,
+    overallAnalysis: analysis.result,
+    prompt: fullPrompt,
+    sourceVideoAbsolutePath: resolveUploadPath(video.filePath),
+    basenamePrefix: `full-video-${videoId}`
+  });
+
+  // Collect all scene reference images
+  const allSceneIds = (analysis.result.backgrounds || []).map(b => b.id);
+  const sceneImages = await collectSceneReferenceImages({
+    videoId,
+    segment: null,
+    overallAnalysis: analysis.result,
+    prompt: fullPrompt,
+    sceneNames: allSceneIds,
+    backgroundBinding: null,
+    sourceVideoAbsolutePath: resolveUploadPath(video.filePath),
+    basenamePrefix: `full-video-${videoId}`
+  });
+
+  // Combine all reference images
+  const referenceImages = composeSeedDanceReferenceImages({
+    characterImages,
+    sceneImages
+  });
+
+  // Prepare reference video (entire original video)
+  const normalizedUseReferenceVideo = normalizeUseReferenceVideo(useReferenceVideo);
+  const referenceVideoPath = normalizedUseReferenceVideo ? resolveUploadPath(video.filePath) : null;
+  const referenceVideoUrl = normalizedUseReferenceVideo ? toAbsolutePublicUploadUrl(video.filePath) : null;
+
+  // Use full video duration
+  const durationSeconds = Number(video.duration ?? 0);
+
+  if (durationSeconds <= 0) {
+    throw new AppError('Invalid video duration', 400);
   }
 
-  if (
-    isUsableCompletedGenerationTask(latestCompletedTask) &&
-    doesSegmentTaskMatchGenerationRequest({
-      task: latestCompletedTask,
-      prompt,
-      ratio: resolvedRatio,
-      styleMode: resolvedStyleMode,
-      useReferenceVideo: resolvedUseReferenceVideo,
-      useReferenceFrame: resolvedUseReferenceFrame
-    })
-  ) {
-    return {
-      task_id: latestCompletedTask.id,
-      status: latestCompletedTask.status,
-      progress: latestCompletedTask.progress,
-      ratio: resolvedRatio,
-      style_mode: resolvedStyleMode,
-      use_reference_video: resolvedUseReferenceVideo,
-      use_reference_frame: resolvedUseReferenceFrame
-    };
-  }
-
+  // Create generation task
   const task = await GenerationTask.create({
-    segmentId,
-    prompt,
+    videoId,
+    segmentId: null,
     status: TASK_STATUS.pending,
     progress: 0,
+    prompt: fullPrompt,
+    optimizedPrompt: fullPrompt,
+    resultUrl: null,
+    errorMessage: null,
     meta: {
-      source: 'segment_generation',
-      ratio: resolvedRatio,
-      styleMode: resolvedStyleMode,
-      useReferenceVideo: resolvedUseReferenceVideo,
-      useReferenceFrame: resolvedUseReferenceFrame,
-      engine: '',
+      engine: 'seedance',
+      ratio: normalizeGenerationRatio(ratio),
+      styleMode: effectiveStyleMode,
+      useReferenceVideo: normalizedUseReferenceVideo,
+      useReferenceFrame: normalizeUseReferenceFrame(useReferenceFrame),
+      source: 'full_video_generation',
+      requestedDurationSeconds: durationSeconds,
+      shotCount: (analysis.result.timeAnchors || []).reduce(
+        (sum, anchor) => sum + (anchor.shots || []).length,
+        0
+      ),
       remoteStatus: '',
       remoteStatusLabel: '',
       remoteCreatedAt: null,
@@ -1721,27 +1746,88 @@ const startGeneration = async ({
       remoteTaskId: '',
       fallbackReason: '',
       providerError: '',
-      requestedDurationSeconds: null,
-      providerDurationSeconds: null,
+      providerDurationSeconds: durationSeconds,
       actualDurationSeconds: null,
       hasDialogue: false,
       trimmedToRequested: true
     }
   });
+
+  // Broadcast task creation
   broadcastGenerationTaskUpdate(task);
 
-  queueMicrotask(() => {
-    void processGenerationTask(task.id);
+  // Start generation asynchronously
+  queueMicrotask(async () => {
+    try {
+      await task.update({ status: TASK_STATUS.processing, progress: 10 });
+      broadcastGenerationTaskUpdate(task);
+
+      // Call Seedance
+      const result = await generateWithSeedDance({
+        sourceAbsolutePath: referenceVideoPath || '',
+        sourcePublicUrl: referenceVideoUrl || '',
+        sourceReferenceSourceKind: 'source_video',
+        sourceReferenceDisplayLabel: '完整原片视频',
+        prompt: fullPrompt,
+        basename: `full-video-${videoId}-task-${task.id}`,
+        ratio: normalizeGenerationRatio(ratio),
+        duration: durationSeconds,
+        onProgress: async (progressPayload) => {
+          await applySeedDanceTaskProgress(task, progressPayload);
+        },
+        trimToRequestedDuration: false,
+        referenceImages,
+        referenceVideos: []
+      });
+
+      // Update task with result
+      await task.update({
+        status: TASK_STATUS.completed,
+        progress: 100,
+        resultUrl: result.fileUrl,
+        errorMessage: null,
+        meta: {
+          ...task.meta,
+          engine: result.engine || 'seedance',
+          isMock: Boolean(result.isMock),
+          remoteTaskId: result.remoteTaskId || '',
+          remoteUrl: result.remoteUrl || '',
+          sentReferenceImages: result.sentReferenceImages ?? [],
+          sentReferenceVideos: result.sentReferenceVideos ?? [],
+          sentReferenceAudios: result.sentReferenceAudios ?? [],
+          remoteStatus: 'succeeded',
+          remoteStatusLabel: '远端已完成',
+          actualDurationSeconds: result.actualDurationSeconds ?? null,
+          providerDurationSeconds: result.providerDurationSeconds ?? durationSeconds,
+          fallbackReason: result.fallbackReason || '',
+          providerError: result.providerError || ''
+        }
+      });
+
+      broadcastGenerationTaskUpdate(task);
+    } catch (error) {
+      await task.update({
+        status: TASK_STATUS.failed,
+        progress: 0,
+        errorMessage: error.message || 'Generation failed',
+        meta: {
+          ...task.meta,
+          providerError: error.message || 'Generation failed'
+        }
+      });
+
+      broadcastGenerationTaskUpdate(task);
+    }
   });
 
   return {
     task_id: task.id,
     status: task.status,
     progress: task.progress,
-    ratio: resolvedRatio,
-    style_mode: resolvedStyleMode,
-    use_reference_video: resolvedUseReferenceVideo,
-    use_reference_frame: resolvedUseReferenceFrame
+    ratio: normalizeGenerationRatio(ratio),
+    style_mode: effectiveStyleMode,
+    use_reference_video: normalizedUseReferenceVideo,
+    use_reference_frame: normalizeUseReferenceFrame(useReferenceFrame)
   };
 };
 
