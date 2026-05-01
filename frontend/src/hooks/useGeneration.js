@@ -5,11 +5,8 @@ import {
   downloadSegmentExport,
   downloadVideo,
   generateSegment,
-  generateShot,
-  generateShotBatch,
   getBackgroundAssets,
   getGenerationTask,
-  getShotGenerationTask,
   getMergeProgress,
   getSegmentExportProgress,
   mergeVideos,
@@ -338,9 +335,6 @@ const useGeneration = () => {
   const [analyzingSegmentId, setAnalyzingSegmentId] = useState(0);
   const [optimizingSegmentId, setOptimizingSegmentId] = useState(0);
   const [generatingSegmentIds, setGeneratingSegmentIds] = useState([]);
-  const [generatingShotKeys, setGeneratingShotKeys] = useState([]);
-  const [batchGeneratingSegmentIds, setBatchGeneratingSegmentIds] = useState([]);
-  const [optimizingShotKeys, setOptimizingShotKeys] = useState([]);
   const [savingShotSegmentIds, setSavingShotSegmentIds] = useState([]);
   const characters = analysis?.characters ?? [];
   const backgrounds = analysis?.backgrounds ?? [];
@@ -350,7 +344,6 @@ const useGeneration = () => {
   const segmentAnalysisRequestTokenRef = useRef(0);
   const optimizeRequestTokenRef = useRef(0);
   const generationPollingTokenRef = useRef(new Map());
-  const shotGenerationPollingTokenRef = useRef(new Map());
   const mergePollingTokenRef = useRef(0);
   const segmentExportPollingTokenRef = useRef(0);
 
@@ -414,25 +407,6 @@ const useGeneration = () => {
     );
   };
 
-  const beginShotGenerationPolling = (segmentId, shotId) => {
-    const shotRuntimeKey = getShotRuntimeKey(segmentId, shotId);
-    const currentToken = shotGenerationPollingTokenRef.current.get(shotRuntimeKey) ?? 0;
-    const nextToken = currentToken + 1;
-    shotGenerationPollingTokenRef.current.set(shotRuntimeKey, nextToken);
-    return nextToken;
-  };
-
-  const isShotGenerationPollingCancelled = (segmentId, shotId, requestToken, videoId) => {
-    const latestVideoId = useVideoStore.getState().currentVideo?.id ?? activeVideoIdRef.current ?? 0;
-    const shotRuntimeKey = getShotRuntimeKey(segmentId, shotId);
-
-    return (
-      !mountedRef.current ||
-      Number(latestVideoId) !== Number(videoId ?? 0) ||
-      shotGenerationPollingTokenRef.current.get(shotRuntimeKey) !== requestToken
-    );
-  };
-
   const beginMergePolling = () => {
     const nextToken = mergePollingTokenRef.current + 1;
     mergePollingTokenRef.current = nextToken;
@@ -456,40 +430,6 @@ const useGeneration = () => {
 
     setGeneratingSegmentIds((state) =>
       isGenerating ? [...new Set([...state, segmentId])] : state.filter((item) => item !== segmentId)
-    );
-  };
-
-  const markShotGenerating = (segmentId, shotId, isGenerating) => {
-    if (!mountedRef.current) {
-      return;
-    }
-
-    const shotRuntimeKey = getShotRuntimeKey(segmentId, shotId);
-
-    setGeneratingShotKeys((state) =>
-      isGenerating ? [...new Set([...state, shotRuntimeKey])] : state.filter((item) => item !== shotRuntimeKey)
-    );
-  };
-
-  const markShotBatchGenerating = (segmentId, isGenerating) => {
-    if (!mountedRef.current) {
-      return;
-    }
-
-    setBatchGeneratingSegmentIds((state) =>
-      isGenerating ? [...new Set([...state, segmentId])] : state.filter((item) => item !== segmentId)
-    );
-  };
-
-  const markShotOptimizing = (segmentId, shotId, isOptimizing) => {
-    if (!mountedRef.current) {
-      return;
-    }
-
-    const shotRuntimeKey = getShotRuntimeKey(segmentId, shotId);
-
-    setOptimizingShotKeys((state) =>
-      isOptimizing ? [...new Set([...state, shotRuntimeKey])] : state.filter((item) => item !== shotRuntimeKey)
     );
   };
 
@@ -743,7 +683,6 @@ const useGeneration = () => {
       segmentAnalysisRequestTokenRef.current += 1;
       optimizeRequestTokenRef.current += 1;
       generationPollingTokenRef.current = new Map();
-      shotGenerationPollingTokenRef.current = new Map();
       mergePollingTokenRef.current += 1;
       segmentExportPollingTokenRef.current += 1;
     };
@@ -755,7 +694,6 @@ const useGeneration = () => {
     segmentAnalysisRequestTokenRef.current += 1;
     optimizeRequestTokenRef.current += 1;
     generationPollingTokenRef.current = new Map();
-    shotGenerationPollingTokenRef.current = new Map();
     mergePollingTokenRef.current += 1;
     segmentExportPollingTokenRef.current += 1;
 
@@ -785,8 +723,6 @@ const useGeneration = () => {
       setAnalyzingSegmentId(0);
       setOptimizingSegmentId(0);
       setGeneratingSegmentIds([]);
-      setGeneratingShotKeys([]);
-      setBatchGeneratingSegmentIds([]);
     }
 
     previousVideoIdRef.current = currentVideo?.id ?? null;
@@ -897,10 +833,6 @@ const useGeneration = () => {
         shotGenerationSummary: normalizedSummary,
         latestShotAssemblyTask: normalizedSummary
       });
-
-      if (['completed', 'failed'].includes(normalizedSummary?.status)) {
-        markShotBatchGenerating(payloadSegmentId, false);
-      }
     });
   }, [updateSegment]);
 
@@ -1235,7 +1167,6 @@ const useGeneration = () => {
     const requestToken = beginOptimizeRequest();
 
     setSegmentsError('');
-    markShotOptimizing(segmentId, shotId, true);
 
     try {
       const optimizedPayload = await optimizePrompt(sourceShotPrompt, characters, backgrounds, {
@@ -1259,10 +1190,6 @@ const useGeneration = () => {
 
       setSegmentsError(getGenerationErrorMessage(error, '镜头提示词优化'));
       return null;
-    } finally {
-      if (!isVideoScopedRequestCancelled(requestToken, requestVideoId, optimizeRequestTokenRef)) {
-        markShotOptimizing(segmentId, shotId, false);
-      }
     }
   };
 
@@ -1407,215 +1334,9 @@ const useGeneration = () => {
     }
   };
 
-  const generateShotVideo = async (segmentId, shotId, promptOverride = '', options = {}) => {
-    const segment = getCurrentSegmentById(segmentId);
-    const shot = segment?.shots?.find((item) => item.id === shotId);
-
-    if (!segment || !shot) {
-      return null;
-    }
-
-    if (!currentVideo?.id) {
-      setSegmentsError('请先上传并选择视频，再生成小镜头。');
-      return null;
-    }
-
-    const sourcePrompt = String(promptOverride ?? '').trim() || shot.prompt;
-    const useReferenceVideo = normalizeUseReferenceVideo(options.useReferenceVideo);
-    const useReferenceFrame = normalizeUseReferenceFrame(options.useRepresentativeFrame);
-
-    if (!sourcePrompt?.trim()) {
-      setSegmentsError('请先输入镜头提示词，再生成小镜头。');
-      return null;
-    }
-
-    const requestVideoId = Number(currentVideo.id);
-    const requestToken = beginShotGenerationPolling(segmentId, shotId);
-    let activeTaskId = '';
-
-    setSegmentsError('');
-    markShotGenerating(segmentId, shotId, true);
-
-    if (sourcePrompt !== shot.prompt) {
-      updateSegmentShot(segmentId, shotId, {
-        prompt: sourcePrompt
-      });
-    }
-
-    try {
-      const startPayload = await generateShot(
-        segmentId,
-        shotId,
-        sourcePrompt,
-        getResolvedVideoRatio(),
-        getResolvedStyleMode(),
-        useReferenceVideo,
-        useReferenceFrame
-      );
-      activeTaskId = startPayload.task_id ?? '';
-
-      if (isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
-        return null;
-      }
-
-      websocketService.emitLocal('shot:progress', startPayload);
-      window.setTimeout(() => {
-        void refreshBackgroundAssets(requestVideoId, {
-          silent: true
-        });
-      }, 500);
-
-      while (!isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
-        let taskPayload;
-
-        try {
-          taskPayload = await getShotGenerationTask(startPayload.task_id);
-        } catch (error) {
-          if (isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
-            return null;
-          }
-
-          const errorMessage = getGenerationErrorMessage(error, '小镜头生成轮询');
-          setSegmentsError(errorMessage);
-          markShotGenerationFailure(segmentId, shotId, errorMessage, startPayload.task_id);
-          return null;
-        }
-
-        if (isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
-          return null;
-        }
-
-        websocketService.emitLocal('shot:progress', taskPayload);
-
-        if (taskPayload.status === 'completed' || taskPayload.status === 'failed') {
-          void refreshBackgroundAssets(requestVideoId, {
-            silent: true
-          });
-          return taskPayload;
-        }
-
-        await sleep(1200);
-      }
-
-      return null;
-    } catch (error) {
-      if (isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
-        return null;
-      }
-
-      const errorMessage = getGenerationErrorMessage(error, activeTaskId ? '小镜头生成' : '小镜头生成启动');
-      setSegmentsError(errorMessage);
-      markShotGenerationFailure(segmentId, shotId, errorMessage, activeTaskId);
-      return null;
-    } finally {
-      if (!isShotGenerationPollingCancelled(segmentId, shotId, requestToken, requestVideoId)) {
-        markShotGenerating(segmentId, shotId, false);
-      }
-    }
-  };
-
-  const generateAllShotsForSegment = async (segmentId, shotsOverride = null, options = {}) => {
-    const segment = getCurrentSegmentById(segmentId);
-
-    if (!segment) {
-      return null;
-    }
-
-    if (!currentVideo?.id) {
-      setSegmentsError('请先上传并选择视频，再生成小镜头。');
-      return null;
-    }
-
-    const useReferenceVideo = normalizeUseReferenceVideo(options.useReferenceVideo);
-    const useReferenceFrame = normalizeUseReferenceFrame(options.useRepresentativeFrame);
-    const shotsForGeneration =
-      Array.isArray(shotsOverride) && shotsOverride.length ? shotsOverride : segment.shots ?? [];
-
-    if (!shotsForGeneration.length) {
-      setSegmentsError('当前片段还没有小镜头可生成。');
-      return null;
-    }
-
-    setSegmentsError('');
-    markShotBatchGenerating(segmentId, true);
-
-    try {
-      const batchPayload = await generateShotBatch(
-        segmentId,
-        shotsForGeneration.map((shot) => ({
-          shot_id: shot.id,
-          prompt: String(shot.prompt ?? '').trim() || String(shot.summary ?? '').trim()
-        })),
-        getResolvedVideoRatio(),
-        getResolvedStyleMode(),
-        useReferenceVideo,
-        useReferenceFrame
-      );
-      const nextSummary = {
-        segment_id: segmentId,
-        status: batchPayload.status ?? 'processing',
-        progress: Number(batchPayload.progress ?? (batchPayload.status === 'completed' ? 100 : 0)) || 0,
-        total_shot_count: Number(batchPayload.shot_count ?? shotsForGeneration.length) || shotsForGeneration.length,
-        completed_shot_count: Number(batchPayload.completed_shot_count ?? 0) || 0,
-        failed_shot_count: Number(batchPayload.failed_shot_count ?? 0) || 0,
-        processing_shot_count:
-          Number(
-            batchPayload.processing_shot_count ??
-              (batchPayload.status === 'processing'
-                ? Number(batchPayload.shot_count ?? shotsForGeneration.length) || shotsForGeneration.length
-                : 0)
-          ) || 0,
-        pending_assembly:
-          typeof batchPayload.pending_assembly === 'boolean'
-            ? batchPayload.pending_assembly
-            : batchPayload.status !== 'completed',
-        result_url: toAbsoluteAssetUrl(batchPayload.result_url),
-        error_message: batchPayload.error_message ?? '',
-        assembly_generation_task_id: null,
-        source: 'shot_assembly',
-        started_at: batchPayload.started_at ?? '',
-        updated_at: new Date().toISOString()
-      };
-
-      updateSegment(segmentId, {
-        shotGenerationSummary: nextSummary,
-        latestShotAssemblyTask: nextSummary
-      });
-
-      if (['completed', 'failed'].includes(nextSummary.status)) {
-        markShotBatchGenerating(segmentId, false);
-      }
-
-      return batchPayload;
-    } catch (error) {
-      markShotBatchGenerating(segmentId, false);
-      const errorMessage = getGenerationErrorMessage(error, '小镜头批量生成');
-      setSegmentsError(errorMessage);
-      const currentSegment = getCurrentSegmentById(segmentId);
-
-      updateSegment(segmentId, {
-        shotGenerationSummary: {
-          ...(currentSegment?.shotGenerationSummary ?? segment.shotGenerationSummary ?? {}),
-          segment_id: segmentId,
-          status: 'failed',
-          progress: currentSegment?.shotGenerationSummary?.progress ?? segment.shotGenerationSummary?.progress ?? 0,
-          error_message: errorMessage,
-          updated_at: new Date().toISOString()
-        },
-        latestShotAssemblyTask: {
-          ...(currentSegment?.latestShotAssemblyTask ?? segment.latestShotAssemblyTask ?? {}),
-          segment_id: segmentId,
-          status: 'failed',
-          progress:
-            currentSegment?.latestShotAssemblyTask?.progress ?? segment.latestShotAssemblyTask?.progress ?? 0,
-          error_message: errorMessage,
-          updated_at: new Date().toISOString()
-        }
-      });
-
-      return null;
-    }
-  };
+  // DEPRECATED: Shot generation functions removed - replaced with full-video generation
+  // const generateShotVideo = async (segmentId, shotId, promptOverride = '', options = {}) => { ... }
+  // const generateAllShotsForSegment = async (segmentId, shotsOverride = null, options = {}) => { ... }
 
   const startMerge = async () => {
     if (!currentVideo?.id) {
@@ -1854,9 +1575,6 @@ const useGeneration = () => {
     analyzingSegmentId,
     optimizingSegmentId,
     generatingSegmentIds,
-    generatingShotKeys,
-    batchGeneratingSegmentIds,
-    optimizingShotKeys,
     savingShotSegmentIds,
     setSegmentPrompt,
     setShotPrompt,
@@ -1866,8 +1584,6 @@ const useGeneration = () => {
     saveSegmentShotDefinitions,
     setVideoRatio,
     generateSegmentVideo,
-    generateShotVideo,
-    generateAllShotsForSegment,
     refreshBackgroundAssets,
     startMerge,
     downloadMergedVideo,
