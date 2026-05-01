@@ -270,7 +270,11 @@ beforeEach(() => {
   generationServiceMock.startGeneration.mockResolvedValue({
     task_id: 401,
     status: 'pending',
-    progress: 0
+    progress: 0,
+    ratio: '9:16',
+    style_mode: 'default',
+    use_reference_video: true,
+    use_reference_frame: true
   });
   backgroundAssetServiceMock.listBackgroundAssetsByVideoId.mockResolvedValue([]);
   resourceImageServiceMock.listResourceImageAssetsByVideoId.mockResolvedValue([
@@ -567,7 +571,8 @@ describe('Backend API integration', () => {
     expect(generationResponse.status).toBe(200);
     expect(generationResponse.body.status).toBe('completed');
     expect(segmentGenerationResponse.status).toBe(202);
-    expect(segmentGenerationResponse.body.segment_id).toBe(301);
+    expect(segmentGenerationResponse.body.task_id).toBeDefined();
+    expect(segmentGenerationResponse.body.status).toBe('pending');
     expect(mergeProgressResponse.status).toBe(200);
     expect(mergeProgressResponse.body.status).toBe('completed');
     expect(downloadResponse.status).toBe(200);
