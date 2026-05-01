@@ -1114,27 +1114,8 @@ const SegmentCard = ({
               >
                 {isOptimizing ? '优化中...' : '优化大片段提示词'}
               </button>
-              <button
-                type="button"
-                className="rounded-full bg-gradient-to-r from-brand-500 to-accent-500 px-3.5 py-1 text-[11px] font-semibold text-white transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50"
-                onClick={() => void handleBatchGenerate()}
-                disabled={!segmentShots.length || isBatchGenerating || !canStartGeneration}
-                title={
-                  canStartGeneration
-                    ? '按小镜头顺序生成并自动拼回为新的大片段视频。'
-                    : `Seedance 未就绪：${seedDanceProvider?.reason || '缺少必要配置。'}`
-                }
-              >
-                {isBatchGenerating ? '拼回中...' : '生成新片段'}
-              </button>
             </div>
           </div>
-
-          {!canStartGeneration ? (
-            <div className="rounded-[14px] border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[12px] leading-5 text-amber-100">
-              {seedDanceUnavailableReason} 当前片段与镜头视频生成按钮会保持禁用，配置完成后可立即恢复。
-            </div>
-          ) : null}
 
           <div className="rounded-[14px] border border-white/10 bg-black/20 px-3 py-2 text-[12px] leading-5 text-white/68">
             <p>{referenceVideoToggleHint}</p>
@@ -1202,61 +1183,11 @@ const SegmentCard = ({
                       </div>
 
                       <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <StatusBadge
-                            status={shot.latestGenerationTask?.status || 'idle'}
-                            label={
-                              shot.latestGenerationTask?.status === 'completed'
-                                ? '镜头已生成'
-                                : shot.latestGenerationTask?.status === 'failed'
-                                  ? '镜头失败'
-                                  : isShotGenerating
-                                    ? '镜头生成中'
-                                    : '待生成'
-                            }
-                          />
-                          <button
-                            type="button"
-                            className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold text-white/75 transition hover:border-white/20 hover:bg-white/[0.08] disabled:opacity-50"
-                            onClick={() =>
-                              void onGenerateShot(segment.id, shot.id, shot.prompt, {
-                                useReferenceVideo,
-                                useRepresentativeFrame: useReferenceFrame
-                              })
-                            }
-                            disabled={isShotGenerating || !canStartGeneration}
-                          >
-                            {shot.latestGenerationTask?.status === 'completed' || shot.generatedUrl
-                              ? isShotGenerating
-                                ? '生成中...'
-                                : '重新生成镜头'
-                              : isShotGenerating
-                                ? '生成中...'
-                                : '生成镜头'}
-                          </button>
-                        </div>
-
-                        {shouldShowGenerationProgress(shot.latestGenerationTask) ? (
-                          <div className="mt-3">
-                            <ProgressBar
-                              value={shot.latestGenerationTask?.progress ?? 0}
-                              status={shot.latestGenerationTask?.status ?? 'pending'}
-                              label={`镜头任务 · ${getGenerationTaskStatusLabel(shot.latestGenerationTask, '镜头待生成')}`}
-                              startedAt={shot.latestGenerationTask?.created_at || ''}
-                              compact
-                            />
-                            <TaskReferenceDebugPanel task={shot.latestGenerationTask} />
-                          </div>
-                        ) : null}
-
-                        <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">
                           当前最终提示词
                         </p>
                         <p className="mt-2 text-[11px] leading-5 text-white/55">
-                          {getDurationComparisonLabel(
-                            shot.durationSeconds,
-                            shot.latestCompletedGenerationTask?.actual_duration_seconds
-                          ) || '当前镜头生成后会在这里显示真实成品时长。'}
+                          时长: {formatDuration(shot.durationSeconds ?? 0)}
                         </p>
                         <div className="mt-2 text-[12px] leading-6 text-white/82">
                           {shot.prompt ? renderPromptTokenPreview(shot.prompt) : '等待镜头提示词。'}
@@ -1264,15 +1195,16 @@ const SegmentCard = ({
                       </div>
 
                       <div>
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">
-                          新小镜头预览
-                        </p>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">镜头预览</p>
                         {shot.generatedUrl ? (
                           <video className="segment-workbench-video mt-2" src={shot.generatedUrl} controls preload="metadata" />
                         ) : (
                           <div className="preview-placeholder segment-workbench-empty mt-2 min-h-[170px]">
                             <div className="preview-orb" />
-                            <p className="text-sm font-semibold text-white">待生成镜头</p>
+                            <p className="text-sm font-semibold text-white">镜头预览</p>
+                            <p className="mt-2 max-w-[220px] text-center text-[11px] leading-5 text-white/60">
+                              使用完整视频生成功能后，镜头会在这里显示
+                            </p>
                           </div>
                         )}
                         {Array.isArray(shot.speech?.subtitleLines) && shot.speech.subtitleLines.length ? (
@@ -1509,10 +1441,6 @@ const SegmentCard = ({
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <StatusBadge
-                  status={shotGenerationSummary?.status || 'idle'}
-                  label={getShotAssemblyStatusLabel(shotGenerationSummary)}
-                />
                 <button
                   type="button"
                   className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-semibold text-white/75 transition hover:border-white/20 hover:bg-white/[0.08]"
@@ -1527,14 +1455,6 @@ const SegmentCard = ({
                   disabled={isSavingShots}
                 >
                   {isSavingShots ? '保存并重建中...' : '保存镜头'}
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full bg-gradient-to-r from-brand-500 to-accent-500 px-3.5 py-1.5 text-[11px] font-semibold text-white transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50"
-                  onClick={() => void handleBatchGenerate({ persistDrafts: true })}
-                  disabled={!shotEditorItems.length || isBatchGenerating || isSavingShots || !canStartGeneration}
-                >
-                  {isBatchGenerating ? '镜头批处理中...' : '一键生成全部镜头'}
                 </button>
               </div>
             </div>
