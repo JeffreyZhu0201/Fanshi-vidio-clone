@@ -74,6 +74,10 @@ const MainPage = () => {
   const [exportDockOpen, setExportDockOpen] = useState(false);
   const [resourceRefreshKey, setResourceRefreshKey] = useState(0);
   const [autoProduceState, setAutoProduceState] = useState(createInitialAutoProduceState);
+  const [fullVideoPrompt, setFullVideoPrompt] = useState('');
+  const [isGeneratingFullVideo, setIsGeneratingFullVideo] = useState(false);
+  const [fullVideoResult, setFullVideoResult] = useState(null);
+  const [fullVideoError, setFullVideoError] = useState('');
   const { backendStatus, errorMessage, lastCheckedAt, realtimeStatus, providerStatuses } = useAppHealth();
   const {
     currentVideo,
@@ -123,6 +127,7 @@ const MainPage = () => {
     generateSegmentVideo,
     generateShotVideo,
     generateAllShotsForSegment,
+    generateFullVideo,
     startMerge,
     downloadMergedVideo,
     startSegmentExportArchive,
@@ -566,6 +571,39 @@ const MainPage = () => {
     }
   };
 
+  const handleGenerateFullVideo = async () => {
+    if (!currentVideo?.id || !analysis) {
+      setFullVideoError('请先上传视频并完成整片分析。');
+      return;
+    }
+
+    if (!fullVideoPrompt?.trim()) {
+      setFullVideoError('请输入完整视频提示词。');
+      return;
+    }
+
+    setIsGeneratingFullVideo(true);
+    setFullVideoError('');
+    setFullVideoResult(null);
+
+    try {
+      const result = await generateFullVideo(currentVideo.id, fullVideoPrompt, {
+        useReferenceVideo: true,
+        useRepresentativeFrame: true
+      });
+
+      if (result?.status === 'completed') {
+        setFullVideoResult(result);
+      } else if (result?.status === 'failed') {
+        setFullVideoError(result.error_message || '完整视频生成失败。');
+      }
+    } catch (error) {
+      setFullVideoError(error?.message || '完整视频生成失败，请稍后重试。');
+    } finally {
+      setIsGeneratingFullVideo(false);
+    }
+  };
+
   const autoProduceFooterContent =
     isAutoProducing || autoProduceState.error || autoProduceState.status === 'completed' ? (
       <div className="rounded-[22px] border border-white/10 bg-black/25 px-4 py-4 text-white">
@@ -784,6 +822,85 @@ const MainPage = () => {
                 compactMode
                 className="compact-surface compact-analysis-panel"
               />
+
+              {analysis && !isAutoProducing && (
+                <section className="panel-shell panel-shell-strong compact-surface">
+                  <div className="compact-panel-header">
+                    <div>
+                      <p className="compact-card-eyebrow">Full Video Generation</p>
+                      <h2 className="compact-card-title">生成完整视频</h2>
+                      <p className="compact-card-note">
+                        使用整片分析结果，一次性生成完整视频（所有镜头拼接为一个提示词）
+                      </p>
+                    </div>
+                    <StatusBadge
+                      status={isGeneratingFullVideo ? 'processing' : fullVideoResult ? 'completed' : 'pending'}
+                      label={isGeneratingFullVideo ? '生成中' : fullVideoResult ? '已完成' : '待生成'}
+                    />
+                  </div>
+
+                  <div className="mt-4 space-y-4">
+                    <div>
+                      <label htmlFor="full-video-prompt" className="block text-sm font-medium text-white/80 mb-2">
+                        完整视频提示词
+                      </label>
+                      <textarea
+                        id="full-video-prompt"
+                        className="w-full rounded-[18px] border border-white/10 bg-black/20 px-4 py-3 text-sm text-white placeholder-white/40 focus:border-brand-500/40 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                        rows={6}
+                        placeholder="输入完整视频的提示词，描述整体风格、场景、角色和动作..."
+                        value={fullVideoPrompt}
+                        onChange={(e) => setFullVideoPrompt(e.target.value)}
+                        disabled={isGeneratingFullVideo}
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      className="inline-flex items-center justify-center rounded-full border border-brand-500/25 bg-brand-500/12 px-6 py-3 text-sm font-semibold text-brand-100 transition hover:border-brand-500/40 hover:bg-brand-500/18 disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={handleGenerateFullVideo}
+                      disabled={!currentVideo?.id || !analysis || !fullVideoPrompt?.trim() || isGeneratingFullVideo}
+                    >
+                      {isGeneratingFullVideo ? '生成中...' : '生成完整视频'}
+                    </button>
+
+                    {isGeneratingFullVideo && (
+                      <div className="rounded-[18px] border border-brand-500/20 bg-brand-500/5 px-4 py-3">
+                        <p className="text-sm text-white/80">正在生成完整视频，请稍候...</p>
+                      </div>
+                    )}
+
+                    {fullVideoResult && !isGeneratingFullVideo && (
+                      <div className="rounded-[18px] border border-emerald-500/20 bg-emerald-500/5 px-4 py-4">
+                        <h3 className="text-sm font-semibold text-emerald-100 mb-3">生成完成</h3>
+                        {fullVideoResult.result_url && (
+                          <div className="space-y-3">
+                            <video
+                              src={toAbsoluteAssetUrl(fullVideoResult.result_url)}
+                              controls
+                              className="w-full rounded-[14px] bg-black"
+                            />
+                            <a
+                              href={toAbsoluteAssetUrl(fullVideoResult.result_url)}
+                              download
+                              className="inline-flex items-center justify-center rounded-full border border-emerald-500/25 bg-emerald-500/12 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:border-emerald-500/40 hover:bg-emerald-500/18"
+                            >
+                              下载视频
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {fullVideoError && (
+                      <div className="rounded-[18px] border border-accent-500/20 bg-accent-500/10 px-4 py-3">
+                        <h3 className="text-sm font-semibold text-rose-200 mb-1">生成失败</h3>
+                        <p className="text-xs text-rose-200/80">{fullVideoError}</p>
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )}
             </div>
           </div>
 
