@@ -127,7 +127,6 @@ const MainPage = () => {
     setVideoRatio,
     generateSegmentVideo,
     generateShotVideo,
-    generateAllShotsForSegment,
     generateFullVideo,
     startMerge,
     downloadMergedVideo,
@@ -441,48 +440,39 @@ const MainPage = () => {
     setResourceRefreshKey((currentValue) => currentValue + 1);
   };
 
-  const generateSegmentsFromCurrentPrompts = async () => {
-    let latestSegments = useGenerationStore.getState().segments ?? [];
+  const generateFullVideoFromAnalysis = async () => {
+    updateAutoProduceState({
+      progress: 42,
+      message: '正在使用完整视频生成功能'
+    });
 
-    if (!latestSegments.length) {
-      await refreshSegments();
-      latestSegments = useGenerationStore.getState().segments ?? [];
+    if (!analysis) {
+      throw new Error('整片分析结果缺失，无法生成完整视频。');
     }
 
-    if (!latestSegments.length) {
-      throw new Error('切分完成后没有拿到任何片段，无法继续一键出片。');
+    const fullPrompt = analysis.time_anchors
+      ?.map((anchor, index) => {
+        const scenePrompt = anchor.scenePrompt || anchor.scene_prompt || '';
+        return scenePrompt ? `片段${index + 1}: ${scenePrompt}` : '';
+      })
+      .filter(Boolean)
+      .join('\n\n') || '根据整片分析结果生成完整视频';
+
+    const result = await generateFullVideo(currentVideo.id, fullPrompt, {
+      useReferenceVideo: true,
+      useRepresentativeFrame: true
+    });
+
+    if (!result || result.status === 'failed') {
+      throw new Error(result?.error_message || '完整视频生成失败。');
     }
 
-    for (let segmentIndex = 0; segmentIndex < latestSegments.length; segmentIndex += 1) {
-      const currentSegment =
-        useGenerationStore.getState().segments.find((segment) => segment.id === latestSegments[segmentIndex].id) ??
-        latestSegments[segmentIndex];
-      const segmentLabel = `片段 ${String((currentSegment.segmentIndex ?? segmentIndex) + 1).padStart(2, '0')}`;
+    updateAutoProduceState({
+      progress: 82,
+      message: '完整视频生成完成，等待后续处理'
+    });
 
-      updateAutoProduceState({
-        progress: 42 + Math.round(((segmentIndex + 1) / latestSegments.length) * 40),
-        message: `正在按当前提示词生成 ${segmentLabel}`
-      });
-
-      const latestSegment =
-        useGenerationStore.getState().segments.find((segment) => segment.id === currentSegment.id) ?? currentSegment;
-      const shotsForGeneration = Array.isArray(latestSegment.shots) ? latestSegment.shots : [];
-
-      if (!shotsForGeneration.length) {
-        throw new Error(`${segmentLabel} 还没有可生成的小镜头。`);
-      }
-
-      const batchPayload = await generateAllShotsForSegment(latestSegment.id, shotsForGeneration, {
-        useReferenceVideo: false,
-        useRepresentativeFrame: false
-      });
-
-      if (!batchPayload) {
-        throw new Error(`${segmentLabel} 的小镜头批量生成启动失败。`);
-      }
-
-      await waitForSegmentAssembly(latestSegment.id);
-    }
+    return result;
   };
 
   const runAutoProduce = async () => {
@@ -536,9 +526,9 @@ const MainPage = () => {
 
       updateAutoProduceState({
         progress: 44,
-        message: '步骤 4/5：按当前片段与镜头提示词批量生成新镜头'
+        message: '步骤 4/5：使用完整视频生成功能'
       });
-      await generateSegmentsFromCurrentPrompts();
+      await generateFullVideoFromAnalysis();
 
       updateAutoProduceState({
         progress: 92,
@@ -961,7 +951,6 @@ const MainPage = () => {
                       onOptimizeShot={optimizeShotPrompt}
                       onGenerate={generateSegmentVideo}
                       onGenerateShot={generateShotVideo}
-                      onGenerateAllShots={generateAllShotsForSegment}
                       onSaveShots={saveSegmentShotDefinitions}
                       isAnalyzing={analyzingSegmentId === segment.id}
                       isOptimizing={optimizingSegmentId === segment.id}

@@ -8,10 +8,11 @@ import {
 } from '../services/dialogueTimingService.js';
 
 describe('dialogueTimingService', () => {
-  test('reserves a small trim safety tail inside the requested shot duration', () => {
+  test('keeps dialogue completion very close to the shot end', () => {
     expect(resolveDialogueCompletionTargetSeconds(2)).toBeLessThan(2);
-    expect(resolveDialogueCompletionTargetSeconds(2)).toBeGreaterThanOrEqual(1.88);
+    expect(resolveDialogueCompletionTargetSeconds(2)).toBeGreaterThanOrEqual(1.97);
     expect(resolveDialogueCompletionTargetSeconds(0.5)).toBeLessThan(0.5);
+    expect(resolveDialogueCompletionTargetSeconds(0.5)).toBeGreaterThanOrEqual(0.49);
   });
 
   test('builds a timing plan that compresses speech into the shot and pads to provider duration', () => {
@@ -21,12 +22,12 @@ describe('dialogueTimingService', () => {
       sourceAudioDurationSeconds: 2.6
     });
 
-    expect(plan.dialogueCompletionTimeSeconds).toBeLessThan(2);
+    expect(plan.dialogueCompletionTimeSeconds).toBeGreaterThanOrEqual(1.97);
     expect(plan.requiredCompressionRatio).toBeGreaterThan(1);
     expect(plan.requiredCompressionRatio).toBeLessThanOrEqual(MAX_SEED_DANCE_REFERENCE_AUDIO_COMPRESSION_RATIO);
     expect(plan.finalReferenceAudioDurationSeconds).toBe(4);
     expect(plan.providerTailPaddingSeconds).toBeGreaterThan(1.9);
-    expect(plan.trimSafetyTailSeconds).toBeGreaterThan(0);
+    expect(plan.trimSafetyTailSeconds).toBeLessThanOrEqual(0.03);
   });
 
   test('keeps provider-tail padding above the minimum reference audio duration when the shot is very short', () => {
@@ -68,20 +69,20 @@ describe('dialogueTimingService', () => {
     ]);
   });
 
-  test('builds a delivery constraint that explicitly guards against tail clipping after trim', () => {
+  test('builds a delivery constraint that keeps dialogue close to the trim boundary', () => {
     const constraint = buildDialogueDeliveryConstraint({
       shotDurationSeconds: 2,
-      dialogueCompletionTimeSeconds: 1.9,
+      dialogueCompletionTimeSeconds: 1.98,
       providerDurationSeconds: 4,
-      trimSafetyTailSeconds: 0.1,
-      providerTailPaddingSeconds: 2.1,
+      trimSafetyTailSeconds: 0.02,
+      providerTailPaddingSeconds: 2.02,
       requiredCompressionRatio: 1.32
     });
 
-    expect(constraint).toContain('前 1.90 秒内说完');
+    expect(constraint).toContain('第 1.98 秒附近自然收口');
     expect(constraint).toContain('约 1.32x');
     expect(constraint).toContain('裁回 2.00 秒');
-    expect(constraint).toContain('收口');
-    expect(constraint).toContain('无对白缓冲');
+    expect(constraint).toContain('提前说完');
+    expect(constraint).toContain('安全垫');
   });
 });

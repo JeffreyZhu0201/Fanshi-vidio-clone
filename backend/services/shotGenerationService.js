@@ -1,3 +1,9 @@
+/**
+ * DEPRECATED: Shot-level generation functions are commented out.
+ * The project now uses full-video generation via generateSegment.
+ * These functions remain for reference and potential future restoration.
+ */
+
 import { Analysis, GenerationTask, Segment, ShotGenerationTask, Video } from '../models/index.js';
 import env from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -1766,6 +1772,7 @@ const processShotGenerationTask = async (taskId, options = {}) => {
   return processPromise;
 };
 
+/* COMMENTED OUT - Shot generation replaced by full-video generation
 const startShotGeneration = async ({
   segmentId,
   shotId,
@@ -1872,6 +1879,7 @@ const startShotGeneration = async ({
 
   return serializeShotGenerationTask(task);
 };
+*/
 
 const processShotBatchGeneration = async ({
   segmentId,
@@ -2005,6 +2013,7 @@ const processShotBatchGeneration = async ({
   }
 };
 
+/* COMMENTED OUT - Shot generation replaced by full-video generation
 const startShotBatchGeneration = async ({
   segmentId,
   shots = [],
@@ -2115,7 +2124,9 @@ const startShotBatchGeneration = async ({
     use_reference_frame: resolvedUseReferenceFrame
   };
 };
+*/
 
+/* COMMENTED OUT - Shot generation replaced by full-video generation
 const getShotGenerationTaskStatus = async (taskId) => {
   const task = await ShotGenerationTask.findByPk(taskId);
 
@@ -2127,17 +2138,18 @@ const getShotGenerationTaskStatus = async (taskId) => {
 
   return serializeShotGenerationTask(task);
 };
+*/
 
 export {
   buildShotGenerationSummary,
   getLatestShotTaskMapsBySegmentIds,
   getNormalizedSegmentShots,
   getShotGenerationSummaryForSegment,
-  getShotGenerationTaskStatus,
+  // getShotGenerationTaskStatus, // COMMENTED OUT
   hydrateAnalysisShotsWithTasks,
   attemptPendingShotAssembly,
   processShotGenerationTask,
   serializeShotGenerationTask,
-  startShotBatchGeneration,
-  startShotGeneration
+  // startShotBatchGeneration, // COMMENTED OUT
+  // startShotGeneration // COMMENTED OUT
 };

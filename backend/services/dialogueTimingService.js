@@ -1,7 +1,7 @@
 const MIN_DIALOGUE_ACTIVE_DURATION_SECONDS = 0.25;
-const MIN_DIALOGUE_COMPLETION_MARGIN_SECONDS = 0.04;
-const MAX_DIALOGUE_COMPLETION_MARGIN_SECONDS = 0.12;
-const DIALOGUE_COMPLETION_MARGIN_RATIO = 0.05;
+const MIN_DIALOGUE_COMPLETION_MARGIN_SECONDS = 0.01;
+const MAX_DIALOGUE_COMPLETION_MARGIN_SECONDS = 0.03;
+const DIALOGUE_COMPLETION_MARGIN_RATIO = 0.01;
 const MIN_SEED_DANCE_REFERENCE_AUDIO_DURATION_SECONDS = 1.8;
 const MAX_SEED_DANCE_REFERENCE_AUDIO_COMPRESSION_RATIO = 1.5;
 
@@ -120,7 +120,7 @@ const buildDialogueDeliveryConstraint = ({
 
   if (safeDialogueCompletionTimeSeconds > 0 && safeShotDurationSeconds > 0) {
     constraints.push(
-      `完整对白必须在当前镜头前 ${safeDialogueCompletionTimeSeconds.toFixed(2)} 秒内说完。`
+      `完整对白必须尽量覆盖当前镜头的有效时长，并在第 ${safeDialogueCompletionTimeSeconds.toFixed(2)} 秒附近自然收口。`
     );
   }
 
@@ -130,7 +130,7 @@ const buildDialogueDeliveryConstraint = ({
 
   if (safeTrimSafetyTailSeconds > 0.02) {
     constraints.push(
-      `镜头结尾预留约 ${safeTrimSafetyTailSeconds.toFixed(2)} 秒自然收口，不要把最后一个字贴着切点说完。`
+      `镜头结尾只保留约 ${safeTrimSafetyTailSeconds.toFixed(2)} 秒极短收口余量，不要提前长时间闭口。`
     );
   }
 
@@ -138,15 +138,13 @@ const buildDialogueDeliveryConstraint = ({
     constraints.push(
       `如果供应商内部按 ${safeProviderDurationSeconds.toFixed(2)} 秒生成后再裁回 ${safeShotDurationSeconds.toFixed(
         2
-      )} 秒，也必须把对白集中在前 ${safeDialogueCompletionTimeSeconds.toFixed(
-        2
-      )} 秒完成，后段只保留自然闭口、呼吸和表情延续。`
+      )} 秒，完整对白也必须尽量覆盖到裁切点附近，不要在当前镜头中前段提前说完。`
     );
   }
 
   if (safeProviderTailPaddingSeconds > 0.05) {
     constraints.push(
-      `对白说完后允许保留约 ${safeProviderTailPaddingSeconds.toFixed(2)} 秒无对白缓冲，不要新增尾句。`
+      `若供应商内部生成时长更长，额外时长只作为防止尾字被裁掉的安全垫，不代表当前镜头里需要长时间静音。`
     );
   }
 

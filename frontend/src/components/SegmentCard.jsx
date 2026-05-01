@@ -590,7 +590,6 @@ const SegmentCard = ({
   onGenerate = () => {},
   onShotPromptChange = () => {},
   onGenerateShot = () => {},
-  onGenerateAllShots = () => {},
   onSaveShots = async () => null,
   isAnalyzing = false,
   isOptimizing = false,
@@ -870,39 +869,6 @@ const SegmentCard = ({
     };
   };
 
-  const handleBatchGenerate = async ({ persistDrafts = false } = {}) => {
-    if (!canStartGeneration) {
-      setEditorBanner(seedDanceUnavailableReason);
-      return null;
-    }
-
-    if (!shotEditorItems.length) {
-      setEditorBanner('当前片段还没有小镜头可生成。');
-      return null;
-    }
-
-    if (!persistDrafts) {
-      return onGenerateAllShots(segment.id, null, {
-        useReferenceVideo,
-        useRepresentativeFrame: useReferenceFrame
-      });
-    }
-
-    const persistResult = await persistShotDrafts({
-      successMessage: '镜头草稿已自动保存，小镜头切片与典型帧已同步重建，开始批量生成。',
-      failureMessage: '镜头保存失败，请修正后再批量生成。',
-      skipMessage: '未检测到镜头结构改动，直接按当前编辑器里的提示词批量生成。'
-    });
-
-    if (!persistResult) {
-      return null;
-    }
-
-    return onGenerateAllShots(segment.id, persistResult.savedShotDrafts, {
-      useReferenceVideo,
-      useRepresentativeFrame: useReferenceFrame
-    });
-  };
 
   const handleDirectGenerate = () => {
     return onGenerate(segment.id, effectivePrompt, {
@@ -2000,7 +1966,6 @@ SegmentCard.propTypes = {
   onOptimizeShot: PropTypes.func,
   onGenerate: PropTypes.func,
   onGenerateShot: PropTypes.func,
-  onGenerateAllShots: PropTypes.func,
   onSaveShots: PropTypes.func,
   isAnalyzing: PropTypes.bool,
   isOptimizing: PropTypes.bool,
