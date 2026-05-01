@@ -155,17 +155,27 @@ const buildVideoAnalysisPromptSections = ({ video, metadata, analysisOptions = n
     '20. representativeFrameTime 必须选该镜头最有代表性的画面，不要机械取中点；representativeFrameNote 说明为什么这帧最适合作为预览和参考图。',
     '21. shot.prompt 必须直接服务镜头级视频生成，并同时包含至少一个 @角色名 和至少一个 #场景名。',
     '22. shot.prompt 必须写清角色数量、主次关系、人物左中右位置、前景/中景/后景层次、朝向、视线、姿态、动作轨迹、进出画方式、遮挡关系、景别、机位角度、镜头运动和光线氛围。',
-    '23. 如果角色是不完整出镜、背影、手部、反打或 POV，也必须绑定稳定的人物名；如果一个 shot 涉及多个场景或多个角色，需要在 sceneNames 和 characterNames 中列全。',
+    '23. 每个 shot.prompt 必须包含完整的镜头描述，包括：',
+    '    - 景别（大全景/全景/中景/近景/特写）',
+    '    - 镜头运动（固定/推进/拉远/横移/跟随）',
+    '    - 画面内容（场景、角色位置、动作）',
+    '    - 必须包含 @角色名 和 #场景名 标记',
+    '    - 动作描述要具体（不要只写"站着"，要写"站在画面左侧，面向右侧"）',
+    '    - 视线和朝向要明确',
+    '24. shot.prompt 示例：',
+    '    "中景，固定镜头。@露西 穿白色连衣裙站在 #礼堂入口 画面中央，浑身湿透，',
+    '     手里紧握手机，抬眼直视前方，呼吸急促。背景是礼堂大门和暴雨。"',
+    '25. 如果角色是不完整出镜、背影、手部、反打或 POV，也必须绑定稳定的人物名；如果一个 shot 涉及多个场景或多个角色，需要在 sceneNames 和 characterNames 中列全。',
     speechEnabled
-      ? '24. 当 analysis_options 开启字幕或音频解析时，每个 shot 的 speech 也必须在这次整片理解里一次性返回，不允许留给后续小镜头单独分析。subtitleLines 的时间必须是相对当前 shot 本地时间，不是整片绝对时间。'
-      : '24. 这次整片理解不要返回 shot 级 speech，后续也不会从这个返回体读取字幕或音频解析结果。',
+      ? '26. 当 analysis_options 开启字幕或音频解析时，每个 shot 的 speech 也必须在这次整片理解里一次性返回，不允许留给后续小镜头单独分析。subtitleLines 的时间必须是相对当前 shot 本地时间，不是整片绝对时间。'
+      : '26. 这次整片理解不要返回 shot 级 speech，后续也不会从这个返回体读取字幕或音频解析结果。',
     speechEnabled
-      ? '25. speech.transcript 要写该镜头完整对白；speech.subtitleLines 要按时间升序、无重叠；speech.speechStyle 要概括语速、停顿、情绪、语气、说话力度和口型明显程度；无对白时 hasDialogue=false、transcript=""、subtitleLines=[].'
-      : '25. 所有 prompt 都要明确不要字幕、不要文字、不要 UI、不要水印。',
+      ? '27. speech.transcript 要写该镜头完整对白；speech.subtitleLines 要按时间升序、无重叠；speech.speechStyle 要概括语速、停顿、情绪、语气、说话力度和口型明显程度；无对白时 hasDialogue=false、transcript=""、subtitleLines=[].'
+      : '27. 所有 prompt 都要明确不要字幕、不要文字、不要 UI、不要水印。',
     speechEnabled
-      ? '26. 所有 prompt 都要明确不要字幕、不要文字、不要 UI、不要水印。'
-      : '26. 输出必须是合法 JSON，字段名保持与示例完全一致。',
-    speechEnabled ? '27. 输出必须是合法 JSON，字段名保持与示例完全一致。' : ''
+      ? '28. 所有 prompt 都要明确不要字幕、不要文字、不要 UI、不要水印。'
+      : '28. 输出必须是合法 JSON，字段名保持与示例完全一致。',
+    speechEnabled ? '29. 输出必须是合法 JSON，字段名保持与示例完全一致。' : ''
   ].join('\n');
 
   const finalPrompt = [fixedStructurePrompt, `风格模式：${styleModeLabel}`, `风格段（可编辑）：\n${stylePrompt}`].join(
