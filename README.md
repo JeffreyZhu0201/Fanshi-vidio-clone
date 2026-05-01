@@ -8,7 +8,7 @@
 - 已完成环境变量模板、Git 工作流文档和基础 CI
 - 已完成 Express 与 Vite/Tailwind 的启动入口
 - 已完成 MySQL Schema、Sequelize 模型、迁移与种子数据
-- 已完成上传、整片分析、视频分割、片段生成、视频拼接 API
+- 已完成上传、整片分析、视频分割、完整视频生成、视频下载 API
 - 已完成阶段 5 的后端集成测试、前端组件测试、性能监控与安全加固骨架
 - 已补齐前端实时事件上下文过滤，避免多视频或旧任务进度串线污染当前工作台
 - 已补齐整片分析超时后的结果恢复，避免后端已落库但前端因 30 秒超时直接判死
@@ -21,6 +21,7 @@
 - 已对齐 split 错误字段消费，分割失败时会同时兼容实时事件的 `error_message` 和任务查询返回的 `message`
 - 已接入 `yunwu.ai` 的 Gemini 真实调用链，支持通过 `generateContent` 对整片视频和片段视频做真实分析
 - 已接入火山方舟 SeedDance 异步任务接口，支持创建任务、轮询结果并把远程生成视频落回本地 `uploads/outputs`
+- 已实现完整视频一次性生成，通过拼接所有镜头描述为单一提示词，保持全片视觉一致性
 
 ## 技术栈
 
@@ -194,23 +195,27 @@ SEED_DANCE_WATERMARK=false
 
 默认视频时长上限为 `10` 分钟。前端预检查用于尽早提示，后端校验仍然是最终准入标准。
 
-### 阶段 3 后端 API
-当前后端已经提供可联调的主流程接口：
+### 主流程 API
 
-- `POST /api/videos/upload`：上传原视频
+当前主流程：
+
+1. **上传原视频** → `POST /api/videos/upload`
+2. **整片分析** → `POST /api/analysis/analyze` (Gemini 分析剧情、角色、场景、镜头时间和对白)
+3. **生成资源图** → `POST /api/resource-images/generate` (角色三视图和场景参考图)
+4. **拼接提示词** → 后端自动使用 `buildFullVideoPrompt()` 拼接所有镜头描述
+5. **生成完整视频** → `POST /api/generation/generate` (单次 Seedance 调用生成全片)
+6. **下载结果** → `GET /api/generation/:taskId/download` (完整视频，无需拼接)
+
+其他接口：
+
 - `GET /api/videos/:id`：查询视频详情
 - `DELETE /api/videos/:id`：删除视频及相关文件
-- `POST /api/analysis/analyze`：执行整片分析
 - `GET /api/analysis/:videoId`：查询整片分析结果
-- `POST /api/analysis/optimize-prompt`：优化片段提示词并高亮 `@角色`
-- `POST /api/segments/split`：按时间锚点发起分割任务
-- `GET /api/segments/:videoId`：查询片段列表和最近一次生成状态
-- `POST /api/generation/generate`：发起片段生成任务
-- `GET /api/generation/:taskId`：查询片段生成任务状态
-- `POST /api/merge/start`：发起拼接任务
-- `GET /api/merge/:taskId/progress`：查询拼接进度
-- `GET /api/merge/:taskId/download`：下载拼接结果
-- `GET /api/tasks/:taskId`：查询分割/拼接这类内存任务状态
+- `POST /api/analysis/optimize-prompt`：优化提示词并高亮 `@角色`
+- `POST /api/segments/split`：按时间锚点发起分割任务（用于预览和调试）
+- `GET /api/segments/:videoId`：查询片段列表
+- `GET /api/generation/:taskId`：查询生成任务状态
+- `GET /api/tasks/:taskId`：查询分割任务状态
 - `GET /api/metrics`：导出 Prometheus 指标
 - `POST /api/monitoring/events`：接收前端 Web Vitals / 运行时错误事件
 
