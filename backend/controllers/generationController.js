@@ -9,10 +9,6 @@ const generateSegment = async (request, response) => {
     throw new AppError('Either segment_id or video_id is required.', 400);
   }
 
-  if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
-    throw new AppError('Prompt is required and must be a non-empty string.', 400);
-  }
-
   const result = await startGeneration({
     segmentId: segment_id,
     videoId: request.body.video_id,

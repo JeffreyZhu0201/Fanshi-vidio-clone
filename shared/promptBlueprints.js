@@ -543,8 +543,105 @@ const buildSceneAnglePrompts = ({
   ];
 };
 
+/**
+ * Build full video prompt by concatenating all shot descriptions
+ * @param {Object} params
+ * @param {Object} params.analysis - Analysis result with characters, backgrounds, timeAnchors
+ * @param {Object} params.video - Video metadata
+ * @param {string} params.styleMode - Style mode (realistic/comic_drama)
+ * @param {Object} params.styleTemplates - User style templates
+ * @param {boolean} params.useReferenceVideo - Whether to use reference video
+ * @param {boolean} params.useReferenceFrame - Whether to use reference frame
+ * @returns {string} Concatenated prompt for full video
+ */
+const buildFullVideoPrompt = ({
+  analysis,
+  video,
+  styleMode,
+  styleTemplates,
+  useReferenceVideo = true,
+  useReferenceFrame = true
+}) => {
+  // Input validation
+  if (!analysis || typeof analysis !== 'object') {
+    throw new Error('Invalid analysis object');
+  }
+  if (!video || typeof video !== 'object') {
+    throw new Error('Invalid video object');
+  }
+  if (!styleMode || typeof styleMode !== 'string') {
+    throw new Error('Invalid styleMode');
+  }
+  if (!styleTemplates || typeof styleTemplates !== 'object') {
+    throw new Error('Invalid styleTemplates');
+  }
+
+  // 1. Style section
+  const stylePrompt = resolveStyleTemplate({
+    styleMode,
+    styleTemplates,
+    templateKey: 'videoGenerationStylePrompt'
+  });
+
+  // 2. Character section
+  const characters = analysis.characters || [];
+  const characterList = characters.length > 0
+    ? characters
+        .map(char => `@${String(char?.id ?? '').trim()}${String(char?.name ?? '').trim()}`)
+        .join('、')
+    : '无';
+
+  // 3. Scene section
+  const backgrounds = analysis.backgrounds || [];
+  const sceneList = backgrounds.length > 0
+    ? backgrounds
+        .map(bg => `@${String(bg?.id ?? '').trim()}${String(bg?.name ?? '').trim()}`)
+        .join('、')
+    : '无';
+
+  // 4. Shot sequence section
+  const timeAnchors = analysis.timeAnchors || [];
+  const shotDescriptions = [];
+
+  timeAnchors.forEach(anchor => {
+    const shots = anchor.shots || [];
+    shots.forEach(shot => {
+      const startTime = Number(shot.startTime ?? 0).toFixed(1);
+      const endTime = Number(shot.endTime ?? 0).toFixed(1);
+
+      let shotDesc = `【${startTime}-${endTime}秒】`;
+      shotDesc += `镜头${String(shot?.id ?? '').trim()}：`;
+      shotDesc += String(shot?.prompt ?? '').trim();
+
+      // Add dialogue
+      if (shot.speech?.hasDialogue && shot.speech?.transcript) {
+        shotDesc += `。对白口型指导："${String(shot.speech.transcript).trim()}"`;
+        if (shot.speech.speechStyle) {
+          shotDesc += `，说话方式：${String(shot.speech.speechStyle).trim()}`;
+        }
+      } else {
+        shotDesc += `。对白口型指导：无对白`;
+      }
+
+      shotDescriptions.push(shotDesc);
+    });
+  });
+
+  // 5. Concatenate final prompt
+  const sections = [
+    `【风格】${stylePrompt}`,
+    `【角色】${characterList}`,
+    `【场景】${sceneList}`,
+    `【分镜头】`,
+    ...shotDescriptions
+  ];
+
+  return sections.join('\n\n');
+};
+
 export {
   buildCharacterViewPrompts,
+  buildFullVideoPrompt,
   buildPromptOptimizationPrompt,
   buildSceneAnglePrompts,
   buildSegmentAnalysisPrompt,

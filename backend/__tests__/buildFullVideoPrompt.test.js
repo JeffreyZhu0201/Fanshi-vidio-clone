@@ -3,6 +3,10 @@ import { jest } from '@jest/globals';
 // Mock dependencies
 await jest.unstable_mockModule('../../shared/styleTemplates.js', () => ({
   DEFAULT_STYLE_MODE: 'comic_drama',
+  STYLE_MODE_LABELS: {
+    realistic: '写实影视',
+    comic_drama: '国漫影视化'
+  },
   normalizeStyleMode: jest.fn((value) => {
     const normalized = String(value ?? '').trim().toLowerCase();
     return ['realistic', 'comic_drama'].includes(normalized) ? normalized : 'comic_drama';
@@ -18,7 +22,7 @@ await jest.unstable_mockModule('../../shared/styleTemplates.js', () => ({
   })
 }));
 
-const { buildFullVideoPrompt } = await import('../services/generationService.js');
+const { buildFullVideoPrompt } = await import('../../shared/promptBlueprints.js');
 
 describe('buildFullVideoPrompt', () => {
   const mockAnalysis = {

@@ -151,7 +151,7 @@ const splitVideoBodySchema = Joi.object({
 
 const generateSegmentBodySchema = Joi.object({
   segment_id: Joi.number().integer().positive().required(),
-  prompt: Joi.string().trim().min(1).required(),
+  prompt: Joi.string().trim().min(1).optional(),
   ratio: videoRatioSchema.optional(),
   style_mode: Joi.string().trim().valid('realistic', 'comic_drama').optional(),
   use_reference_video: Joi.boolean().optional(),

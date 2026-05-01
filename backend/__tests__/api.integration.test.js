@@ -38,9 +38,8 @@ const generationServiceMock = {
 };
 
 const shotGenerationServiceMock = {
-  startShotGeneration: jest.fn(),
-  startShotBatchGeneration: jest.fn(),
-  getShotGenerationTaskStatus: jest.fn()
+  processShotGenerationTask: jest.fn(),
+  serializeShotGenerationTask: jest.fn()
 };
 
 const backgroundAssetServiceMock = {
@@ -335,30 +334,6 @@ beforeEach(() => {
     result_url: '/uploads/outputs/demo-generated.mp4',
     error_message: null
   });
-  shotGenerationServiceMock.startShotGeneration.mockResolvedValue({
-    task_id: 501,
-    segment_id: 301,
-    shot_id: 'shot_1',
-    status: 'pending',
-    progress: 0
-  });
-  shotGenerationServiceMock.startShotBatchGeneration.mockResolvedValue({
-    segment_id: 301,
-    shot_count: 2,
-    status: 'processing',
-    started_at: '2026-01-01T00:00:00.000Z'
-  });
-  shotGenerationServiceMock.getShotGenerationTaskStatus.mockResolvedValue({
-    task_id: 501,
-    segment_id: 301,
-    shot_id: 'shot_1',
-    status: 'completed',
-    progress: 100,
-    prompt: '@主角 完成镜头动作。',
-    optimized_prompt: '镜头级电影化提示词',
-    result_url: '/uploads/outputs/demo-shot-1.mp4',
-    error_message: null
-  });
 
   mergeServiceMock.startMerge.mockResolvedValue({
     task_id: 'merge-task-001',
@@ -573,23 +548,10 @@ describe('Backend API integration', () => {
       ]
     });
     const generationResponse = await request(app).get('/api/generation/401');
-    const shotStartResponse = await request(app).post('/api/generation/shots/generate').send({
+    const segmentGenerationResponse = await request(app).post('/api/generation/generate').send({
       segment_id: 301,
-      shot_id: 'shot_1',
-      prompt: '@主角 完成镜头动作。',
       ratio: '9:16'
     });
-    const shotBatchResponse = await request(app).post('/api/generation/shots/generate-batch').send({
-      segment_id: 301,
-      ratio: '1:1',
-      shots: [
-        {
-          shot_id: 'shot_1',
-          prompt: '@主角 完成镜头动作。'
-        }
-      ]
-    });
-    const shotTaskResponse = await request(app).get('/api/generation/shots/501');
     const mergeProgressResponse = await request(app).get('/api/merge/merge-task-001/progress');
     const downloadResponse = await request(app).get('/api/merge/merge-task-001/download');
     const deleteResponse = await request(app).delete('/api/videos/101');
@@ -604,34 +566,14 @@ describe('Backend API integration', () => {
     expect(saveShotsResponse.body.analysis.shots[0].id).toBe('shot_saved_1');
     expect(generationResponse.status).toBe(200);
     expect(generationResponse.body.status).toBe('completed');
-    expect(shotStartResponse.status).toBe(202);
-    expect(shotStartResponse.body.shot_id).toBe('shot_1');
-    expect(shotBatchResponse.status).toBe(202);
-    expect(shotBatchResponse.body.shot_count).toBe(2);
-    expect(shotTaskResponse.status).toBe(200);
-    expect(shotTaskResponse.body.status).toBe('completed');
+    expect(segmentGenerationResponse.status).toBe(202);
+    expect(segmentGenerationResponse.body.segment_id).toBe(301);
     expect(mergeProgressResponse.status).toBe(200);
     expect(mergeProgressResponse.body.status).toBe('completed');
     expect(downloadResponse.status).toBe(200);
     expect(downloadResponse.headers['content-disposition']).toContain('merged-demo.mp4');
     expect(deleteResponse.status).toBe(200);
     expect(deleteResponse.body.success).toBe(true);
-    expect(shotGenerationServiceMock.startShotGeneration).toHaveBeenCalledWith({
-      segmentId: 301,
-      shotId: 'shot_1',
-      prompt: '@主角 完成镜头动作。',
-      ratio: '9:16'
-    });
-    expect(shotGenerationServiceMock.startShotBatchGeneration).toHaveBeenCalledWith({
-      segmentId: 301,
-      shots: [
-        {
-          shot_id: 'shot_1',
-          prompt: '@主角 完成镜头动作。'
-        }
-      ],
-      ratio: '1:1'
-    });
     expect(segmentServiceMock.updateSegmentShotsById).toHaveBeenCalledWith(301, [
       {
         id: 'temp-shot-1',
