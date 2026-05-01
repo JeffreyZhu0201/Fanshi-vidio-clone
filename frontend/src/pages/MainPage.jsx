@@ -10,7 +10,8 @@ import VideoMerge from '../components/VideoMerge.jsx';
 import { useAnalysis, useAppHealth, useGeneration, useSegments, useVideoUpload } from '../hooks/index.js';
 import {
   generateResourceImages as generateResourceImagesRequest,
-  optimizePrompt as optimizePromptRequest
+  optimizePrompt as optimizePromptRequest,
+  toAbsoluteAssetUrl
 } from '../services/api.js';
 import { useGenerationStore } from '../store/generationStore.js';
 import { sleep } from '../utils/sleep.js';

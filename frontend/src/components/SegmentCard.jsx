@@ -1231,48 +1231,17 @@ const SegmentCard = ({
 
           <section className="rounded-[18px] border border-white/10 bg-white/[0.04] px-3 py-3">
             <div className="flex items-center justify-between gap-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">新片段预览</p>
-              {assembledSegmentUrl ? <StatusBadge status="completed" label="已拼回" /> : <StatusBadge status="idle" label="待生成" />}
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/40">片段预览</p>
             </div>
-
-            {shouldShowGenerationProgress(segment.latestGenerationTask) ? (
-              <div className="mt-2">
-                <ProgressBar
-                  value={segment.latestGenerationTask?.progress ?? 0}
-                  status={segment.latestGenerationTask?.status ?? 'pending'}
-                  label={`大片段任务 · ${getGenerationTaskStatusLabel(segment.latestGenerationTask, '大片段待生成')}`}
-                  startedAt={segment.latestGenerationTask?.created_at || ''}
-                />
-                <TaskReferenceDebugPanel task={segment.latestGenerationTask} />
-              </div>
-            ) : null}
-
-            {shotGenerationSummary ? (
-              <div className="mt-2">
-                <ProgressBar
-                  value={shotGenerationSummary.progress ?? 0}
-                  status={shotGenerationSummary.status ?? 'pending'}
-                  label={`镜头进度 ${shotGenerationSummary.completed_shot_count || 0}/${shotGenerationSummary.total_shot_count || 0}`}
-                />
-              </div>
-            ) : null}
-
-            <p className="mt-3 text-[12px] leading-5 text-white/60">
-              {getDurationComparisonLabel(
-                segmentDuration,
-                segment.latestCompletedGenerationTask?.actual_duration_seconds ??
-                  shotGenerationSummary?.actual_duration_seconds
-              ) || '当前大片段生成后会在这里显示真实成品时长。'}
-            </p>
 
             {assembledSegmentUrl ? (
               <video className="segment-workbench-video mt-3" src={assembledSegmentUrl} controls preload="metadata" />
             ) : (
               <div className="preview-placeholder segment-workbench-empty mt-3 min-h-[190px]">
                 <div className="preview-orb" />
-                <p className="text-sm font-semibold text-white">待拼回大片段</p>
+                <p className="text-sm font-semibold text-white">片段预览</p>
                 <p className="mt-2 max-w-[260px] text-center text-[11px] leading-5 text-white/60">
-                  点击“生成新片段”后，系统会顺序生成全部小镜头并自动拼回这里。
+                  使用完整视频生成功能后，生成的片段会在这里显示。
                 </p>
               </div>
             )}
