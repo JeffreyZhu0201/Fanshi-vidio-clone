@@ -221,9 +221,9 @@ React / Vite
 - `/api/background-assets`
   - 背景资产查询
 - `/api/generation`
-  - 完整视频生成
-  - 任务查询
-  - 下载生成结果
+  - 完整视频生成（`POST /api/generation/generate`）
+  - 任务查询（`GET /api/generation/:taskId`）
+  - 下载生成结果（`GET /api/generation/:taskId/download`）
 
 ### 4.2 核心服务职责
 
@@ -314,6 +314,18 @@ React / Vite
 - 参考素材准备
 - Seedance 最终 prompt 组装
 
+`buildFullVideoPrompt()` 函数：
+
+- 输入：整片分析结果（包含所有镜头描述）
+- 处理：
+  1. 读取 `analysis.time_anchors[*].shots` 所有镜头
+  2. 展开每个镜头中的 `@角色` 和 `#场景` 引用
+  3. 插入全局风格硬约束（`videoGenerationStylePrompt`）
+  4. 拼接角色列表、场景列表和分镜头描述
+  5. 添加角色状态连续性约束
+  6. 添加对白文本和说话方式
+- 输出：结构化提示词（【风格】【角色】【场景】【分镜头】格式）
+
 当前新增职责：
 
 - 插入 `videoGenerationStylePrompt`
@@ -344,8 +356,9 @@ React / Vite
 
 当前状态：
 
-- 已移除合并功能（不再需要拼接）
-- 已移除语音压缩功能（完整视频生成不需要）
+- 已移除合并功能（不再需要拼接镜头）
+- 已移除语音压缩功能（完整视频生成不需要音频适配）
+- 保留切片和抽帧功能用于预览和调试
 
 #### `seedDanceService`
 

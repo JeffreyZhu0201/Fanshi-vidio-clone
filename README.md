@@ -202,9 +202,8 @@ SEED_DANCE_WATERMARK=false
 1. **上传原视频** → `POST /api/videos/upload`
 2. **整片分析** → `POST /api/analysis/analyze` (Gemini 分析剧情、角色、场景、镜头时间和对白)
 3. **生成资源图** → `POST /api/resource-images/generate` (角色三视图和场景参考图)
-4. **拼接提示词** → 后端自动使用 `buildFullVideoPrompt()` 拼接所有镜头描述
-5. **生成完整视频** → `POST /api/generation/generate` (单次 Seedance 调用生成全片)
-6. **下载结果** → `GET /api/generation/:taskId/download` (完整视频，无需拼接)
+4. **生成完整视频** → `POST /api/generation/generate` (后端自动使用 `buildFullVideoPrompt()` 拼接所有镜头描述，单次 Seedance 调用生成全片)
+5. **下载结果** → `GET /api/generation/:taskId/download` (完整视频，无需拼接)
 
 其他接口：
 
