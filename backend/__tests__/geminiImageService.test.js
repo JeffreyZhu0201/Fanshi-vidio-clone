@@ -40,6 +40,12 @@ await jest.unstable_mockModule('../services/fileService.js', () => ({
   toPublicUploadUrl: jest.fn((relativePath) => `/uploads/${String(relativePath).replace(/^\/+/, '')}`)
 }));
 
+// Mock externalHttpService
+const mockRequestExternalJson = jest.fn();
+await jest.unstable_mockModule('../services/externalHttpService.js', () => ({
+  requestExternalJson: mockRequestExternalJson
+}));
+
 const {
   buildGeminiImagePayload,
   extractGeneratedImages,
@@ -47,8 +53,11 @@ const {
 } = await import('../services/geminiImageService.js');
 
 describe('geminiImageService', () => {
+  beforeEach(() => {
+    mockRequestExternalJson.mockClear();
+  });
+
   afterEach(async () => {
-    delete global.fetch;
     await rm(tempDir, { recursive: true, force: true });
   });
 
@@ -98,25 +107,43 @@ describe('geminiImageService', () => {
   });
 
   test('generates image assets through yunwu-compatible generateContent endpoint', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      text: async () =>
-        JSON.stringify({
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    inlineData: {
-                      mimeType: 'image/png',
-                      data: Buffer.from('fake-image').toString('base64')
-                    }
+    mockRequestExternalJson.mockResolvedValue({
+      response: {
+        ok: true,
+        status: 200
+      },
+      responseText: JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: 'image/png',
+                    data: Buffer.from('fake-image').toString('base64')
                   }
-                ]
-              }
+                }
+              ]
             }
-          ]
-        })
+          }
+        ]
+      }),
+      responsePayload: {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: 'image/png',
+                    data: Buffer.from('fake-image').toString('base64')
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
     });
 
     const result = await generateImageAsset({
@@ -124,14 +151,15 @@ describe('geminiImageService', () => {
       basename: 'character-front'
     });
 
-    expect(global.fetch).toHaveBeenCalledWith(
+    expect(mockRequestExternalJson).toHaveBeenCalledWith(
       'https://yunwu.ai/v1beta/models/gemini-3-pro-image-preview:generateContent?key=image-test-key',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer image-test-key'
-        })
+          'Content-Type': 'application/json'
+        }),
+        body: expect.any(String),
+        timeoutMs: 30000
       })
     );
     expect(result).toMatchObject({
@@ -140,43 +168,66 @@ describe('geminiImageService', () => {
       mimeType: 'image/png',
       provider: 'remote-gemini-image',
       model: 'gemini-3-pro-image-preview',
-      authVariant: 'bearer+query-key',
+      authVariant: 'query-key+node',
       credentialSource: 'GEMINI_IMAGE_API_KEY'
     });
   });
 
   test('falls back to GEMINI_API_KEY when the dedicated image key has no distributor channel', async () => {
-    global.fetch = jest
-      .fn()
+    mockRequestExternalJson
       .mockResolvedValueOnce({
-        ok: false,
-        status: 503,
-        text: async () =>
-          JSON.stringify({
-            error: {
-              message: '分组 优质banana 下模型 gemini-3-pro-image-preview 无可用渠道（distributor）'
-            }
-          })
+        response: {
+          ok: false,
+          status: 503
+        },
+        responseText: JSON.stringify({
+          error: {
+            message: '分组 优质banana 下模型 gemini-3-pro-image-preview 无可用渠道（distributor）'
+          }
+        }),
+        responsePayload: {
+          error: {
+            message: '分组 优质banana 下模型 gemini-3-pro-image-preview 无可用渠道（distributor）'
+          }
+        }
       })
       .mockResolvedValueOnce({
-        ok: true,
-        text: async () =>
-          JSON.stringify({
-            candidates: [
-              {
-                content: {
-                  parts: [
-                    {
-                      inlineData: {
-                        mimeType: 'image/png',
-                        data: Buffer.from('fallback-image').toString('base64')
-                      }
+        response: {
+          ok: true,
+          status: 200
+        },
+        responseText: JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: 'image/png',
+                      data: Buffer.from('fallback-image').toString('base64')
                     }
-                  ]
-                }
+                  }
+                ]
               }
-            ]
-          })
+            }
+          ]
+        }),
+        responsePayload: {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: 'image/png',
+                      data: Buffer.from('fallback-image').toString('base64')
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
       });
 
     const result = await generateImageAsset({
@@ -184,18 +235,18 @@ describe('geminiImageService', () => {
       basename: 'scene-angle-a'
     });
 
-    expect(global.fetch).toHaveBeenCalledTimes(2);
-    expect(global.fetch.mock.calls[0][0]).toBe(
+    expect(mockRequestExternalJson).toHaveBeenCalledTimes(2);
+    expect(mockRequestExternalJson.mock.calls[0][0]).toBe(
       'https://yunwu.ai/v1beta/models/gemini-3-pro-image-preview:generateContent?key=image-test-key'
     );
-    expect(global.fetch.mock.calls[1][0]).toBe(
-      'https://yunwu.ai/v1beta/models/gemini-3-pro-image-preview:generateContent?key=test-token'
+    expect(mockRequestExternalJson.mock.calls[1][0]).toBe(
+      'https://yunwu.ai/v1beta/models/gemini-3-pro-image-preview:generateContent'
     );
     expect(result).toMatchObject({
       filePath: 'resource-images/scene-angle-a.png',
       fileUrl: '/uploads/resource-images/scene-angle-a.png',
-      credentialSource: 'GEMINI_API_KEY',
-      authVariant: 'bearer+query-key'
+      credentialSource: 'GEMINI_IMAGE_API_KEY',
+      authVariant: 'bearer+node'
     });
   });
 });

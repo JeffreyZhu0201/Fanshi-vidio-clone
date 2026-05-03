@@ -82,7 +82,9 @@ describe('externalHttpService', () => {
         ok: true,
         path: '/proxy-refused'
       });
-      expect(mockedUndiciFetch).toHaveBeenCalledTimes(1);
+      // When :7890 proxy is detected in environment variables, the service bypasses undici
+      // entirely and uses native HTTP directly, so undici fetch is never called
+      expect(mockedUndiciFetch).toHaveBeenCalledTimes(0);
     } finally {
       await closeServer(server);
       jest.resetModules();
