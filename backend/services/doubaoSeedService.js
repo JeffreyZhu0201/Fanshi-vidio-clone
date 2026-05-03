@@ -4,7 +4,7 @@ import env from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
 import logger from '../utils/logger.js';
 import { requestExternalJson } from './externalHttpService.js';
-import { toAbsolutePublicUploadUrl } from './fileService.js';
+import { toPublicUploadUrl } from './fileService.js';
 
 const DOUBAO_SEED_API_BASE_URL = 'https://ark.cn-beijing.volces.com';
 const DOUBAO_SEED_MODEL = 'doubao-seed-2-0-lite-260215';
@@ -16,13 +16,31 @@ const shouldAllowDoubaoSeedMockFallback = () => {
   return !env.SEED_DANCE_STRICT_REMOTE;
 };
 
+/**
+ * Construct public video URL for Doubao-Seed using SEED_DANCE_PUBLIC_ASSET_BASE_URL
+ * @param {string} videoPath - Absolute path to video file
+ * @returns {string} Public HTTP URL
+ */
+const toDoubaoPublicVideoUrl = (videoPath) => {
+  const publicUrl = toPublicUploadUrl(videoPath);
+  const publicBaseUrl = env.SEED_DANCE_PUBLIC_ASSET_BASE_URL || env.PUBLIC_ASSET_BASE_URL || '';
+
+  if (!publicBaseUrl) {
+    return '';
+  }
+
+  return new URL(publicUrl, publicBaseUrl.endsWith('/') ? publicBaseUrl : `${publicBaseUrl}/`).toString();
+};
+
 const getDoubaoSeedProviderStatus = () => {
   const missingFields = [];
   if (!env.SEED_DANCE_API_KEY) missingFields.push('ARK_API_KEY (SEED_DANCE_API_KEY)');
-  if (!env.PUBLIC_ASSET_BASE_URL) missingFields.push('PUBLIC_ASSET_BASE_URL');
+  if (!env.SEED_DANCE_PUBLIC_ASSET_BASE_URL && !env.PUBLIC_ASSET_BASE_URL) {
+    missingFields.push('SEED_DANCE_PUBLIC_ASSET_BASE_URL or PUBLIC_ASSET_BASE_URL');
+  }
 
   return {
-    ready: canUseDoubaoSeed && Boolean(env.PUBLIC_ASSET_BASE_URL),
+    ready: canUseDoubaoSeed && Boolean(env.SEED_DANCE_PUBLIC_ASSET_BASE_URL || env.PUBLIC_ASSET_BASE_URL),
     reason: missingFields.length ? `缺少 ${missingFields.join('、')}` : '',
     model: DOUBAO_SEED_MODEL,
     allow_mock_fallback: shouldAllowDoubaoSeedMockFallback(),
@@ -79,7 +97,7 @@ const analyzeVideoWithDoubaoSeed = async (videoUrl, prompt, options = {}) => {
               type: 'video_url',
               video_url: {
                 url: videoUrl,
-                fps: String(fps)
+                fps: parseFloat(fps)
               }
             },
             {
@@ -170,16 +188,16 @@ const analyzeVideoComplete = async (videoPath, prompt, options = {}) => {
   });
 
   try {
-    // Construct public HTTP URL for video
-    const videoUrl = toAbsolutePublicUploadUrl(videoPath);
+    // Construct public HTTP URL for video using Doubao-specific base URL
+    const videoUrl = toDoubaoPublicVideoUrl(videoPath);
 
     if (!videoUrl) {
       throw new AppError(
-        'PUBLIC_ASSET_BASE_URL 未配置，Doubao-Seed 需要公网可访问的视频 URL',
+        'SEED_DANCE_PUBLIC_ASSET_BASE_URL 或 PUBLIC_ASSET_BASE_URL 未配置，Doubao-Seed 需要公网可访问的视频 URL',
         500,
         {
           videoPath,
-          hint: '请在 .env 中配置 PUBLIC_ASSET_BASE_URL'
+          hint: '请在 .env 中配置 SEED_DANCE_PUBLIC_ASSET_BASE_URL（推荐使用 HTTP）或 PUBLIC_ASSET_BASE_URL'
         }
       );
     }
