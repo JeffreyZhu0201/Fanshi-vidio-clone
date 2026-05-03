@@ -50,6 +50,7 @@ const schema = Joi.object({
   SEED_DANCE_API_KEY: Joi.string().allow('').default(''),
   SEED_DANCE_API_BASE_URL: Joi.string().uri().allow('').default(''),
   SEED_DANCE_MODEL: Joi.string().default('doubao-seedance-2-0-260128'),
+  SEED_DANCE_PUBLIC_ASSET_BASE_URL: Joi.string().uri().allow('').default(''),
   SEED_DANCE_STRICT_REMOTE: Joi.boolean().truthy('true').falsy('false').default(false),
   SEED_DANCE_ALLOW_MOCK_FALLBACK: Joi.boolean().truthy('true').falsy('false').default(false),
   SEED_DANCE_POLL_INTERVAL_MS: Joi.number().integer().positive().default(10000),

@@ -312,7 +312,9 @@ const useAnalysis = () => {
     };
   }, [clearAnalysis, currentVideo?.id, hydrateAnalysis, setError]);
 
-  const runAnalysis = async () => {
+  const runAnalysis = async (provider = 'gemini') => {
+    console.log('[useAnalysis] runAnalysis called with provider:', provider);
+
     if (!currentVideo?.id) {
       setError('请先上传视频，再执行整片分析。');
       return null;
@@ -324,15 +326,21 @@ const useAnalysis = () => {
       status: 'analyzing'
     });
 
+    const providerLabel = provider === 'doubao-seed' ? 'Doubao-Seed' : 'Gemini';
     setProgressState({
       progress: 12,
       status: 'processing',
-      message: '正在提交 Gemini 整片分析任务'
+      message: `正在提交 ${providerLabel} 整片分析任务`
     });
     startAnalysisHeartbeat(requestToken, currentVideoId);
 
     try {
-      const analysisPayload = await analyzeVideo(currentVideo.id, analysisOptions);
+      console.log('[useAnalysis] Calling analyzeVideo with:', {
+        videoId: currentVideo.id,
+        analysisOptions,
+        provider
+      });
+      const analysisPayload = await analyzeVideo(currentVideo.id, analysisOptions, provider);
 
       if (isAnalysisRequestCancelled(requestToken, currentVideoId)) {
         return null;

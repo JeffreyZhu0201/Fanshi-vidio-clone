@@ -6,7 +6,13 @@ import {
 } from '../services/analysisService.js';
 
 const analyzeVideo = async (request, response) => {
-  const analysis = await analyzeVideoById(request.body.video_id, request.body.analysis_options);
+  const provider = request.body.provider || 'gemini';
+  console.log('[analysisController] Received analysis request:', {
+    videoId: request.body.video_id,
+    provider,
+    requestBodyProvider: request.body.provider
+  });
+  const analysis = await analyzeVideoById(request.body.video_id, request.body.analysis_options, provider);
   response.status(200).json(analysis);
 };
 

@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a video regeneration workbench that takes an original video, analyzes it with AI, and regenerates it in different visual styles (realistic or comic-drama). The main pipeline:
 
 1. Upload original video
-2. Whole-video analysis with Gemini (plot, characters, scenes, time anchors, shots)
+2. Whole-video analysis with AI provider (Gemini 2.5 Pro or Doubao-Seed)
 3. Generate character three-view images and scene reference images
 4. Concatenate all shot descriptions into single prompt
 5. Generate full video with single Seedance API call
@@ -20,9 +20,9 @@ This is a video regeneration workbench that takes an original video, analyzes it
 - **Backend**: Node.js + Express + Sequelize + MySQL
 - **Media Processing**: FFmpeg/FFprobe
 - **AI Services**: 
-  - Gemini 2.5 Pro (video analysis via yunwu.ai)
-  - Gemini Image Generation (character/scene reference images)
-  - Seedance (video generation via Volcano Ark)
+  - **Video Analysis**: Gemini 2.5 Pro (via yunwu.ai) or Doubao-Seed (via Volcano Ark)
+  - **Image Generation**: Gemini Image Generation (character/scene reference images)
+  - **Video Generation**: Seedance (via Volcano Ark)
 
 ### Directory Structure
 ```
@@ -50,7 +50,9 @@ shared/
 
 ### Key Services (Backend)
 
-- **geminiService**: Whole-video analysis, prompt optimization. Uses shared prompt blueprints with "fixed structure + editable style section" pattern.
+- **videoAnalysisService**: Multi-provider video analysis orchestration. Supports Gemini and Doubao-Seed providers with unified interface.
+- **geminiService**: Gemini 2.5 Pro video analysis, prompt optimization. Uses shared prompt blueprints with "fixed structure + editable style section" pattern.
+- **doubaoSeedService**: Doubao-Seed video analysis integration. Two-step API flow: Files API (upload) → Responses API (analyze).
 - **seedDanceService**: Seedance API integration. Creates remote tasks, polls for results, downloads generated videos.
 - **generationService**: Full-video generation orchestration. Uses `buildFullVideoPrompt()` to concatenate all shot descriptions, expands `@character` and `#scene` mentions, collects reference assets, and generates entire video in single API call.
 - **segmentService**: Video splitting into segments and shots for preview/debugging. Uses time anchors from whole-video analysis.
@@ -76,7 +78,7 @@ Only `videoAnalysisStylePrompt` and `segmentAnalysisStylePrompt` are user-editab
 
 ### Data Flow
 
-1. **Upload → Analysis**: Video uploaded → stored with hash filename → whole-video analysis with Gemini → results stored in `analyses` table with `analysis_options` (includes `styleMode` and `styleTemplates`)
+1. **Upload → Analysis**: Video uploaded → stored with hash filename → whole-video analysis with selected AI provider (Gemini or Doubao-Seed) → results stored in `analyses` table with `analysis_options` (includes `styleMode` and `styleTemplates`)
 2. **Analysis → Split** (optional, for preview): Time anchors from analysis → split into segments → split into shots → extract keyframes, audio clips, subtitles
 3. **Resource Generation**: Characters → three-view images; Scenes → reference images (both use current style mode)
 4. **Full Video Generation**: All shot descriptions concatenated via `buildFullVideoPrompt()` → single Seedance API call → complete video downloaded
@@ -84,7 +86,9 @@ Only `videoAnalysisStylePrompt` and `segmentAnalysisStylePrompt` are user-editab
 
 ### Important Constraints
 
-- **Whole-video analysis**: Only calls Gemini once. For large videos, creates a low-res proxy video first to reduce upload size.
+- **Multi-provider video analysis**: Supports both Gemini 2.5 Pro and Doubao-Seed for whole-video analysis. Users can select provider in the frontend UI.
+- **Doubao-Seed workflow**: Two-step API flow - Files API uploads video (max 512MB, 7-day storage), Responses API analyzes with fps=0.3 frame extraction.
+- **Whole-video analysis**: Only calls AI provider once. For large videos (Gemini), creates a low-res proxy video first to reduce upload size.
 - **Speech extraction**: When `extractSubtitles` or `parseAudio` is enabled, shot-level `speech` is returned in whole-video analysis.
 - **Full-video generation**: All shot descriptions concatenated into single prompt using `buildFullVideoPrompt()`. Format: 【风格】【角色】【场景】【分镜头】sections. Single Seedance API call generates entire video, maintaining visual consistency across all shots.
 - **No shot-level generation**: Individual shots are not generated separately. No FFmpeg assembly needed.
@@ -150,11 +154,13 @@ npm run test:e2e         # Run Cypress E2E tests
 ### Backend (.env)
 Key variables:
 - `DB_*`: MySQL connection (host, port, user, password, database name)
-- `GEMINI_API_KEY`, `GEMINI_API_BASE_URL`: Gemini API (yunwu.ai)
-- `SEED_DANCE_API_KEY`, `SEED_DANCE_API_BASE_URL`: Seedance API (Volcano Ark)
+- `GEMINI_API_KEY`, `GEMINI_API_BASE_URL`: Gemini API (yunwu.ai) for video analysis
+- `SEED_DANCE_API_KEY`, `SEED_DANCE_API_BASE_URL`: Seedance API (Volcano Ark) for video generation. Also used as ARK_API_KEY for Doubao-Seed video analysis
 - `PUBLIC_ASSET_BASE_URL`: Public URL for reference assets (required for Seedance to access reference videos)
 - `HTTPS_ENABLED`, `HTTPS_PORT`, `SSL_KEY_PATH`, `SSL_CERT_PATH`: HTTPS configuration
 - `GEMINI_STRICT_REMOTE`, `SEED_DANCE_STRICT_REMOTE`: When true, disables mock fallback (for production/testing)
+
+**Note**: Doubao-Seed uses the same `SEED_DANCE_API_KEY` (ARK API key) as Seedance, since both services are provided by Volcano Ark.
 
 ### Frontend (.env)
 Key variables:
@@ -218,7 +224,8 @@ Commit message format: Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor
 
 ## Known Limitations
 
-- **External stability**: Gemini image generation and Seedance long tasks are subject to upstream rate limits (429) and queue delays
+- **External stability**: Gemini/Doubao-Seed video analysis, Gemini image generation, and Seedance long tasks are subject to upstream rate limits (429) and queue delays
+- **Doubao-Seed constraints**: Max 512MB video file size, 7-day file storage, fps=0.3 frame extraction
 - **Cypress E2E**: Requires system-level Xvfb on Ubuntu 22.04
 - **Mock fallback**: Disabled in strict mode (`GEMINI_STRICT_REMOTE=true`, `SEED_DANCE_STRICT_REMOTE=true`)
 
@@ -226,7 +233,7 @@ Commit message format: Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor
 
 Key routes:
 - `POST /api/videos/upload` - Upload video
-- `POST /api/analysis/analyze` - Whole-video analysis
+- `POST /api/analysis/analyze` - Whole-video analysis (supports `provider` parameter: 'gemini' or 'doubao-seed')
 - `POST /api/analysis/optimize-prompt` - Optimize prompts
 - `POST /api/segments/split` - Split into segments/shots (for preview/debugging)
 - `POST /api/resource-images/generate` - Generate character/scene reference images
@@ -240,7 +247,8 @@ API docs: `/api-docs` (Swagger UI)
 
 - **Style changes**: Modify `shared/styleTemplates.js` for preset templates, or update user-editable templates via frontend UI
 - **Prompt changes**: Edit `shared/promptBlueprints.js` for fixed structure sections
-- **New AI providers**: Follow the pattern in `geminiService.js` and `seedDanceService.js` (external HTTP service + retry logic + error normalization)
+- **Video analysis providers**: Two providers available - Gemini 2.5 Pro (via `geminiService.js`) and Doubao-Seed (via `doubaoSeedService.js`). Both use `videoAnalysisService.js` for unified interface. Users select provider in frontend dropdown.
+- **New AI providers**: Follow the pattern in `geminiService.js`, `doubaoSeedService.js`, and `seedDanceService.js` (external HTTP service + retry logic + error normalization)
 - **Database changes**: Create migration with `sequelize-cli`, update models, run `npm run db:migrate`
 - **Frontend state**: Use Zustand stores (`videoStore`, `analysisStore`, `generationStore`)
 - **Media processing**: Use `ffmpegService` methods; avoid direct `child_process` calls

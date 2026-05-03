@@ -158,13 +158,20 @@ const uploadVideo = async (file, options = {}) => {
   return response.data;
 };
 
-const analyzeVideo = async (videoId, analysisOptions = {}) => {
+const analyzeVideo = async (videoId, analysisOptions = {}, provider = 'gemini') => {
+  console.log('[api.js] analyzeVideo called with:', { videoId, analysisOptions, provider });
+
+  const requestBody = {
+    video_id: videoId,
+    analysis_options: analysisOptions,
+    provider
+  };
+
+  console.log('[api.js] Request body:', JSON.stringify(requestBody, null, 2));
+
   const response = await api.post(
     '/analysis/analyze',
-    {
-      video_id: videoId,
-      analysis_options: analysisOptions
-    },
+    requestBody,
     {
       timeout: Math.max(API_TIMEOUT, ANALYSIS_TIMEOUT)
     }

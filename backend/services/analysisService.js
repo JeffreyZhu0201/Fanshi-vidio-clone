@@ -1,7 +1,8 @@
 import { Analysis, Segment } from '../models/index.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { VIDEO_STATUS } from '../config/constants.js';
-import { analyzeSegment, analyzeVideo as analyzeVideoWithGemini, optimizePrompt as optimizePromptWithGemini } from './geminiService.js';
+import { analyzeSegment, optimizePrompt as optimizePromptWithGemini } from './geminiService.js';
+import { analyzeVideoWithProvider } from './videoAnalysisService.js';
 import { broadcastRealtimeEvent } from './realtimeService.js';
 import { normalizeAnalysisOptions } from './shotSpeechService.js';
 import { getVideoRecordById, resolveVideoAbsolutePath } from './videoService.js';
@@ -63,7 +64,13 @@ const serializeAnalysis = (analysis, status = 'completed') => {
   };
 };
 
-const analyzeVideoById = async (videoId, analysisOptions = null) => {
+const analyzeVideoById = async (videoId, analysisOptions = null, provider = 'gemini') => {
+  console.log('[analysisService] analyzeVideoById called with:', {
+    videoId,
+    provider,
+    analysisOptions
+  });
+
   const video = await getVideoRecordById(videoId, {
     include: [
       {
@@ -84,13 +91,15 @@ const analyzeVideoById = async (videoId, analysisOptions = null) => {
   });
 
   try {
-    const rawAnalysisPayload = await analyzeVideoWithGemini({
+    console.log('[analysisService] Calling analyzeVideoWithProvider with provider:', provider);
+    const rawAnalysisPayload = await analyzeVideoWithProvider({
       video,
       metadata: {
         duration: video.duration
       },
       videoAbsolutePath: resolveVideoAbsolutePath(video),
-      analysisOptions: normalizeAnalysisOptions(analysisOptions)
+      analysisOptions: normalizeAnalysisOptions(analysisOptions),
+      provider
     });
     const nextCharacters = await rebuildCharacterStateFrameAssets({
       video,

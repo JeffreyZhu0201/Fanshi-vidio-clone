@@ -58,7 +58,8 @@ const analysisOptionsSchema = Joi.object({
 
 const analyzeVideoBodySchema = Joi.object({
   video_id: Joi.number().integer().positive().required(),
-  analysis_options: analysisOptionsSchema
+  analysis_options: analysisOptionsSchema,
+  provider: Joi.string().valid('gemini', 'doubao-seed').default('gemini')
 });
 
 const optimizePromptBodySchema = Joi.object({

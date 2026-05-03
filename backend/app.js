@@ -180,6 +180,19 @@ const startServers = async (app) => {
       });
 
       servers.push(httpServer);
+    } else {
+      // Start HTTP server with same app (for Doubao-Seed video access)
+      const httpServer = http.createServer(app);
+
+      await new Promise((resolve) => {
+        httpServer.listen(env.PORT, () => {
+          logger.info(`${APP_NAME} HTTP server listening on http://localhost:${env.PORT}`);
+          resolve();
+        });
+      });
+
+      servers.push(httpServer);
+      attachRealtimeServer(httpServer);
     }
 
     return servers;
