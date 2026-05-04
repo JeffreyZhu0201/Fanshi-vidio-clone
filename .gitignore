@@ -31,3 +31,5 @@ docs/AI_Service_API_Keys.md
 !certs/
 !certs/dev/
 !certs/dev/.gitkeep
+.claude/
+uploads/
