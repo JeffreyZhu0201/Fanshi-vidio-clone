@@ -52,13 +52,13 @@ const normalizeDoubaoSeedAnalysisResult = (analysisText, metadata, analysisOptio
     // Add provider metadata
     return {
       ...parsedResult,
-      geminiResponse: {
+      geminiResponse: JSON.stringify({
         provider: 'doubao-seed',
         model: 'doubao-seed-2-0-lite-260215',
         isMock: false,
         fallbackReason: '',
         remoteError: ''
-      }
+      })
     };
   } catch (error) {
     logger.error('Failed to parse Doubao-Seed analysis result', {
@@ -123,14 +123,14 @@ const analyzeVideoWithProvider = async ({
       videoAbsolutePath,
       prompt,
       {
-        fps: 5, // 使用5fps以支持时序感知
+        fps: 0.3, // Files API default FPS
         temperature: 0.7,
         maxTokens: 16000
       }
     );
 
-    logger.info('Doubao-Seed analysis completed (temporal-aware), normalizing result', {
-      fileName: doubaoMetadata.fileName,
+    logger.info('Doubao-Seed analysis completed, normalizing result', {
+      fileId: doubaoMetadata.fileId,
       resultLength: result.length,
       elapsedMs: doubaoMetadata.elapsedMs,
       fps: doubaoMetadata.fps

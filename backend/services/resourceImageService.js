@@ -2,8 +2,9 @@ import { Op } from 'sequelize';
 
 import { ResourceImageAsset } from '../models/index.js';
 import { AppError } from '../middleware/errorHandler.js';
-import { removeFileIfExists, toPublicUploadUrl } from './fileService.js';
-import { generateImageAsset } from './geminiImageService.js';
+import { removeFileIfExists, toPublicUploadUrl, toAbsolutePublicUploadUrl } from './fileService.js';
+import { generateImageAsset as generateGeminiImageAsset } from './geminiImageService.js';
+import { generateCharacterTurnaround, generateImageAsset as generateSeedreamImageAsset } from './doubaoSeedreamService.js';
 
 const inflightResourceImageBuilds = new Map();
 
@@ -141,19 +142,19 @@ const summarizeResourceImageError = (message = '') => {
   }
 
   if (/status 503/iu.test(normalizedMessage) && /distributor|无可用渠道/iu.test(normalizedMessage)) {
-    return '当前 Gemini 生图渠道不可用，请稍后重试或切换可用渠道。';
+    return '当前生图渠道不可用，请稍后重试或切换可用渠道。';
   }
 
   if (/status 429|quota|resource has been exhausted|并发/iu.test(normalizedMessage)) {
-    return '当前 Gemini 生图额度或并发已耗尽，请稍后重试。';
+    return '当前生图额度或并发已耗尽，请稍后重试。';
   }
 
   if (/未配置远端密钥或地址/iu.test(normalizedMessage)) {
-    return 'Gemini 生图服务未配置完成，请先检查后端图片模型密钥和地址。';
+    return '生图服务未配置完成，请先检查后端图片模型密钥和地址。';
   }
 
   if (/fetch failed|request failed|unexpected eof|connect timeout|timed out/iu.test(normalizedMessage)) {
-    return '当前到 Gemini 生图服务的连接不稳定，请稍后重试。';
+    return '当前到生图服务的连接不稳定，请稍后重试。';
   }
 
   return normalizedMessage;
@@ -186,7 +187,8 @@ const generateResourceImageBundle = async ({
   resourceName,
   sourcePrompt = '',
   variants = [],
-  representativeFrameTime = null
+  representativeFrameTime = null,
+  representativeFrameImagePath = null
 }) => {
   if (!videoId) {
     throw new AppError('videoId 缺失，无法生成资源图片。', 400);
@@ -213,6 +215,17 @@ const generateResourceImageBundle = async ({
 
   const buildPromise = (async () => {
     const results = [];
+
+    // Get reference image URL if representativeFrameImagePath is provided
+    let referenceImageUrl = null;
+    if (representativeFrameImagePath) {
+      try {
+        referenceImageUrl = toAbsolutePublicUploadUrl(representativeFrameImagePath);
+      } catch (error) {
+        // If we can't get the reference image URL, continue without it
+        referenceImageUrl = null;
+      }
+    }
 
     for (const [index, variant] of variants.entries()) {
       const variantId = String(variant.id ?? '').trim();
@@ -249,12 +262,26 @@ const generateResourceImageBundle = async ({
       });
 
       try {
-        const imageResult = await generateImageAsset({
-          prompt: variantPrompt,
-          basename: `${sanitizeBasenamePart(resourceType)}-${sanitizeBasenamePart(resourceId)}-${sanitizeBasenamePart(
-            variantId
-          )}`
-        });
+        let imageResult;
+
+        // Use Doubao-Seedream for character turnaround generation
+        if (resourceType === 'character' && variantId === 'turnaround') {
+          imageResult = await generateCharacterTurnaround({
+            characterPrompt: variantPrompt,
+            referenceImageUrl,
+            basename: `${sanitizeBasenamePart(resourceType)}-${sanitizeBasenamePart(resourceId)}-${sanitizeBasenamePart(
+              variantId
+            )}`
+          });
+        } else {
+          // Fallback to Gemini for other types
+          imageResult = await generateGeminiImageAsset({
+            prompt: variantPrompt,
+            basename: `${sanitizeBasenamePart(resourceType)}-${sanitizeBasenamePart(resourceId)}-${sanitizeBasenamePart(
+              variantId
+            )}`
+          });
+        }
 
         if (previousAssetPath && previousAssetPath !== imageResult.filePath) {
           await removeFileIfExists(previousAssetPath);
@@ -271,7 +298,8 @@ const generateResourceImageBundle = async ({
             provider: imageResult.provider || '',
             model: imageResult.model || '',
             authVariant: imageResult.authVariant || '',
-            generatedAt: new Date().toISOString()
+            generatedAt: new Date().toISOString(),
+            hasReferenceImage: Boolean(referenceImageUrl)
           }
         });
       } catch (error) {

@@ -2,12 +2,12 @@ import { jest } from '@jest/globals';
 
 let mockEnv = {
   SEED_DANCE_API_KEY: 'test-ark-api-key',
-  PUBLIC_ASSET_BASE_URL: 'https://test.example.com',
   SEED_DANCE_STRICT_REMOTE: false
 };
 
 const mockRequestExternalJson = jest.fn();
-const mockToAbsolutePublicUploadUrl = jest.fn();
+const mockAxiosPost = jest.fn();
+const mockReadFile = jest.fn();
 
 jest.unstable_mockModule('../config/env.js', () => ({
   default: new Proxy({}, {
@@ -21,8 +21,28 @@ jest.unstable_mockModule('../services/externalHttpService.js', () => ({
   requestExternalJson: mockRequestExternalJson
 }));
 
-jest.unstable_mockModule('../services/fileService.js', () => ({
-  toAbsolutePublicUploadUrl: mockToAbsolutePublicUploadUrl
+jest.unstable_mockModule('axios', () => ({
+  default: {
+    post: mockAxiosPost
+  }
+}));
+
+jest.unstable_mockModule('node:fs/promises', () => ({
+  readFile: mockReadFile
+}));
+
+jest.unstable_mockModule('form-data', () => ({
+  default: class FormData {
+    constructor() {
+      this.fields = {};
+    }
+    append(key, value, options) {
+      this.fields[key] = { value, options };
+    }
+    getHeaders() {
+      return { 'content-type': 'multipart/form-data' };
+    }
+  }
 }));
 
 jest.unstable_mockModule('../middleware/errorHandler.js', () => ({
@@ -46,6 +66,7 @@ jest.unstable_mockModule('../utils/logger.js', () => ({
 const {
   getDoubaoSeedProviderStatus,
   assertDoubaoSeedReady,
+  uploadVideoToDoubaoSeed,
   analyzeVideoWithDoubaoSeed,
   analyzeVideoComplete
 } = await import('../services/doubaoSeedService.js');
@@ -55,28 +76,18 @@ describe('doubaoSeedService', () => {
     jest.clearAllMocks();
     mockEnv = {
       SEED_DANCE_API_KEY: 'test-ark-api-key',
-      PUBLIC_ASSET_BASE_URL: 'https://test.example.com',
       SEED_DANCE_STRICT_REMOTE: false
     };
   });
 
   describe('getDoubaoSeedProviderStatus', () => {
-    it('should return ready status when API key and PUBLIC_ASSET_BASE_URL are configured', () => {
+    it('should return ready status when API key is configured', () => {
       const status = getDoubaoSeedProviderStatus();
 
       expect(status.ready).toBe(true);
       expect(status.reason).toBe('');
       expect(status.model).toBe('doubao-seed-2-0-lite-260215');
       expect(status.api_base_url).toBe('https://ark.cn-beijing.volces.com');
-    });
-
-    it('should return not ready when PUBLIC_ASSET_BASE_URL is missing', () => {
-      mockEnv.PUBLIC_ASSET_BASE_URL = '';
-
-      const status = getDoubaoSeedProviderStatus();
-
-      expect(status.ready).toBe(false);
-      expect(status.reason).toContain('PUBLIC_ASSET_BASE_URL');
     });
 
     it('should return correct mock fallback setting', () => {
@@ -90,16 +101,53 @@ describe('doubaoSeedService', () => {
     it('should not throw when provider is ready', () => {
       expect(() => assertDoubaoSeedReady()).not.toThrow();
     });
+  });
 
-    it('should throw when PUBLIC_ASSET_BASE_URL is missing', () => {
-      mockEnv.PUBLIC_ASSET_BASE_URL = '';
+  describe('uploadVideoToDoubaoSeed', () => {
+    it('should upload video successfully and return file ID', async () => {
+      const mockFileBuffer = Buffer.from('mock video data');
+      mockReadFile.mockResolvedValue(mockFileBuffer);
 
-      expect(() => assertDoubaoSeedReady()).toThrow('Doubao-Seed 未配置完成');
+      mockAxiosPost.mockResolvedValue({
+        status: 200,
+        data: {
+          id: 'file-123456',
+          object: 'file',
+          bytes: 1024,
+          created_at: 1234567890,
+          filename: 'test-video.mp4',
+          purpose: 'file-extract'
+        }
+      });
+
+      const fileId = await uploadVideoToDoubaoSeed('/path/to/test-video.mp4');
+
+      expect(fileId).toBe('file-123456');
+      expect(mockReadFile).toHaveBeenCalledWith('/path/to/test-video.mp4');
+      expect(mockAxiosPost).toHaveBeenCalledWith(
+        'https://ark.cn-beijing.volces.com/api/v3/files',
+        expect.any(Object),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer test-ark-api-key'
+          }),
+          timeout: 300000
+        })
+      );
+    });
+
+    it('should throw error when upload fails', async () => {
+      mockReadFile.mockResolvedValue(Buffer.from('data'));
+      mockAxiosPost.mockRejectedValue(new Error('Network error'));
+
+      await expect(
+        uploadVideoToDoubaoSeed('/path/to/video.mp4')
+      ).rejects.toThrow();
     });
   });
 
   describe('analyzeVideoWithDoubaoSeed', () => {
-    it('should analyze video successfully and return result', async () => {
+    it('should analyze video successfully using file ID', async () => {
       const mockAnalysisResult = JSON.stringify({
         plot: 'Test plot',
         characters: [],
@@ -109,11 +157,14 @@ describe('doubaoSeedService', () => {
       mockRequestExternalJson.mockResolvedValue({
         response: { ok: true, status: 200 },
         responsePayload: {
-          choices: [
+          output: [
             {
-              message: {
-                content: mockAnalysisResult
-              }
+              type: 'message',
+              content: [
+                {
+                  text: mockAnalysisResult
+                }
+              ]
             }
           ],
           usage: {
@@ -124,13 +175,17 @@ describe('doubaoSeedService', () => {
       });
 
       const result = await analyzeVideoWithDoubaoSeed(
-        'https://test.example.com/uploads/video.mp4',
+        'file-123456',
         'Analyze this video'
       );
 
-      expect(result).toBe(mockAnalysisResult);
+      expect(result.result).toBe(mockAnalysisResult);
+      expect(result.metadata.fileId).toBe('file-123456');
+      expect(result.metadata.model).toBe('doubao-seed-2-0-lite-260215');
+      expect(result.metadata.fps).toBe(0.3);
+
       expect(mockRequestExternalJson).toHaveBeenCalledWith(
-        'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
+        'https://ark.cn-beijing.volces.com/api/v3/responses',
         expect.objectContaining({
           method: 'POST',
           headers: expect.objectContaining({
@@ -141,39 +196,43 @@ describe('doubaoSeedService', () => {
         })
       );
 
-      // Verify request body structure
+      // Verify request body structure for Responses API
       const callBody = JSON.parse(mockRequestExternalJson.mock.calls[0][1].body);
       expect(callBody.model).toBe('doubao-seed-2-0-lite-260215');
-      expect(callBody.messages[0].role).toBe('user');
-      expect(callBody.messages[0].content[0].type).toBe('video_url');
-      expect(callBody.messages[0].content[0].video_url.url).toBe('https://test.example.com/uploads/video.mp4');
-      expect(callBody.messages[0].content[0].video_url.fps).toBe('5');
-      expect(callBody.messages[0].content[1].type).toBe('text');
-      expect(callBody.messages[0].content[1].text).toBe('Analyze this video');
+      expect(callBody.input[0].role).toBe('user');
+      expect(callBody.input[0].content[0].type).toBe('input_video');
+      expect(callBody.input[0].content[0].file_id).toBe('file-123456');
+      expect(callBody.input[0].content[0].fps).toBe(0.3);
+      expect(callBody.input[0].content[1].type).toBe('input_text');
+      expect(callBody.input[0].content[1].text).toBe('Analyze this video');
+      expect(callBody.input[0].content[1].text).toBe('Analyze this video');
     });
 
     it('should use custom options when provided', async () => {
       mockRequestExternalJson.mockResolvedValue({
         response: { ok: true, status: 200 },
         responsePayload: {
-          choices: [{ message: { content: 'result' } }]
+          output: [
+            {
+              type: 'message',
+              content: [{ text: 'result' }]
+            }
+          ]
         }
       });
 
       await analyzeVideoWithDoubaoSeed(
-        'https://test.example.com/uploads/video.mp4',
+        'file-123456',
         'prompt',
         {
           temperature: 0.5,
           maxTokens: 8000,
-          fps: 3
+          fps: 1.0
         }
       );
 
       const callBody = JSON.parse(mockRequestExternalJson.mock.calls[0][1].body);
-      expect(callBody.temperature).toBe(0.5);
-      expect(callBody.max_tokens).toBe(8000);
-      expect(callBody.messages[0].content[0].video_url.fps).toBe('3');
+      expect(callBody.input[0].content[0].fps).toBe(1.0);
     });
 
     it('should throw error when analysis fails', async () => {
@@ -185,7 +244,7 @@ describe('doubaoSeedService', () => {
       });
 
       await expect(
-        analyzeVideoWithDoubaoSeed('https://test.example.com/uploads/video.mp4', 'prompt')
+        analyzeVideoWithDoubaoSeed('file-123456', 'prompt')
       ).rejects.toThrow('Doubao-Seed 视频分析失败');
     });
 
@@ -193,20 +252,25 @@ describe('doubaoSeedService', () => {
       mockRequestExternalJson.mockResolvedValue({
         response: { ok: true, status: 200 },
         responsePayload: {
-          choices: [] // Empty choices
+          choices: []
         }
       });
 
       await expect(
-        analyzeVideoWithDoubaoSeed('https://test.example.com/uploads/video.mp4', 'prompt')
+        analyzeVideoWithDoubaoSeed('file-123456', 'prompt')
       ).rejects.toThrow('Doubao-Seed 分析响应缺少内容');
     });
   });
 
   describe('analyzeVideoComplete', () => {
     it('should complete full workflow successfully', async () => {
-      const mockVideoUrl = 'https://test.example.com/uploads/test-video.mp4';
-      mockToAbsolutePublicUploadUrl.mockReturnValue(mockVideoUrl);
+      const mockFileBuffer = Buffer.from('mock video data');
+      mockReadFile.mockResolvedValue(mockFileBuffer);
+
+      mockAxiosPost.mockResolvedValue({
+        status: 200,
+        data: { id: 'file-123456' }
+      });
 
       const mockAnalysisResult = JSON.stringify({
         plot: 'Test plot',
@@ -217,7 +281,12 @@ describe('doubaoSeedService', () => {
       mockRequestExternalJson.mockResolvedValue({
         response: { ok: true, status: 200 },
         responsePayload: {
-          choices: [{ message: { content: mockAnalysisResult } }],
+          output: [
+            {
+              type: 'message',
+              content: [{ text: mockAnalysisResult }]
+            }
+          ],
           usage: { prompt_tokens: 100, completion_tokens: 200 }
         }
       });
@@ -225,24 +294,29 @@ describe('doubaoSeedService', () => {
       const result = await analyzeVideoComplete('/path/to/test-video.mp4', 'Analyze this video');
 
       expect(result.result).toBe(mockAnalysisResult);
-      expect(result.metadata.fileName).toBe('test-video.mp4');
-      expect(result.metadata.videoUrl).toBe(mockVideoUrl);
+      expect(result.metadata.fileId).toBe('file-123456');
       expect(result.metadata.model).toBe('doubao-seed-2-0-lite-260215');
-      expect(result.metadata.fps).toBe(5);
-      expect(mockToAbsolutePublicUploadUrl).toHaveBeenCalledWith('/path/to/test-video.mp4');
+      expect(result.metadata.fps).toBe(0.3);
+      expect(mockReadFile).toHaveBeenCalledWith('/path/to/test-video.mp4');
+      expect(mockAxiosPost).toHaveBeenCalledTimes(1);
       expect(mockRequestExternalJson).toHaveBeenCalledTimes(1);
     });
 
-    it('should throw error when PUBLIC_ASSET_BASE_URL is not configured', async () => {
-      mockToAbsolutePublicUploadUrl.mockReturnValue(null);
+    it('should propagate upload errors', async () => {
+      mockReadFile.mockResolvedValue(Buffer.from('data'));
+      mockAxiosPost.mockRejectedValue(new Error('Upload failed'));
 
       await expect(
         analyzeVideoComplete('/path/to/test-video.mp4', 'prompt')
-      ).rejects.toThrow('PUBLIC_ASSET_BASE_URL 未配置');
+      ).rejects.toThrow();
     });
 
     it('should propagate analysis errors', async () => {
-      mockToAbsolutePublicUploadUrl.mockReturnValue('https://test.example.com/uploads/video.mp4');
+      mockReadFile.mockResolvedValue(Buffer.from('data'));
+      mockAxiosPost.mockResolvedValue({
+        status: 200,
+        data: { id: 'file-123456' }
+      });
 
       mockRequestExternalJson.mockResolvedValue({
         response: { ok: false, status: 500 },

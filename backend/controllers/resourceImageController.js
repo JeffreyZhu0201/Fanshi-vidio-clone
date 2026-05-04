@@ -16,7 +16,8 @@ const generateResourceImages = async (request, response) => {
     resourceName: request.body.resource_name,
     sourcePrompt: request.body.source_prompt,
     variants: request.body.variants,
-    representativeFrameTime: request.body.representative_frame_time
+    representativeFrameTime: request.body.representative_frame_time,
+    representativeFrameImagePath: request.body.representative_frame_image_path
   });
 
   response.status(200).json(result);
