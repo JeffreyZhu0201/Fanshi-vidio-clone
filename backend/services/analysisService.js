@@ -6,6 +6,7 @@ import { analyzeVideoWithProvider } from './videoAnalysisService.js';
 import { broadcastRealtimeEvent } from './realtimeService.js';
 import { normalizeAnalysisOptions } from './shotSpeechService.js';
 import { getVideoRecordById, resolveVideoAbsolutePath } from './videoService.js';
+import logger from '../utils/logger.js';
 import {
   hydrateCharacterStateRefsForAnchors,
   hydrateCharacterStateRefsForShots,
@@ -273,6 +274,90 @@ const updateAnalysisCharactersByVideoId = async (videoId, characters) => {
   return serializeAnalysis(currentAnalysis);
 };
 
+/**
+ * Extract scene keywords from scene summary text
+ * @param {string} sceneSummary - Scene description text
+ * @returns {Array<string>} Array of extracted keywords
+ */
+const extractSceneKeywords = (sceneSummary) => {
+  const text = String(sceneSummary || '').toLowerCase();
+
+  // Common scene keywords list
+  const sceneKeywords = [
+    '礼堂', '教室', '走廊', '操场', '图书馆', '食堂', '宿舍',
+    '办公室', '会议室', '实验室', '体育馆', '停车场',
+    '入口', '出口', '大厅', '楼梯', '电梯',
+    '室内', '室外', '户外', '街道', '公园'
+  ];
+
+  // Extract matching keywords
+  return sceneKeywords.filter(keyword => text.includes(keyword));
+};
+
+/**
+ * Check if two segments belong to the same scene
+ * @param {object} segment1 - First segment
+ * @param {object} segment2 - Second segment
+ * @returns {boolean} True if same scene
+ */
+const isSameScene = (segment1, segment2) => {
+  // Strategy 1: If both have sceneId, compare directly
+  if (segment1.sceneId && segment2.sceneId) {
+    return segment1.sceneId === segment2.sceneId;
+  }
+
+  // Strategy 2: Extract scene keywords for fuzzy matching
+  const keywords1 = extractSceneKeywords(segment1.sceneSummary || '');
+  const keywords2 = extractSceneKeywords(segment2.sceneSummary || '');
+
+  // If there are common keywords, consider them the same scene
+  return keywords1.some(k => keywords2.includes(k));
+};
+
+/**
+ * Merge adjacent segments with the same scene
+ * @param {Array} timeAnchors - Original time anchors array
+ * @returns {Array} Merged time anchors array
+ */
+const mergeAdjacentSegments = (timeAnchors) => {
+  if (!Array.isArray(timeAnchors) || timeAnchors.length <= 1) {
+    return timeAnchors;
+  }
+
+  const merged = [];
+  let current = { ...timeAnchors[0], shots: [...(timeAnchors[0].shots || [])] };
+
+  for (let i = 1; i < timeAnchors.length; i++) {
+    const next = timeAnchors[i];
+
+    // Check if same scene
+    if (isSameScene(current, next)) {
+      // Merge: extend time range, merge shots
+      current.endTime = next.endTime;
+      current.shots = [...current.shots, ...(next.shots || [])];
+
+      // Update scene description to mark as continuation
+      if (!current.sceneSummary.includes('（延续）')) {
+        current.sceneSummary = `${current.sceneSummary}（延续）`;
+      }
+    } else {
+      // Different scene: save current, start new segment
+      merged.push(current);
+      current = { ...next, shots: [...(next.shots || [])] };
+    }
+  }
+
+  merged.push(current);
+
+  logger.info('Segment merging completed', {
+    originalCount: timeAnchors.length,
+    mergedCount: merged.length,
+    reduction: timeAnchors.length - merged.length
+  });
+
+  return merged;
+};
+
 const analyzeSegmentContent = async ({
   segment,
   overallAnalysis,
@@ -296,5 +381,8 @@ export {
   optimizePrompt,
   analyzeSegmentContent,
   serializeAnalysis,
-  updateAnalysisCharactersByVideoId
+  updateAnalysisCharactersByVideoId,
+  extractSceneKeywords,
+  isSameScene,
+  mergeAdjacentSegments
 };
