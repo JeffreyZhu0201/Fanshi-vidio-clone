@@ -353,48 +353,18 @@ const buildCharacterViewPrompts = ({
   const appearanceLine = String(appearancePrompt || '').trim();
   const personalityLine = String(personalityPrompt || '').trim();
 
+  // 只生成一张包含三个视角的图片
   return [
     {
-      id: 'front',
-      label: '正面',
-      shortLabel: 'F',
+      id: 'turnaround',
+      label: '三视图',
+      shortLabel: '三视图',
       prompt: [
-        `请使用 Gemini 生图模型生成角色 ${resourceName || '未命名角色'} 的三视图之一：正面视图。`,
-        '要求：单人、全身、居中站立、正对镜头、中性站姿、完整保留头部到脚部。',
-        '要求：纯白无缝背景，背景不能带任何场景、环境、道具、阴影文字、拼贴版式或其他人物。',
-        '要求：写实电影美术设定风格，服装结构、面部特征、发型、配饰需要稳定且清晰。',
-        appearanceLine ? `角色外表描述：${appearanceLine}` : '',
-        personalityLine ? `角色性格气质：${personalityLine}` : '',
-        `角色资源提示词：${basePrompt || '无'}`
-      ].join('\n')
-    },
-    {
-      id: 'side',
-      label: '侧面',
-      shortLabel: 'S',
-      prompt: [
-        `请使用 Gemini 生图模型生成角色 ${resourceName || '未命名角色'} 的三视图之一：左侧面视图。`,
-        '要求：单人、全身、严格侧身站立、镜头平视、完整保留头部到脚部。',
-        '要求：背景必须保持纯白无缝，与正面视图保持相同布光和材质表达，不要额外角色和道具。',
-        '要求：强调发型轮廓、服装侧面结构、肩线与腰线层次，保持人物身份一致。',
-        appearanceLine ? `角色外表描述：${appearanceLine}` : '',
-        personalityLine ? `角色性格气质：${personalityLine}` : '',
-        `角色资源提示词：${basePrompt || '无'}`
-      ].join('\n')
-    },
-    {
-      id: 'back',
-      label: '背面',
-      shortLabel: 'B',
-      prompt: [
-        `请使用 Gemini 生图模型生成角色 ${resourceName || '未命名角色'} 的三视图之一：背面视图。`,
-        '要求：单人、全身、背对镜头、中性站姿、完整保留头部到脚部。',
-        '要求：背景必须保持纯白无缝，不要文字、不要道具、不要额外人物，强调服装背部结构和发型后部轮廓。',
-        '要求：与正面和侧面保持同一角色身份、服装材质和电影美术风格。',
-        appearanceLine ? `角色外表描述：${appearanceLine}` : '',
-        personalityLine ? `角色性格气质：${personalityLine}` : '',
-        `角色资源提示词：${basePrompt || '无'}`
-      ].join('\n')
+        appearanceLine || basePrompt || `角色 ${resourceName || '未命名角色'}`,
+        personalityLine ? `性格气质：${personalityLine}` : ''
+      ]
+        .filter(Boolean)
+        .join('\n')
     }
   ];
 };

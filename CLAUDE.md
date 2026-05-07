@@ -21,7 +21,9 @@ This is a video regeneration workbench that takes an original video, analyzes it
 - **Media Processing**: FFmpeg/FFprobe
 - **AI Services**: 
   - **Video Analysis**: Gemini 2.5 Pro (via yunwu.ai) or Doubao-Seed (via Volcano Ark)
-  - **Image Generation**: Gemini Image Generation (character/scene reference images)
+  - **Image Generation**: 
+    - Gemini Image Generation (scene reference images, character portraits)
+    - Doubao-Seedream (character three-view/turnaround images)
   - **Video Generation**: Seedance (via Volcano Ark)
 
 ### Directory Structure
@@ -53,11 +55,12 @@ shared/
 - **videoAnalysisService**: Multi-provider video analysis orchestration. Supports Gemini and Doubao-Seed providers with unified interface.
 - **geminiService**: Gemini 2.5 Pro video analysis, prompt optimization. Uses shared prompt blueprints with "fixed structure + editable style section" pattern.
 - **doubaoSeedService**: Doubao-Seed video analysis integration. Two-step API flow: Files API (upload) → Responses API (analyze).
+- **doubaoSeedreamService**: Doubao-Seedream integration for character three-view (turnaround) image generation. Uses same ARK API key as Seedance.
 - **seedDanceService**: Seedance API integration. Creates remote tasks, polls for results, downloads generated videos.
 - **generationService**: Full-video generation orchestration. Uses `buildFullVideoPrompt()` to concatenate all shot descriptions, expands `@character` and `#scene` mentions, collects reference assets, and generates entire video in single API call.
 - **segmentService**: Video splitting into segments and shots for preview/debugging. Uses time anchors from whole-video analysis.
 - **shotSpeechService**: Audio slicing, subtitle normalization, SRT generation. Speech data comes from whole-video analysis.
-- **resourceImageService**: Character three-view and scene reference image generation with Gemini Image.
+- **resourceImageService**: Character and scene reference image generation. Routes character turnarounds to Doubao-Seedream, other types to Gemini Image.
 - **ffmpegService**: Video slicing, frame extraction, audio processing.
 - **taskRecoveryService**: Recovers in-flight generation tasks after backend restart.
 
@@ -154,13 +157,13 @@ npm run test:e2e         # Run Cypress E2E tests
 ### Backend (.env)
 Key variables:
 - `DB_*`: MySQL connection (host, port, user, password, database name)
-- `GEMINI_API_KEY`, `GEMINI_API_BASE_URL`: Gemini API (yunwu.ai) for video analysis
-- `SEED_DANCE_API_KEY`, `SEED_DANCE_API_BASE_URL`: Seedance API (Volcano Ark) for video generation. Also used as ARK_API_KEY for Doubao-Seed video analysis
+- `GEMINI_API_KEY`, `GEMINI_API_BASE_URL`: Gemini API (yunwu.ai) for video analysis and image generation
+- `SEED_DANCE_API_KEY`, `SEED_DANCE_API_BASE_URL`: Seedance API (Volcano Ark) for video generation. Also used as ARK_API_KEY for Doubao-Seed video analysis and Doubao-Seedream image generation
 - `PUBLIC_ASSET_BASE_URL`: Public URL for reference assets (required for Seedance to access reference videos)
 - `HTTPS_ENABLED`, `HTTPS_PORT`, `SSL_KEY_PATH`, `SSL_CERT_PATH`: HTTPS configuration
 - `GEMINI_STRICT_REMOTE`, `SEED_DANCE_STRICT_REMOTE`: When true, disables mock fallback (for production/testing)
 
-**Note**: Doubao-Seed uses the same `SEED_DANCE_API_KEY` (ARK API key) as Seedance, since both services are provided by Volcano Ark.
+**Note**: Doubao-Seed and Doubao-Seedream both use the same `SEED_DANCE_API_KEY` (ARK API key) as Seedance, since all three services are provided by Volcano Ark.
 
 ### Frontend (.env)
 Key variables:
@@ -224,8 +227,9 @@ Commit message format: Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor
 
 ## Known Limitations
 
-- **External stability**: Gemini/Doubao-Seed video analysis, Gemini image generation, and Seedance long tasks are subject to upstream rate limits (429) and queue delays
+- **External stability**: Gemini/Doubao-Seed video analysis, Gemini/Doubao-Seedream image generation, and Seedance long tasks are subject to upstream rate limits (429) and queue delays
 - **Doubao-Seed constraints**: Max 512MB video file size, 7-day file storage, fps=0.3 frame extraction
+- **Reference image accessibility**: Doubao-Seedream requires publicly accessible reference image URLs. FRP tunnel or local URLs may not work.
 - **Cypress E2E**: Requires system-level Xvfb on Ubuntu 22.04
 - **Mock fallback**: Disabled in strict mode (`GEMINI_STRICT_REMOTE=true`, `SEED_DANCE_STRICT_REMOTE=true`)
 
@@ -248,16 +252,22 @@ API docs: `/api-docs` (Swagger UI)
 - **Style changes**: Modify `shared/styleTemplates.js` for preset templates, or update user-editable templates via frontend UI
 - **Prompt changes**: Edit `shared/promptBlueprints.js` for fixed structure sections
 - **Video analysis providers**: Two providers available - Gemini 2.5 Pro (via `geminiService.js`) and Doubao-Seed (via `doubaoSeedService.js`). Both use `videoAnalysisService.js` for unified interface. Users select provider in frontend dropdown.
-- **New AI providers**: Follow the pattern in `geminiService.js`, `doubaoSeedService.js`, and `seedDanceService.js` (external HTTP service + retry logic + error normalization)
+- **Image generation routing**: Character turnarounds use `doubaoSeedreamService.js`, other image types use `geminiService.js`. Routing logic is in `resourceImageService.js`.
+- **New AI providers**: Follow the pattern in `geminiService.js`, `doubaoSeedService.js`, `doubaoSeedreamService.js`, and `seedDanceService.js` (external HTTP service + retry logic + error normalization)
 - **Database changes**: Create migration with `sequelize-cli`, update models, run `npm run db:migrate`
 - **Frontend state**: Use Zustand stores (`videoStore`, `analysisStore`, `generationStore`)
 - **Media processing**: Use `ffmpegService` methods; avoid direct `child_process` calls
-- **File paths**: Always use `resolveUploadPath()` and `toPublicUploadUrl()` from `fileService` for consistency
+- **File paths**: Always use `resolveUploadPath()` and `toPublicUploadUrl()` from `fileService` for consistency. For Doubao-Seedream reference images, use `toAbsolutePublicUploadUrl()` to ensure external accessibility.
 
 ## Documentation
 
 - [Overall Architecture](docs/Overall_Arch.md) - Detailed architecture and data flow
 - [Pipeline](docs/pipeline.md) - Step-by-step pipeline documentation
 - [Summary](docs/Summary0.md) - Current implementation status and real functionality
+- [Project Completion Summary](docs/PROJECT_COMPLETION_SUMMARY.md) - Final project status and achievements
+- [Seedream Integration](SEEDREAM_INTEGRATION.md) - Doubao-Seedream integration details
+- [Seedream Integration Status](SEEDREAM_INTEGRATION_STATUS.md) - Current integration status and known issues
+- [Deployment Guide](docs/DEPLOYMENT.md) - Production deployment instructions
+- [Operations Manual](docs/OPERATIONS.md) - System operations and maintenance
 - [Contributing Guide](CONTRIBUTING.md) - Git workflow and commit conventions
 - [Task Docs](docs/task/) - Stage-by-stage development tasks

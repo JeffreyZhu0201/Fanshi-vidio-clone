@@ -114,9 +114,9 @@ const MainPage = () => {
     analyzingSegmentId,
     optimizingSegmentId,
     generatingSegmentIds,
-    generatingShotKeys,
-    batchGeneratingSegmentIds,
-    optimizingShotKeys,
+    generatingShotKeys = [],
+    batchGeneratingSegmentIds = [],
+    optimizingShotKeys = [],
     savingShotSegmentIds,
     setSegmentPrompt,
     setShotPrompt,
@@ -126,13 +126,18 @@ const MainPage = () => {
     saveSegmentShotDefinitions,
     setVideoRatio,
     generateSegmentVideo,
-    generateShotVideo,
     generateFullVideo,
     startMerge,
     downloadMergedVideo,
     startSegmentExportArchive,
     downloadSegmentArchive
   } = useGeneration();
+
+  // Placeholder for shot-level generation (not yet implemented)
+  const generateShotVideo = async () => {
+    console.warn('Shot-level video generation is not yet implemented');
+    return null;
+  };
 
   const generatedSegments = segments.filter((segment) => segment.generatedUrl).length;
   const promptsReady = segments.filter((segment) => segment.prompt?.trim()).length;

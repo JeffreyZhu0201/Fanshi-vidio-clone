@@ -272,6 +272,7 @@ const generateResourceImagesBodySchema = Joi.object({
   resource_name: Joi.string().trim().min(1).max(255).required(),
   source_prompt: Joi.string().trim().min(1).required(),
   representative_frame_time: Joi.number().min(0).allow(null).default(null),
+  representative_frame_image_path: Joi.string().trim().allow('', null).default(null),
   variants: Joi.array()
     .items(
       Joi.object({

@@ -4,6 +4,7 @@ import { ResourceImageAsset } from '../models/index.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { removeFileIfExists, toPublicUploadUrl, toAbsolutePublicUploadUrl } from './fileService.js';
 import { generateImageAsset as generateGeminiImageAsset } from './geminiImageService.js';
+import { generateCharacterTurnaround, generateImageAsset as generateSeedreamImageAsset } from './doubaoSeedreamService.js';
 
 const inflightResourceImageBuilds = new Map();
 
@@ -261,13 +262,26 @@ const generateResourceImageBundle = async ({
       });
 
       try {
-        // Use Gemini for all image generation
-        const imageResult = await generateGeminiImageAsset({
-          prompt: variantPrompt,
-          basename: `${sanitizeBasenamePart(resourceType)}-${sanitizeBasenamePart(resourceId)}-${sanitizeBasenamePart(
-            variantId
-          )}`
-        });
+        let imageResult;
+
+        // Use Doubao-Seedream for character turnaround generation
+        if (resourceType === 'character' && variantId === 'turnaround') {
+          imageResult = await generateCharacterTurnaround({
+            characterPrompt: variantPrompt,
+            referenceImageUrl,
+            basename: `${sanitizeBasenamePart(resourceType)}-${sanitizeBasenamePart(resourceId)}-${sanitizeBasenamePart(
+              variantId
+            )}`
+          });
+        } else {
+          // Fallback to Gemini for other types
+          imageResult = await generateGeminiImageAsset({
+            prompt: variantPrompt,
+            basename: `${sanitizeBasenamePart(resourceType)}-${sanitizeBasenamePart(resourceId)}-${sanitizeBasenamePart(
+              variantId
+            )}`
+          });
+        }
 
         if (previousAssetPath && previousAssetPath !== imageResult.filePath) {
           await removeFileIfExists(previousAssetPath);
