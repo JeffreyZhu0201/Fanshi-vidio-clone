@@ -292,6 +292,7 @@ const createResourceEditorState = () => ({
   frameNote: '',
   appearancePrompt: '',
   personalityPrompt: '',
+  voiceProfile: null,
   description: '',
   sourcePrompt: '',
   draftPrompt: '',
@@ -484,6 +485,7 @@ const AnalysisDisplay = ({
     frameNote: getRepresentativeFrameNote(character, '用于稳定人物形象的典型帧'),
     appearancePrompt: getCharacterAppearancePrompt(character),
     personalityPrompt: getCharacterPersonalityPrompt(character),
+    voiceProfile: character?.voiceProfile ?? character?.voice_profile ?? null,
     sourcePrompt: buildCharacterResourcePrompt(character),
     draftPrompt: buildCharacterResourcePrompt(character),
     highlightedPrompt: '',
@@ -585,6 +587,7 @@ const AnalysisDisplay = ({
       frameNote: resource.frameNote ?? '',
       appearancePrompt: resource.appearancePrompt ?? '',
       personalityPrompt: resource.personalityPrompt ?? '',
+      voiceProfile: resource.voiceProfile ?? null,
       description: resource.description ?? '',
       sourcePrompt: resource.sourcePrompt,
       draftPrompt: resourcePromptOverrides[resourceKey]?.prompt || resource.sourcePrompt,
@@ -1403,6 +1406,32 @@ const AnalysisDisplay = ({
             </p>
           </div>
 
+          {isCharacterResource && resource.voiceProfile && resource.voiceProfile.summary && (
+            <div className="mt-3 rounded-[14px] border border-white/10 bg-black/20 px-3 py-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">音色特征</p>
+              <p className="mt-2 text-[11px] leading-5 text-white/72">
+                {resource.voiceProfile.summary}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {resource.voiceProfile.timbre && (
+                  <span className="inline-flex rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/70">
+                    {resource.voiceProfile.timbre}
+                  </span>
+                )}
+                {resource.voiceProfile.tone && (
+                  <span className="inline-flex rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/70">
+                    {resource.voiceProfile.tone}
+                  </span>
+                )}
+                {resource.voiceProfile.pace && (
+                  <span className="inline-flex rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/70">
+                    语速{resource.voiceProfile.pace}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
@@ -1580,26 +1609,76 @@ const AnalysisDisplay = ({
 
             <div className="space-y-3">
               {resourceEditor.resourceType === 'character' ? (
-                <div className="grid gap-3 md:grid-cols-2">
-                  <label className="resource-attribute-card">
-                    <p className="resource-attribute-label">外表描述</p>
-                    <textarea
-                      value={resourceEditor.appearancePrompt}
-                      onChange={(event) => updateResourceEditorField('appearancePrompt', event.target.value)}
-                      className="mt-2 min-h-[104px] w-full rounded-[14px] border border-white/10 bg-black/20 px-3 py-2 text-[13px] leading-6 text-white outline-none"
-                      placeholder="角色外表、服装、发型、体态和材质细节"
-                    />
-                  </label>
-                  <label className="resource-attribute-card">
-                    <p className="resource-attribute-label">性格气质</p>
-                    <textarea
-                      value={resourceEditor.personalityPrompt}
-                      onChange={(event) => updateResourceEditorField('personalityPrompt', event.target.value)}
-                      className="mt-2 min-h-[104px] w-full rounded-[14px] border border-white/10 bg-black/20 px-3 py-2 text-[13px] leading-6 text-white outline-none"
-                      placeholder="角色气质、情绪底色、表演风格和行为习惯"
-                    />
-                  </label>
-                </div>
+                <>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="resource-attribute-card">
+                      <p className="resource-attribute-label">外表描述</p>
+                      <textarea
+                        value={resourceEditor.appearancePrompt}
+                        onChange={(event) => updateResourceEditorField('appearancePrompt', event.target.value)}
+                        className="mt-2 min-h-[104px] w-full rounded-[14px] border border-white/10 bg-black/20 px-3 py-2 text-[13px] leading-6 text-white outline-none"
+                        placeholder="角色外表、服装、发型、体态和材质细节"
+                      />
+                    </label>
+                    <label className="resource-attribute-card">
+                      <p className="resource-attribute-label">性格气质</p>
+                      <textarea
+                        value={resourceEditor.personalityPrompt}
+                        onChange={(event) => updateResourceEditorField('personalityPrompt', event.target.value)}
+                        className="mt-2 min-h-[104px] w-full rounded-[14px] border border-white/10 bg-black/20 px-3 py-2 text-[13px] leading-6 text-white outline-none"
+                        placeholder="角色气质、情绪底色、表演风格和行为习惯"
+                      />
+                    </label>
+                  </div>
+
+                  {resourceEditor.voiceProfile && (
+                    <div className="resource-attribute-card">
+                      <p className="resource-attribute-label">音色特征</p>
+                      <div className="mt-2 rounded-[14px] border border-white/10 bg-black/20 px-3 py-3">
+                        {resourceEditor.voiceProfile.summary && (
+                          <p className="text-[13px] leading-6 text-white/82">
+                            {resourceEditor.voiceProfile.summary}
+                          </p>
+                        )}
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {resourceEditor.voiceProfile.timbre && (
+                            <span className="inline-flex rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-100">
+                              {resourceEditor.voiceProfile.timbre}
+                            </span>
+                          )}
+                          {resourceEditor.voiceProfile.tone && (
+                            <span className="inline-flex rounded-full border border-sky-500/20 bg-sky-500/10 px-2.5 py-1 text-[11px] font-semibold text-sky-100">
+                              {resourceEditor.voiceProfile.tone}
+                            </span>
+                          )}
+                          {resourceEditor.voiceProfile.pace && (
+                            <span className="inline-flex rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-100">
+                              语速{resourceEditor.voiceProfile.pace}
+                            </span>
+                          )}
+                          {resourceEditor.voiceProfile.emotion && (
+                            <span className="inline-flex rounded-full border border-purple-500/20 bg-purple-500/10 px-2.5 py-1 text-[11px] font-semibold text-purple-100">
+                              {resourceEditor.voiceProfile.emotion}
+                            </span>
+                          )}
+                          {resourceEditor.voiceProfile.intensity && (
+                            <span className="inline-flex rounded-full border border-rose-500/20 bg-rose-500/10 px-2.5 py-1 text-[11px] font-semibold text-rose-100">
+                              {resourceEditor.voiceProfile.intensity}
+                            </span>
+                          )}
+                          {resourceEditor.voiceProfile.articulation && (
+                            <span className="inline-flex rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold text-cyan-100">
+                              {resourceEditor.voiceProfile.articulation}
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-3 text-[11px] leading-5 text-white/50">
+                          音色特征由 AI 从视频音频中自动提取，用于视频生成时的参考。
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </>
               ) : (
                 <label className="resource-attribute-card">
                   <p className="resource-attribute-label">场景描述</p>
