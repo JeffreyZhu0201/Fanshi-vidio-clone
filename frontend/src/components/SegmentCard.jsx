@@ -23,6 +23,7 @@ import {
   normalizeStyleMode,
   resolveStyleTemplate
 } from '../../../shared/styleTemplates.js';
+import { buildSegmentPromptWithReferences } from '../../../shared/segmentPromptBuilder.js';
 
 const getNormalizedFrameTime = (value) => {
   const parsedValue = Number(value);
@@ -610,6 +611,7 @@ const SegmentCard = ({
   );
   const [promptModalOpen, setPromptModalOpen] = useState(false);
   const [editorBanner, setEditorBanner] = useState('');
+  const [segmentPrompt, setSegmentPrompt] = useState('');
   const seedDanceProvider = useAppStore((state) => state.providerStatuses.seedance);
   const characters = overallAnalysis?.characters ?? [];
   const backgrounds = overallAnalysis?.backgrounds ?? [];
@@ -699,6 +701,21 @@ const SegmentCard = ({
   useEffect(() => {
     setPersistedShotBaseline((segment.shots ?? []).map((shot, shotIndex) => buildShotEditorItem(shot, shotIndex)));
   }, [segment.id, segmentShotRebuildSignature]);
+
+  useEffect(() => {
+    // Initialize segment prompt with references (not expanded)
+    const initialPrompt = buildSegmentPromptWithReferences({
+      segment: {
+        ...segment,
+        analysis: {
+          shots: segment.shots ?? []
+        }
+      },
+      analysis: overallAnalysis,
+      styleMode: currentStyleMode
+    });
+    setSegmentPrompt(initialPrompt);
+  }, [segment.id, segment.shots, overallAnalysis, currentStyleMode]);
 
   const handlePromptChange = (nextValue) => {
     setDraftPrompt(nextValue);
@@ -873,6 +890,24 @@ const SegmentCard = ({
   const handleDirectGenerate = () => {
     return onGenerate(segment.id, effectivePrompt, {
       useReferenceVideo,
+      useRepresentativeFrame: useReferenceFrame
+    });
+  };
+
+  const handleGenerateSegmentVideo = () => {
+    if (!segmentPrompt.trim()) {
+      setEditorBanner('请先编辑片段提示词');
+      return;
+    }
+
+    if (!canStartGeneration) {
+      setEditorBanner(seedDanceUnavailableReason);
+      return;
+    }
+
+    // Generate segment video with the edited prompt
+    return onGenerate(segment.id, segmentPrompt, {
+      useReferenceVideo: true, // Always use reference video for segment generation
       useRepresentativeFrame: useReferenceFrame
     });
   };
@@ -1214,6 +1249,80 @@ const SegmentCard = ({
           </section>
         </div>
       </article>
+
+      {/* Segment Prompt Editor - Below the main card */}
+      <div className="mt-3 rounded-[18px] border border-white/10 bg-white/[0.04] px-4 py-4">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+          <div>
+            <p className="text-sm font-semibold text-white">片段提示词编辑</p>
+            <p className="mt-1 text-xs leading-5 text-white/55">
+              格式：【风格】【角色】【场景】【分镜头】，使用 @ID 引用（不展开），最长 15 秒
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/75 transition hover:border-white/20 hover:bg-white/[0.08]"
+              onClick={() => {
+                const refreshedPrompt = buildSegmentPromptWithReferences({
+                  segment: {
+                    ...segment,
+                    analysis: {
+                      shots: segment.shots ?? []
+                    }
+                  },
+                  analysis: overallAnalysis,
+                  styleMode: currentStyleMode
+                });
+                setSegmentPrompt(refreshedPrompt);
+                setEditorBanner('提示词已重新生成');
+              }}
+            >
+              重新生成
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 transition hover:border-emerald-500/35 hover:bg-emerald-500/15 disabled:opacity-50"
+              onClick={() => void handleGenerateSegmentVideo()}
+              disabled={!segmentPrompt.trim() || isGenerating || !canStartGeneration}
+              title={
+                canStartGeneration
+                  ? '使用编辑后的提示词 + 原片视频 + 三视图生成片段视频'
+                  : seedDanceUnavailableReason
+              }
+            >
+              {isGenerating ? '生成中...' : '生成片段视频'}
+            </button>
+          </div>
+        </div>
+
+        {editorBanner ? (
+          <div className="mb-3 rounded-[14px] border border-white/10 bg-black/20 px-3 py-2 text-[12px] leading-5 text-white/72">
+            {editorBanner}
+          </div>
+        ) : null}
+
+        <textarea
+          aria-label="片段提示词编辑器"
+          className="min-h-[200px] w-full rounded-[18px] border border-white/10 bg-black/[0.35] px-4 py-4 text-sm leading-6 text-white outline-none transition focus:border-brand-500/40 focus:ring-2 focus:ring-brand-500/20"
+          value={segmentPrompt}
+          onChange={(event) => {
+            setSegmentPrompt(event.target.value);
+            setEditorBanner('');
+          }}
+          placeholder="【风格】真人写实电影风格...&#10;【角色】@角色ID角色名...&#10;【场景】@场景ID场景名...&#10;【分镜头】【0-4秒】镜头1：..."
+        />
+
+        <div className="mt-3 rounded-[14px] border border-white/10 bg-black/20 px-3 py-2 text-[12px] leading-5 text-white/60">
+          <p>💡 提示：</p>
+          <ul className="mt-1 ml-4 list-disc space-y-1">
+            <li>使用 @角色ID 和 #场景ID 引用资源（不会展开为完整描述）</li>
+            <li>片段最长 15 秒，系统会自动拼接片段内所有镜头</li>
+            <li>生成时会发送：提示词 + 原片视频 + 角色三视图 + 场景参考图</li>
+            <li>三视图为单张图片，包含角色的三个角度</li>
+          </ul>
+        </div>
+      </div>
 
       <ModalSheet
         open={promptModalOpen}
