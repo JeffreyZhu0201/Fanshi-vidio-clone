@@ -52,12 +52,12 @@ shared/
 
 ### Key Services (Backend)
 
-- **videoAnalysisService**: Multi-provider video analysis orchestration. Supports Gemini and Doubao-Seed providers with unified interface.
+- **videoAnalysisService**: Multi-provider video analysis orchestration. Supports Gemini and Doubao-Seed providers with unified interface. Includes intelligent segment merging logic that consolidates adjacent same-scene segments.
 - **geminiService**: Gemini 2.5 Pro video analysis, prompt optimization. Uses shared prompt blueprints with "fixed structure + editable style section" pattern.
-- **doubaoSeedService**: Doubao-Seed video analysis integration. Two-step API flow: Files API (upload) → Responses API (analyze).
+- **doubaoSeedService**: Doubao-Seed video analysis integration. Two-step API flow: Files API (upload) → Responses API (analyze with audio). Extracts voiceProfile for speaking characters.
 - **doubaoSeedreamService**: Doubao-Seedream integration for character three-view (turnaround) image generation. Uses same ARK API key as Seedance.
 - **seedDanceService**: Seedance API integration. Creates remote tasks, polls for results, downloads generated videos.
-- **generationService**: Full-video generation orchestration. Uses `buildFullVideoPrompt()` to concatenate all shot descriptions, expands `@character` and `#scene` mentions, collects reference assets, and generates entire video in single API call.
+- **generationService**: Full-video and segment-level generation orchestration. Uses `buildFullVideoPrompt()` or `buildSegmentVideoPrompt()` to construct prompts, expands `@character` and `#scene` mentions (including voiceProfile), collects reference assets, and generates video via Seedance API.
 - **segmentService**: Video splitting into segments and shots for preview/debugging. Uses time anchors from whole-video analysis.
 - **shotSpeechService**: Audio slicing, subtitle normalization, SRT generation. Speech data comes from whole-video analysis.
 - **resourceImageService**: Character and scene reference image generation. Routes character turnarounds to Doubao-Seedream, other types to Gemini Image.
@@ -81,20 +81,25 @@ Only `videoAnalysisStylePrompt` and `segmentAnalysisStylePrompt` are user-editab
 
 ### Data Flow
 
-1. **Upload → Analysis**: Video uploaded → stored with hash filename → whole-video analysis with selected AI provider (Gemini or Doubao-Seed) → results stored in `analyses` table with `analysis_options` (includes `styleMode` and `styleTemplates`)
-2. **Analysis → Split** (optional, for preview): Time anchors from analysis → split into segments → split into shots → extract keyframes, audio clips, subtitles
-3. **Resource Generation**: Characters → three-view images; Scenes → reference images (both use current style mode)
-4. **Full Video Generation**: All shot descriptions concatenated via `buildFullVideoPrompt()` → single Seedance API call → complete video downloaded
-5. **Download**: Generated video ready for download (no assembly needed)
+1. **Upload → Analysis**: Video uploaded → stored with hash filename → whole-video analysis with selected AI provider (Gemini or Doubao-Seed) → results stored in `analyses` table with `analysis_options` (includes `styleMode` and `styleTemplates`). Doubao-Seed extracts voiceProfile for speaking characters from audio.
+2. **Segment Merging**: Adjacent segments with same `sceneId` are automatically merged to avoid over-segmentation. Merging happens after AI analysis, before saving to database.
+3. **Analysis → Split** (optional, for preview): Time anchors from analysis → split into segments → split into shots → extract keyframes, audio clips, subtitles
+4. **Resource Generation**: Characters → three-view images; Scenes → reference images (both use current style mode)
+5. **Segment-Level Generation**: Individual segments can be generated using `buildSegmentVideoPrompt()` which expands `@character` (including voiceProfile) and `#scene` references, concatenates all shots in the segment, and generates via single Seedance API call.
+6. **Full Video Generation**: All shot descriptions concatenated via `buildFullVideoPrompt()` → single Seedance API call → complete video downloaded
+7. **Download**: Generated video ready for download (no assembly needed)
 
 ### Important Constraints
 
 - **Multi-provider video analysis**: Supports both Gemini 2.5 Pro and Doubao-Seed for whole-video analysis. Users can select provider in the frontend UI.
-- **Doubao-Seed workflow**: Two-step API flow - Files API uploads video (max 512MB, 7-day storage), Responses API analyzes with fps=0.3 frame extraction.
+- **Doubao-Seed workflow**: Two-step API flow - Files API uploads video (max 512MB, 7-day storage), Responses API analyzes with fps=0.3 frame extraction and audio analysis enabled.
+- **Audio analysis**: When using Doubao-Seed, voiceProfile (timbre, tone, pace, emotion, intensity, articulation, summary) is extracted for speaking characters. Displayed in frontend character cards.
+- **Segment merging**: Adjacent segments with same `sceneId` are automatically merged after analysis to prevent over-segmentation. Uses `mergeAdjacentSegments()` in `analysisService.js`.
 - **Whole-video analysis**: Only calls AI provider once. For large videos (Gemini), creates a low-res proxy video first to reduce upload size.
 - **Speech extraction**: When `extractSubtitles` or `parseAudio` is enabled, shot-level `speech` is returned in whole-video analysis.
+- **Segment-level generation**: Segments can be generated individually using `buildSegmentVideoPrompt()`. Expands `@character` (with voiceProfile) and `#scene` references, concatenates shots, generates via Seedance.
 - **Full-video generation**: All shot descriptions concatenated into single prompt using `buildFullVideoPrompt()`. Format: 【风格】【角色】【场景】【分镜头】sections. Single Seedance API call generates entire video, maintaining visual consistency across all shots.
-- **No shot-level generation**: Individual shots are not generated separately. No FFmpeg assembly needed.
+- **Resource expansion**: `@characterID` expands to full character description including voiceProfile. `#sceneID` expands to full scene description.
 - **Character state continuity**: Managed by `stateTimeline` and `characterStateRefs` from whole-video analysis, embedded in concatenated prompt.
 
 ## Common Development Commands
