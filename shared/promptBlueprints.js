@@ -669,15 +669,253 @@ const buildFullVideoPrompt = ({
   return sections.join('\n\n');
 };
 
+/**
+ * Extract character IDs from segment shots
+ * @param {Object} segment - Segment data
+ * @returns {Array<string>} Character IDs
+ */
+const extractCharacterIds = (segment) => {
+  const ids = new Set();
+  const shots = segment?.analysis?.shots || segment?.shots || [];
+
+  shots.forEach(shot => {
+    // Extract from @characterID in prompt
+    const matches = (shot.prompt || '').match(/@([a-zA-Z0-9_-]+)/g) || [];
+    matches.forEach(match => ids.add(match.substring(1)));
+
+    // Extract from characterStateRefs
+    if (Array.isArray(shot.characterStateRefs)) {
+      shot.characterStateRefs.forEach(ref => {
+        if (ref.characterId) ids.add(ref.characterId);
+      });
+    }
+
+    // Extract from characterNames
+    if (Array.isArray(shot.characterNames)) {
+      shot.characterNames.forEach(name => {
+        // Try to find character by name
+        const char = (segment.characters || []).find(c => c.name === name);
+        if (char?.id) ids.add(char.id);
+      });
+    }
+  });
+
+  return Array.from(ids);
+};
+
+/**
+ * Extract scene IDs from segment shots
+ * @param {Object} segment - Segment data
+ * @returns {Array<string>} Scene IDs
+ */
+const extractSceneIds = (segment) => {
+  const ids = new Set();
+  const shots = segment?.analysis?.shots || segment?.shots || [];
+
+  shots.forEach(shot => {
+    // Extract from #sceneID in prompt
+    const matches = (shot.prompt || '').match(/#([a-zA-Z0-9_-]+)/g) || [];
+    matches.forEach(match => ids.add(match.substring(1)));
+  });
+
+  // Extract from segment-level backgroundId
+  if (segment?.analysis?.backgroundId) {
+    ids.add(segment.analysis.backgroundId);
+  }
+  if (segment?.backgroundId) {
+    ids.add(segment.backgroundId);
+  }
+
+  return Array.from(ids);
+};
+
+/**
+ * Expand resource references (@characterID, #sceneID) in text
+ * @param {string} text - Text with resource references
+ * @param {Object} analysis - Analysis data with characters and backgrounds
+ * @returns {string} Expanded text
+ */
+const expandResourceReferences = (text, analysis) => {
+  if (!text || typeof text !== 'string') {
+    return '';
+  }
+
+  let expanded = text;
+
+  // Expand @characterID
+  const characterMatches = text.match(/@([a-zA-Z0-9_-]+)/g) || [];
+  characterMatches.forEach(match => {
+    const charId = match.substring(1);
+    const char = (analysis?.characters || []).find(c => c.id === charId);
+    if (char) {
+      const fullDesc = `${char.name}（${char.appearancePrompt || ''}）`;
+      expanded = expanded.replace(match, fullDesc);
+    }
+  });
+
+  // Expand #sceneID
+  const sceneMatches = text.match(/#([a-zA-Z0-9_-]+)/g) || [];
+  sceneMatches.forEach(match => {
+    const sceneId = match.substring(1);
+    const scene = (analysis?.backgrounds || []).find(bg => bg.id === sceneId);
+    if (scene) {
+      expanded = expanded.replace(match, `${scene.name}（${scene.prompt || ''}）`);
+    }
+  });
+
+  return expanded;
+};
+
+/**
+ * Build character section for segment video prompt
+ * @param {Object} segment - Segment data
+ * @param {Object} analysis - Analysis data
+ * @returns {string} Character section
+ */
+const buildCharacterSection = (segment, analysis) => {
+  const characterIds = extractCharacterIds(segment);
+  const characters = (analysis?.characters || []).filter(c => characterIds.includes(c.id));
+
+  if (characters.length === 0) {
+    return '【角色】\n无';
+  }
+
+  const characterDescriptions = characters.map(char => {
+    let desc = `${char.name}：${char.appearancePrompt || ''}`;
+
+    if (char.personalityPrompt) {
+      desc += `\n性格：${char.personalityPrompt}`;
+    }
+
+    if (char.voiceProfile && char.voiceProfile.summary) {
+      desc += `\n音色特征：${char.voiceProfile.summary}`;
+
+      // Add detailed voice parameters
+      const voiceDetails = [];
+      if (char.voiceProfile.timbre) voiceDetails.push(char.voiceProfile.timbre);
+      if (char.voiceProfile.tone) voiceDetails.push(char.voiceProfile.tone);
+      if (char.voiceProfile.pace) voiceDetails.push(`语速${char.voiceProfile.pace}`);
+
+      if (voiceDetails.length > 0) {
+        desc += `（${voiceDetails.join('、')}）`;
+      }
+    }
+
+    return desc;
+  }).join('\n\n');
+
+  return `【角色】\n${characterDescriptions}`;
+};
+
+/**
+ * Build scene section for segment video prompt
+ * @param {Object} segment - Segment data
+ * @param {Object} analysis - Analysis data
+ * @returns {string} Scene section
+ */
+const buildSceneSection = (segment, analysis) => {
+  const sceneIds = extractSceneIds(segment);
+  const scenes = (analysis?.backgrounds || []).filter(bg => sceneIds.includes(bg.id));
+
+  if (scenes.length === 0) {
+    return '【场景】\n无';
+  }
+
+  const sceneDescriptions = scenes.map(scene =>
+    `${scene.name}：${scene.prompt || ''}`
+  ).join('\n\n');
+
+  return `【场景】\n${sceneDescriptions}`;
+};
+
+/**
+ * Build shots section for segment video prompt
+ * @param {Object} segment - Segment data
+ * @param {Object} analysis - Analysis data
+ * @returns {string} Shots section
+ */
+const buildShotsSection = (segment, analysis) => {
+  const shots = segment?.analysis?.shots || segment?.shots || [];
+
+  if (shots.length === 0) {
+    return '【分镜头】\n无';
+  }
+
+  const shotDescriptions = shots.map((shot, index) => {
+    const timeRange = `【${shot.startTime}-${shot.endTime}秒】`;
+    const shotLabel = `镜头${index + 1}`;
+    const shotType = shot.shotType || '中景';
+    const cameraMove = shot.cameraMovement || '固定镜头';
+
+    // Expand @character and #scene references
+    const expandedPrompt = expandResourceReferences(shot.prompt || '', analysis);
+
+    // Dialogue part
+    let dialoguePart = '\n对白口型指导：无对白';
+    if (shot.speech && shot.speech.transcript) {
+      const speechStyle = shot.speech.speechStyle || '';
+      dialoguePart = `\n对白口型指导："${shot.speech.transcript}"`;
+      if (speechStyle) {
+        dialoguePart += `（${speechStyle}）`;
+      }
+    }
+
+    // Action part
+    const actionPart = shot.action ? `\n动作：${shot.action}` : '';
+
+    return `${timeRange}${shotLabel}：${shotType}，${cameraMove}。\n画面：${expandedPrompt}${actionPart}${dialoguePart}`;
+  }).join('\n\n');
+
+  return `【分镜头】\n${shotDescriptions}`;
+};
+
+/**
+ * Build segment video generation prompt
+ * @param {Object} params - Parameters
+ * @param {Object} params.segment - Segment data
+ * @param {Object} params.analysis - Analysis data
+ * @param {string} params.styleMode - Style mode
+ * @param {Object} params.styleTemplates - Style templates
+ * @returns {string} Complete segment video prompt
+ */
+const buildSegmentVideoPrompt = ({ segment, analysis, styleMode, styleTemplates }) => {
+  const styleTemplate = resolveStyleTemplate({
+    styleMode,
+    styleTemplates,
+    templateKey: 'videoGenerationStylePrompt'
+  });
+
+  // 1. Style section
+  const stylePart = `【风格】\n${styleTemplate}`;
+
+  // 2. Character section (with voiceProfile)
+  const characterPart = buildCharacterSection(segment, analysis);
+
+  // 3. Scene section
+  const scenePart = buildSceneSection(segment, analysis);
+
+  // 4. Shots section
+  const shotsPart = buildShotsSection(segment, analysis);
+
+  return `${stylePart}\n\n${characterPart}\n\n${scenePart}\n\n${shotsPart}`;
+};
+
 export {
+  buildCharacterSection,
   buildCharacterViewPrompts,
   buildFullVideoPrompt,
   buildPromptOptimizationPrompt,
   buildSceneAnglePrompts,
+  buildSceneSection,
   buildSegmentAnalysisPrompt,
   buildSegmentAnalysisPromptSections,
+  buildSegmentVideoPrompt,
+  buildShotsSection,
   buildVideoAnalysisPrompt,
   buildVideoAnalysisPromptSections,
+  expandResourceReferences,
+  extractCharacterIds,
+  extractSceneIds,
   getNormalizedAnalysisOptionsForPrompts,
   safeStringify
 };
