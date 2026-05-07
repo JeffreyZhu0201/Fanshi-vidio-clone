@@ -58,6 +58,20 @@ const buildVideoAnalysisPromptSections = ({ video, metadata, analysisOptions = n
       }
     : {};
 
+  const voiceProfileSchema = speechEnabled
+    ? {
+        voiceProfile: {
+          timbre: '音色（清亮/低沉/沙哑等）',
+          tone: '语气（温和/严厉/俏皮等）',
+          pace: '语速（正常/偏快/缓慢）',
+          emotion: '情感倾向（平静/激动/忧郁等）',
+          intensity: '说话力度（轻柔/有力/急促）',
+          articulation: '口型明显程度（清晰/含糊）',
+          summary: '综合音色特征的完整描述'
+        }
+      }
+    : {};
+
   const fixedStructurePrompt = [
     '你是一名资深视频理解与影视拆解助手。',
     '请对输入的整条视频做一次完整的整体视频理解，并严格返回 JSON。',
@@ -77,6 +91,7 @@ const buildVideoAnalysisPromptSections = ({ video, metadata, analysisOptions = n
             name: '角色名',
             appearancePrompt: '角色完整形象设定',
             personalityPrompt: '角色的性格气质设定',
+            ...voiceProfileSchema,
             representativeFrameTime: 1.2,
             representativeFrameNote: '该角色的典型帧说明',
             stateTimeline: [
@@ -97,6 +112,7 @@ const buildVideoAnalysisPromptSections = ({ video, metadata, analysisOptions = n
           {
             startTime: 0,
             endTime: 7,
+            sceneId: 'scene_场景名称',
             sceneSummary: '片段解释',
             scenePrompt: '该片段可直接复用的片段提示词',
             representativeFrameTime: 1.6,
@@ -134,39 +150,53 @@ const buildVideoAnalysisPromptSections = ({ video, metadata, analysisOptions = n
     '1. plot 用中文概括整条视频的主要剧情、事件推进和结局走向，适合后续片段生成使用。',
     '2. characters 只返回真正重要的角色，name 要稳定；如果无法识别正式名字，就使用稳定标签，例如 主角A、反派A。',
     '3. appearancePrompt 必须是可直接用于视频生成的人物外观设定；personalityPrompt 用中文概括性格气质、情绪底色和表演风格。',
-    '4. 每个 character 都要返回 representativeFrameTime 和 representativeFrameNote，方便后续抽典型帧生成三视图。',
-    '5. 每个 character 都必须返回 stateTimeline，用整片绝对秒数描述该角色在全片中的阶段性连续状态。',
-    '6. stateTimeline 要尽量细，优先覆盖会影响后续重生成连续性的稳定变化，例如受伤、包扎、脏污、破损、湿身、妆造变化、疲惫程度变化、道具佩戴变化、残缺持续状态等；短暂且不稳定的微表情不要单独拆成状态。',
-    '7. stateTimeline 的每个节点都必须包含 id、startTime、endTime、stateName、summary、continuityPrompt、representativeFrameTime、representativeFrameNote；状态之间按时间升序，尽量不要重叠。',
-    '8. continuityPrompt 必须能直接服务后续视频生成连续性控制，要清楚说明这个阶段必须延续的身体状态、服装状态、妆造状态和可见损伤或变化。',
-    '9. 当角色在整片里出现明显阶段切换时，要及时新开状态节点，不要把“完好 -> 受伤 -> 包扎 -> 残缺持续”混成一个笼统状态。',
-    '10. timeAnchors 必须覆盖完整视频，startTime 和 endTime 用整片绝对秒数，按时间升序、无重叠。',
-    '11. 每个 timeAnchor 代表一个后续可独立生成的大剧情片段，边界优先对齐场景变化和完整动作阶段，不要机械均分。',
-    '12. 每个 timeAnchor 都要返回 sceneSummary、scenePrompt、backgroundName、representativeFrameTime、representativeFrameNote。',
-    '13. 同一场景反复出现时，backgroundName 必须保持稳定，方便后端把它们合并成同一个场景资源。',
-    '14. 每个 timeAnchor 内都必须返回 shots；shots 是后续小镜头切片与生成的唯一真值来源。',
-    '15. shots 必须尽量按真实镜头边界细分，优先对齐剪辑点、景别变化、机位变化、人物左中右站位变化、动作 beat、视线切换、焦点转移和说话节奏变化。',
-    '16. 对 60 秒左右的视频，要尽量把观众能明显感知到的真实镜头都拆出来；除非画面长时间稳定且动作单一，否则单个 shot 尽量不要超过 4 秒。',
-    '17. 每个 shot 的 startTime 和 endTime 都是整片绝对秒数，严格落在所属 timeAnchor 内，尽量精确到 0.1 秒。',
     speechEnabled
-      ? '18. 每个 shot 都必须返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote、speech，sceneNames 和 characterNames 都不能为空。'
-      : '18. 每个 shot 都必须返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote，sceneNames 和 characterNames 都不能为空。',
-    '19. shot.summary 要说明镜头核心动作、主体关系和切分依据，而不是只复述剧情。',
-    '20. representativeFrameTime 必须选该镜头最有代表性的画面，不要机械取中点；representativeFrameNote 说明为什么这帧最适合作为预览和参考图。',
-    '21. shot.prompt 必须直接服务镜头级视频生成，并同时包含至少一个 @角色名 和至少一个 #场景名。',
-    '22. 每个 shot.prompt 必须包含完整的镜头描述，包括：景别（大全景/全景/中景/近景/特写）、镜头运动（固定/推进/拉远/横移/跟随）、角色数量、主次关系、人物左中右位置、前景/中景/后景层次、朝向、视线、姿态、动作轨迹、进出画方式、遮挡关系、机位角度、光线氛围。动作描述要具体（不要只写"站着"，要写"站在画面左侧，面向右侧"）。',
-    '23. shot.prompt 示例："中景，固定镜头。@露西 穿白色连衣裙站在 #礼堂入口 画面中央，浑身湿透，手里紧握手机，抬眼直视前方，呼吸急促。背景是礼堂大门和暴雨。"',
-    '24. 如果角色是不完整出镜、背影、手部、反打或 POV，也必须绑定稳定的人物名；如果一个 shot 涉及多个场景或多个角色，需要在 sceneNames 和 characterNames 中列全。',
+      ? '4. 每个 character 都要返回 voiceProfile，包含 timbre（音色）、tone（语气）、pace（语速）、emotion（情感倾向）、intensity（说话力度）、articulation（口型明显程度）、summary（综合音色特征描述）。'
+      : '4. 每个 character 都要返回 representativeFrameTime 和 representativeFrameNote，方便后续抽典型帧生成三视图。',
     speechEnabled
-      ? '25. 当 analysis_options 开启字幕或音频解析时，每个 shot 的 speech 也必须在这次整片理解里一次性返回，不允许留给后续小镜头单独分析。subtitleLines 的时间必须是相对当前 shot 本地时间，不是整片绝对时间。'
-      : '25. 所有 prompt 都要明确不要字幕、不要文字、不要 UI、不要水印。',
+      ? '5. voiceProfile 提取要求：仔细分析视频中每个角色的说话音频，识别其音色、语气、语速、情感倾向；如果角色在视频中没有说话，voiceProfile 各字段返回空字符串。'
+      : '5. 每个 character 都必须返回 stateTimeline，用整片绝对秒数描述该角色在全片中的阶段性连续状态。',
     speechEnabled
-      ? '26. speech.transcript 要写该镜头完整对白；speech.subtitleLines 要按时间升序、无重叠；speech.speechStyle 要概括语速、停顿、情绪、语气、说话力度和口型明显程度；无对白时 hasDialogue=false、transcript=""、subtitleLines=[].'
-      : '26. 输出必须是合法 JSON，字段名保持与示例完全一致。',
+      ? '6. 每个 character 都要返回 representativeFrameTime 和 representativeFrameNote，方便后续抽典型帧生成三视图。'
+      : '6. stateTimeline 要尽量细，优先覆盖会影响后续重生成连续性的稳定变化，例如受伤、包扎、脏污、破损、湿身、妆造变化、疲惫程度变化、道具佩戴变化、残缺持续状态等；短暂且不稳定的微表情不要单独拆成状态。',
     speechEnabled
-      ? '27. 所有 prompt 都要明确不要字幕、不要文字、不要 UI、不要水印。'
+      ? '7. 每个 character 都必须返回 stateTimeline，用整片绝对秒数描述该角色在全片中的阶段性连续状态。'
+      : '7. stateTimeline 的每个节点都必须包含 id、startTime、endTime、stateName、summary、continuityPrompt、representativeFrameTime、representativeFrameNote；状态之间按时间升序，尽量不要重叠。',
+    '8. stateTimeline 要尽量细，优先覆盖会影响后续重生成连续性的稳定变化，例如受伤、包扎、脏污、破损、湿身、妆造变化、疲惫程度变化、道具佩戴变化、残缺持续状态等；短暂且不稳定的微表情不要单独拆成状态。',
+    '9. stateTimeline 的每个节点都必须包含 id、startTime、endTime、stateName、summary、continuityPrompt、representativeFrameTime、representativeFrameNote；状态之间按时间升序，尽量不要重叠。',
+    '10. continuityPrompt 必须能直接服务后续视频生成连续性控制，要清楚说明这个阶段必须延续的身体状态、服装状态、妆造状态和可见损伤或变化。',
+    '11. 当角色在整片里出现明显阶段切换时，要及时新开状态节点，不要把”完好 -> 受伤 -> 包扎 -> 残缺持续”混成一个笼统状态。',
+    '12. timeAnchors 必须覆盖完整视频，startTime 和 endTime 用整片绝对秒数，按时间升序、无重叠。',
+    '13. 每个 timeAnchor 代表一个后续可独立生成的大剧情片段，边界优先对齐场景变化和完整动作阶段，不要机械均分。',
+    '14. timeAnchors 片段划分要求：按场景/背景划分大片段，同一场景内的不同机位作为小镜头（shots），避免在同一背景下过度切分。',
+    '15. 每个 timeAnchor 必须包含 sceneId 字段，格式为 scene_<场景名称>（如：scene_教室、scene_走廊），sceneId 应该基于场景的物理位置命名，相同位置的片段使用相同的 sceneId。',
+    '16. 场景切换时才创建新的 timeAnchor，同一场景内的镜头变化（推拉摇移、特写中景全景）都属于同一个 timeAnchor。',
+    '17. 每个 timeAnchor 都要返回 sceneSummary、scenePrompt、backgroundName、representativeFrameTime、representativeFrameNote。',
+    '17. 每个 timeAnchor 都要返回 sceneSummary、scenePrompt、backgroundName、representativeFrameTime、representativeFrameNote。',
+    '18. 同一场景反复出现时，backgroundName 必须保持稳定，方便后端把它们合并成同一个场景资源。',
+    '19. 每个 timeAnchor 内都必须返回 shots；shots 是后续小镜头切片与生成的唯一真值来源。',
+    '20. shots 必须尽量按真实镜头边界细分，优先对齐剪辑点、景别变化、机位变化、人物左中右站位变化、动作 beat、视线切换、焦点转移和说话节奏变化。',
+    '21. 对 60 秒左右的视频，要尽量把观众能明显感知到的真实镜头都拆出来；除非画面长时间稳定且动作单一，否则单个 shot 尽量不要超过 4 秒。',
+    '22. 每个 shot 的 startTime 和 endTime 都是整片绝对秒数，严格落在所属 timeAnchor 内，尽量精确到 0.1 秒。',
+    speechEnabled
+      ? '23. 每个 shot 都必须返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote、speech，sceneNames 和 characterNames 都不能为空。'
+      : '23. 每个 shot 都必须返回 id、summary、prompt、sceneNames、characterNames、representativeFrameTime、representativeFrameNote，sceneNames 和 characterNames 都不能为空。',
+    '24. shot.summary 要说明镜头核心动作、主体关系和切分依据，而不是只复述剧情。',
+    '25. representativeFrameTime 必须选该镜头最有代表性的画面，不要机械取中点；representativeFrameNote 说明为什么这帧最适合作为预览和参考图。',
+    '26. shot.prompt 必须直接服务镜头级视频生成，并同时包含至少一个 @角色名 和至少一个 #场景名。',
+    '27. 每个 shot.prompt 必须包含完整的镜头描述，包括：景别（大全景/全景/中景/近景/特写）、镜头运动（固定/推进/拉远/横移/跟随）、角色数量、主次关系、人物左中右位置、前景/中景/后景层次、朝向、视线、姿态、动作轨迹、进出画方式、遮挡关系、机位角度、光线氛围。动作描述要具体（不要只写"站着"，要写"站在画面左侧，面向右侧"）。',
+    '28. shot.prompt 示例："中景，固定镜头。@露西 穿白色连衣裙站在 #礼堂入口 画面中央，浑身湿透，手里紧握手机，抬眼直视前方，呼吸急促。背景是礼堂大门和暴雨。"',
+    '29. 如果角色是不完整出镜、背影、手部、反打或 POV，也必须绑定稳定的人物名；如果一个 shot 涉及多个场景或多个角色，需要在 sceneNames 和 characterNames 中列全。',
+    speechEnabled
+      ? '30. 当 analysis_options 开启字幕或音频解析时，每个 shot 的 speech 也必须在这次整片理解里一次性返回，不允许留给后续小镜头单独分析。subtitleLines 的时间必须是相对当前 shot 本地时间，不是整片绝对时间。'
+      : '30. 所有 prompt 都要明确不要字幕、不要文字、不要 UI、不要水印。',
+    speechEnabled
+      ? '31. speech.transcript 要写该镜头完整对白；speech.subtitleLines 要按时间升序、无重叠；speech.speechStyle 要概括语速、停顿、情绪、语气、说话力度和口型明显程度；无对白时 hasDialogue=false、transcript=""、subtitleLines=[].'
+      : '31. 输出必须是合法 JSON，字段名保持与示例完全一致。',
+    speechEnabled
+      ? '32. 所有 prompt 都要明确不要字幕、不要文字、不要 UI、不要水印。'
       : '',
-    speechEnabled ? '28. 输出必须是合法 JSON，字段名保持与示例完全一致。' : ''
+    speechEnabled ? '33. 输出必须是合法 JSON，字段名保持与示例完全一致。' : ''
   ]
     .filter(line => line !== '')
     .join('\n');
