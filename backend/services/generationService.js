@@ -7,7 +7,7 @@ import {
   normalizeStyleMode,
   resolveStyleTemplate
 } from '../../shared/styleTemplates.js';
-import { buildFullVideoPrompt } from '../../shared/promptBlueprints.js';
+import { buildFullVideoPrompt, buildSegmentVideoPrompt } from '../../shared/promptBlueprints.js';
 import { ensureBackgroundAsset } from './backgroundAssetService.js';
 import { listCompletedResourceImageAssetsByResourceKeys } from './resourceImageService.js';
 import {
@@ -1569,38 +1569,62 @@ const startGeneration = async ({
   const analysisOptions = analysis.analysisOptions || {};
   const effectiveStyleMode = normalizeStyleMode(styleMode ?? analysisOptions.styleMode);
 
-  // Build full video prompt
-  const fullPrompt = buildFullVideoPrompt({
-    analysis: analysis.result,
-    video,
-    styleMode: effectiveStyleMode,
-    styleTemplates: analysisOptions.styleTemplates,
-    useReferenceVideo,
-    useReferenceFrame
-  });
+  // Build prompt based on whether it's segment-level or full-video generation
+  let fullPrompt;
+  let durationSeconds;
+
+  if (segmentId && segment) {
+    // Segment-level generation: use buildSegmentVideoPrompt
+    fullPrompt = buildSegmentVideoPrompt({
+      segment,
+      analysis,
+      styleMode: effectiveStyleMode,
+      styleTemplates: analysisOptions.styleTemplates
+    });
+    durationSeconds = Number(segment.endTime - segment.startTime);
+  } else {
+    // Full-video generation: use buildFullVideoPrompt
+    fullPrompt = buildFullVideoPrompt({
+      analysis,
+      video,
+      styleMode: effectiveStyleMode,
+      styleTemplates: analysisOptions.styleTemplates,
+      useReferenceVideo,
+      useReferenceFrame
+    });
+    durationSeconds = Number(video.duration ?? 0);
+  }
+
+  if (durationSeconds <= 0) {
+    throw new AppError('Invalid duration', 400);
+  }
 
   // Collect all character reference images
-  const allCharacterIds = (analysis.result.characters || []).map(c => c.id);
+  const allCharacterIds = segmentId && segment
+    ? (segment.analysis?.characterNames || [])
+    : (analysis.characters || []).map(c => c.id);
   const characterImages = await collectCharacterReferenceImages({
     videoId,
-    segment: null,
-    overallAnalysis: analysis.result,
+    segment: segment || null,
+    overallAnalysis: analysis,
     prompt: fullPrompt,
     sourceVideoAbsolutePath: resolveUploadPath(video.filePath),
-    basenamePrefix: `full-video-${videoId}`
+    basenamePrefix: segmentId ? `segment-${segmentId}` : `full-video-${videoId}`
   });
 
   // Collect all scene reference images
-  const allSceneIds = (analysis.result.backgrounds || []).map(b => b.id);
+  const allSceneIds = segmentId && segment
+    ? (segment.analysis?.sceneNames || [])
+    : (analysis.backgrounds || []).map(b => b.id);
   const sceneImages = await collectSceneReferenceImages({
     videoId,
-    segment: null,
-    overallAnalysis: analysis.result,
+    segment: segment || null,
+    overallAnalysis: analysis,
     prompt: fullPrompt,
     sceneNames: allSceneIds,
     backgroundBinding: null,
     sourceVideoAbsolutePath: resolveUploadPath(video.filePath),
-    basenamePrefix: `full-video-${videoId}`
+    basenamePrefix: segmentId ? `segment-${segmentId}` : `full-video-${videoId}`
   });
 
   // Combine all reference images
@@ -1609,22 +1633,15 @@ const startGeneration = async ({
     sceneImages
   });
 
-  // Prepare reference video (entire original video)
+  // Prepare reference video
   const normalizedUseReferenceVideo = normalizeUseReferenceVideo(useReferenceVideo);
   const referenceVideoPath = normalizedUseReferenceVideo ? resolveUploadPath(video.filePath) : null;
   const referenceVideoUrl = normalizedUseReferenceVideo ? toAbsolutePublicUploadUrl(video.filePath) : null;
 
-  // Use full video duration
-  const durationSeconds = Number(video.duration ?? 0);
-
-  if (durationSeconds <= 0) {
-    throw new AppError('Invalid video duration', 400);
-  }
-
   // Create generation task
   const task = await GenerationTask.create({
     videoId,
-    segmentId: null,
+    segmentId: segmentId || null,
     status: TASK_STATUS.pending,
     progress: 0,
     prompt: fullPrompt,
@@ -1637,12 +1654,14 @@ const startGeneration = async ({
       styleMode: effectiveStyleMode,
       useReferenceVideo: normalizedUseReferenceVideo,
       useReferenceFrame: normalizeUseReferenceFrame(useReferenceFrame),
-      source: 'full_video_generation',
+      source: segmentId ? 'segment_video_generation' : 'full_video_generation',
       requestedDurationSeconds: durationSeconds,
-      shotCount: (analysis.result.timeAnchors || []).reduce(
-        (sum, anchor) => sum + (anchor.shots || []).length,
-        0
-      ),
+      shotCount: segmentId && segment
+        ? (segment.analysis?.shots || []).length
+        : (analysis.timeAnchors || []).reduce(
+            (sum, anchor) => sum + (anchor.shots || []).length,
+            0
+          ),
       remoteStatus: '',
       remoteStatusLabel: '',
       remoteCreatedAt: null,
