@@ -112,11 +112,15 @@ const analyzeVideoById = async (videoId, analysisOptions = null, provider = 'gem
       }),
       cleanupExisting: Boolean(video.analysis?.characters?.length)
     });
+
+    // Merge adjacent segments with the same scene
+    const mergedTimeAnchors = mergeAdjacentSegments(rawAnalysisPayload.timeAnchors ?? []);
+
     const analysisPayload = {
       ...rawAnalysisPayload,
       characters: nextCharacters,
       timeAnchors: hydrateCharacterStateRefsForAnchors({
-        timeAnchors: rawAnalysisPayload.timeAnchors ?? [],
+        timeAnchors: mergedTimeAnchors,
         characters: nextCharacters
       })
     };
